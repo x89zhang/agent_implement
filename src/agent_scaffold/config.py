@@ -27,6 +27,7 @@ class ToolConfig:
 class AgentConfig:
     name: str
     system_prompt: str
+    task: str = ""
 
 
 @dataclass
@@ -78,6 +79,7 @@ def load_config(path: str | Path) -> AppConfig:
     agent = AgentConfig(
         name=str(agent_raw.get("name", "agent")),
         system_prompt=str(_require(agent_raw, "system_prompt")),
+        task=str(agent_raw.get("task", "")),
     )
 
     tools_raw = raw.get("tools", []) or []

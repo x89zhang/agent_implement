@@ -15,8 +15,12 @@ def run_once(cfg_path: str, user_input: str) -> dict[str, Any]:
     graph = build_graph(cfg)
 
     run_start = time.time()
+    task = cfg.agent.task.strip()
+    initial_messages = [{"role": "user", "content": task}] if task else []
     state = {
-        "messages": build_initial_messages(cfg) + [{"role": "user", "content": user_input}],
+        "messages": build_initial_messages(cfg)
+        + initial_messages
+        + [{"role": "user", "content": user_input}],
         "tool_call": None,
         "iterations": 0,
         "trace": [],

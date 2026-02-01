@@ -2,15 +2,16 @@
 
 llm:
   provider: "mock"         # mock | openai | anthropic | vllm_openai
-  model: "gpt-4o-mini"
+  model: "qwen2.5-7b"
   temperature: 0.2
-  base_url: ""             # optional, e.g. http://localhost:8000/v1 for vLLM (OpenAI-compatible)
+  base_url: "http://localhost:8000/v1"             # optional, e.g. http://localhost:8000/v1 for vLLM (OpenAI-compatible)
   api_key: ""              # optional, leave empty to use env vars
 
 agent:
   name: "demo-agent"
   system_prompt: |
     You are a configurable assistant. Please answer concisely.
+  task: "Describe your capabilities briefly."
 
 tools:
   - name: "calculator"
