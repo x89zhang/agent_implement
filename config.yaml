@@ -1,0 +1,28 @@
+# Unified LangGraph agent configuration example
+
+llm:
+  provider: "mock"         # mock | openai | anthropic | vllm_openai
+  model: "gpt-4o-mini"
+  temperature: 0.2
+  base_url: ""             # optional, e.g. http://localhost:8000/v1 for vLLM (OpenAI-compatible)
+  api_key: ""              # optional, leave empty to use env vars
+
+agent:
+  name: "demo-agent"
+  system_prompt: |
+    You are a configurable assistant. Please answer concisely.
+
+tools:
+  - name: "calculator"
+    import: "agent_scaffold.tools:calculator"
+    description: "Safe arithmetic calculator, input like: 1+2*3"
+
+graph:
+  type: "single_agent"
+  max_iters: 4
+  tool_call_format: "TOOL_CALL: <name> <json>"
+  stop_keyword: "FINAL"
+
+monitoring:
+  enabled: true
+  output_path: "trace.json"

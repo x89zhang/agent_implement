@@ -1,0 +1,17 @@
+[project]
+name = "agent-scaffold"
+version = "0.1.0"
+description = "LangGraph-based agent scaffolding configurable via YAML"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "langgraph>=0.2.0",
+  "pyyaml>=6.0",
+]
+
+[project.scripts]
+agent-scaffold = "agent_scaffold.main:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"

@@ -1,0 +1,114 @@
+from __future__ import annotations
+
+import importlib
+import json
+import re
+import time
+from typing import Any, Callable
+
+from .config import AppConfig, ToolConfig
+from .llm import LLMAdapter
+
+
+ToolFn = Callable[..., str]
+
+
+def load_tool(tool_cfg: ToolConfig) -> ToolFn:
+    module_name, attr = tool_cfg.import_path.split(":", 1)
+    mod = importlib.import_module(module_name)
+    fn = getattr(mod, attr)
+    if not callable(fn):
+        raise TypeError(f"Tool is not callable: {tool_cfg.import_path}")
+    return fn
+
+
+def _tool_prompt(tools: list[ToolConfig], call_format: str) -> str:
+    lines = [
+        "You can use the following tools:",
+    ]
+    for t in tools:
+        desc = f" - {t.name}: {t.description}".rstrip()
+        lines.append(desc)
+    lines.append("")
+    lines.append(f"To call a tool, output exactly: {call_format}")
+    lines.append('The <json> is the argument object, e.g.: TOOL_CALL: calculator {"expression": "1+2"}')
+    return "\n".join(lines)
+
+
+def build_initial_messages(cfg: AppConfig) -> list[dict[str, str]]:
+    system_prompt = cfg.agent.system_prompt
+    if cfg.tools:
+        system_prompt = f"{system_prompt}\n\n{_tool_prompt(cfg.tools, cfg.graph.tool_call_format)}"
+    return [{"role": "system", "content": system_prompt}]
+
+
+_TOOL_RE = re.compile(r"^TOOL_CALL:\s*([a-zA-Z0-9_\-]+)\s*(\{.*\})\s*$", re.DOTALL)
+
+
+def parse_tool_call(text: str) -> tuple[str, dict[str, Any]] | None:
+    match = _TOOL_RE.match(text.strip())
+    if not match:
+        return None
+    name = match.group(1)
+    payload = json.loads(match.group(2))
+    if not isinstance(payload, dict):
+        raise ValueError("Tool payload must be a JSON object")
+    return name, payload
+
+
+def agent_node(cfg: AppConfig, llm: LLMAdapter) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    def _run(state: dict[str, Any]) -> dict[str, Any]:
+        start = time.time()
+        messages = state["messages"]
+        input_messages = [dict(m) for m in messages]
+        response = llm.chat(messages)
+        messages.append({"role": "assistant", "content": response.content})
+        call = parse_tool_call(response.content)
+        state["tool_call"] = call
+        end = time.time()
+        trace = state.setdefault("trace", [])
+        trace.append(
+            {
+                "step": "agent",
+                "timestamp": start,
+                "latency_ms": int((end - start) * 1000),
+                "input": {"messages": input_messages},
+                "output": {"content": response.content, "tool_call": call},
+            }
+        )
+        return state
+
+    return _run
+
+
+def tool_node(cfg: AppConfig, tools: dict[str, ToolFn]) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    def _run(state: dict[str, Any]) -> dict[str, Any]:
+        call = state.get("tool_call")
+        if not call:
+            return state
+        start = time.time()
+        name, payload = call
+        if name not in tools:
+            result = f"Tool not found: {name}"
+        else:
+            try:
+                result = str(tools[name](**payload))
+            except Exception as exc:
+                result = f"Tool execution failed: {exc}"
+        state["messages"].append({"role": "assistant", "content": f"TOOL_RESULT: {result}"})
+        state["tool_call"] = None
+        state["iterations"] = int(state.get("iterations", 0)) + 1
+        end = time.time()
+        trace = state.setdefault("trace", [])
+        trace.append(
+            {
+                "step": "tool",
+                "timestamp": start,
+                "latency_ms": int((end - start) * 1000),
+                "input": {"tool": name, "args": payload},
+                "output": {"result": result},
+            }
+        )
+        return state
+
+    return _run
