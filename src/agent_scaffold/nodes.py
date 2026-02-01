@@ -61,6 +61,17 @@ def agent_node(cfg: AppConfig, llm: LLMAdapter) -> Callable[[dict[str, Any]], di
         start = time.time()
         messages = state["messages"]
         input_messages = [dict(m) for m in messages]
+        if cfg.monitoring.print_trace:
+            last_user = ""
+            for msg in reversed(input_messages):
+                if msg.get("role") == "user":
+                    last_user = msg.get("content", "")
+                    break
+            print("\n[LLM INPUT]")
+            if last_user:
+                print(last_user)
+            else:
+                print("(no user input)")
         response = llm.chat(messages)
         messages.append({"role": "assistant", "content": response.content})
         call = parse_tool_call(response.content)
@@ -76,6 +87,11 @@ def agent_node(cfg: AppConfig, llm: LLMAdapter) -> Callable[[dict[str, Any]], di
                 "output": {"content": response.content, "tool_call": call},
             }
         )
+        if cfg.monitoring.print_trace:
+            print("[LLM OUTPUT]")
+            print(response.content)
+            if call:
+                print(f"[TOOL CALL] {call[0]} {call[1]}")
         return state
 
     return _run
@@ -109,6 +125,11 @@ def tool_node(cfg: AppConfig, tools: dict[str, ToolFn]) -> Callable[[dict[str, A
                 "output": {"result": result},
             }
         )
+        if cfg.monitoring.print_trace:
+            print("\n[TOOL INPUT]")
+            print(f"{name} {payload}")
+            print("[TOOL OUTPUT]")
+            print(result)
         return state
 
     return _run

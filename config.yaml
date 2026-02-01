@@ -11,7 +11,10 @@ agent:
   name: "demo-agent"
   system_prompt: |
     You are a configurable assistant. Please answer concisely.
-  task: "Help me to calculate 100+100"
+  task: |
+    You run a small shop. In the morning you sell 48 items at $3.25 each, and in the afternoon
+    you sell 37 items at $4.10 each. Shipping costs are $28.50 total, and a platform fee takes 6%
+    of gross sales. Compute the net revenue. Show the calculation steps and the final result.
 
 tools:
   - name: "calculator"
@@ -28,3 +31,4 @@ graph:
 monitoring:
   enabled: true
   output_path: "trace.json"
+  print_trace: true

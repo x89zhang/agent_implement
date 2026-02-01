@@ -148,20 +148,40 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
     def _node(state: dict[str, Any]) -> dict[str, Any]:
         start = time.time()
         user_input = state["messages"][-1]["content"] if state.get("messages") else ""
+        if cfg.monitoring.print_trace:
+            print("\n[LLM INPUT]")
+            if user_input:
+                print(user_input)
+            else:
+                print("(no user input)")
         result = executor.invoke({"input": user_input})
         output = result.get("output", "")
         state["messages"].append({"role": "assistant", "content": output})
 
         steps = []
         for action, observation in result.get("intermediate_steps", []):
+            log_text = getattr(action, "log", "")
+            thought_text = ""
+            for line in str(log_text).splitlines():
+                if line.strip().lower().startswith("thought"):
+                    thought_text = line.strip()
+                    break
             steps.append(
                 {
                     "tool": getattr(action, "tool", ""),
                     "tool_input": getattr(action, "tool_input", ""),
-                    "log": getattr(action, "log", ""),
+                    "log": log_text,
                     "observation": observation,
                 }
             )
+            if cfg.monitoring.print_trace:
+                if thought_text:
+                    print("\n[THOUGHT]")
+                    print(thought_text)
+                print("\n[TOOL INPUT]")
+                print(f"{getattr(action, 'tool', '')} {getattr(action, 'tool_input', '')}")
+                print("[TOOL OUTPUT]")
+                print(observation)
 
         trace = state.setdefault("trace", [])
         trace.append(
@@ -173,6 +193,9 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                 "output": {"content": output, "intermediate_steps": steps},
             }
         )
+        if cfg.monitoring.print_trace:
+            print("[LLM OUTPUT]")
+            print(output)
         return state
 
     builder: StateGraph = StateGraph(dict)

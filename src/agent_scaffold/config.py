@@ -43,6 +43,7 @@ class GraphConfig:
 class MonitoringConfig:
     enabled: bool = False
     output_path: str = "trace.json"
+    print_trace: bool = False
 
 
 @dataclass
@@ -106,6 +107,7 @@ def load_config(path: str | Path) -> AppConfig:
     monitoring = MonitoringConfig(
         enabled=bool(monitoring_raw.get("enabled", False)),
         output_path=str(monitoring_raw.get("output_path", "trace.json")),
+        print_trace=bool(monitoring_raw.get("print_trace", False)),
     )
 
     return AppConfig(llm=llm, agent=agent, tools=tools, graph=graph, monitoring=monitoring)
