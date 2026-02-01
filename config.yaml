@@ -1,7 +1,7 @@
 # Unified LangGraph agent configuration example
 
 llm:
-  provider: "mock"         # mock | openai | anthropic | vllm_openai
+  provider: "vllm_openai"         # mock | openai | anthropic | vllm_openai
   model: "qwen2.5-7b"
   temperature: 0.2
   base_url: "http://localhost:8000/v1"             # optional, e.g. http://localhost:8000/v1 for vLLM (OpenAI-compatible)
@@ -11,7 +11,7 @@ agent:
   name: "demo-agent"
   system_prompt: |
     You are a configurable assistant. Please answer concisely.
-  task: "Describe your capabilities briefly."
+  task: "Help me to calculate 100+100"
 
 tools:
   - name: "calculator"
@@ -19,10 +19,11 @@ tools:
     description: "Safe arithmetic calculator, input like: 1+2*3"
 
 graph:
-  type: "single_agent"
+  type: "langchain_react"     # single_agent | langchain_react
   max_iters: 4
   tool_call_format: "TOOL_CALL: <name> <json>"
   stop_keyword: "FINAL"
+  react_prompt: ""          # Optional ReAct prompt template with {tools} {tool_names} {input} {agent_scratchpad}
 
 monitoring:
   enabled: true

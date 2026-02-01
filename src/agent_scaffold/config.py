@@ -36,6 +36,7 @@ class GraphConfig:
     max_iters: int = 4
     tool_call_format: str = "TOOL_CALL: <name> <json>"
     stop_keyword: str = "FINAL"
+    react_prompt: str = ""
 
 
 @dataclass
@@ -98,6 +99,7 @@ def load_config(path: str | Path) -> AppConfig:
         max_iters=int(graph_raw.get("max_iters", 4)),
         tool_call_format=str(graph_raw.get("tool_call_format", "TOOL_CALL: <name> <json>")),
         stop_keyword=str(graph_raw.get("stop_keyword", "FINAL")),
+        react_prompt=str(graph_raw.get("react_prompt", "")),
     )
 
     monitoring_raw = raw.get("monitoring", {}) or {}

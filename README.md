@@ -16,6 +16,8 @@ python -m agent_scaffold.main --config config.yaml --input "Hi, what can you do?
 - `llm`: provider and model parameters (supports OpenAI/Anthropic and vLLM via OpenAI-compatible endpoint)
 - `agent`: system prompt
 - `tools`: tool list (imported via `module:attr`)
-- `graph`: graph structure and loop control
+- `graph`: graph structure and loop control (`single_agent` or `langchain_react`)
+
+Note: For LangChain v1.x, legacy agent classes are provided by `langchain-classic`.
 
 See inline comments in `config.yaml` for more details.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import re
 import operator as op
 from typing import Any
 
@@ -33,5 +34,11 @@ def calculator(expression: str) -> str:
     """
     Safe arithmetic calculator. Supports only numbers and + - * / // % ** ().
     """
-    tree = ast.parse(expression, mode="eval")
+    if not isinstance(expression, str):
+        raise ValueError("Expression must be a string")
+    cleaned = re.sub(r"[^0-9\.\+\-\*\/\%\(\)\s]", "", expression)
+    cleaned = cleaned.strip()
+    if not cleaned:
+        raise ValueError("Empty expression")
+    tree = ast.parse(cleaned, mode="eval")
     return str(_eval(tree.body))

@@ -63,6 +63,9 @@ class LLMAdapter:
             kwargs = {"base_url": self.config.base_url}
             if self.config.api_key:
                 kwargs["api_key"] = self.config.api_key
+            else:
+                # vLLM servers often do not require auth, but the OpenAI client enforces api_key.
+                kwargs["api_key"] = "local-vllm"
             self._client = ChatOpenAI(
                 model=self.config.model,
                 temperature=self.config.temperature,
@@ -96,3 +99,9 @@ class LLMAdapter:
 
         result = self._client.invoke(lc_messages)
         return LLMResponse(content=result.content)
+
+    def get_lc_chat_model(self) -> Any:
+        self._lazy_init()
+        if self._client == "mock":
+            raise RuntimeError("mock provider does not support LangChain ReAct agent")
+        return self._client

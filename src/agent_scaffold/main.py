@@ -2,25 +2,37 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
+from pathlib import Path
 from typing import Any
 
-from .config import load_config
-from .graph import build_graph
-from .nodes import build_initial_messages
+if __package__ is None or __package__ == "":
+    sys.path.append(str(Path(__file__).resolve().parent.parent))
+    __package__ = "agent_scaffold"
+
+try:
+    from .config import load_config
+    from .graph import build_graph
+    from .nodes import build_initial_messages
+except ImportError:  # Fallback when executed as a script
+    from agent_scaffold.config import load_config
+    from agent_scaffold.graph import build_graph
+    from agent_scaffold.nodes import build_initial_messages
 
 
-def run_once(cfg_path: str, user_input: str) -> dict[str, Any]:
+def run_once(cfg_path: str, user_input: str | None) -> dict[str, Any]:
     cfg = load_config(cfg_path)
     graph = build_graph(cfg)
 
     run_start = time.time()
     task = cfg.agent.task.strip()
     initial_messages = [{"role": "user", "content": task}] if task else []
+    input_messages = (
+        [{"role": "user", "content": user_input}] if user_input else []
+    )
     state = {
-        "messages": build_initial_messages(cfg)
-        + initial_messages
-        + [{"role": "user", "content": user_input}],
+        "messages": build_initial_messages(cfg) + initial_messages + input_messages,
         "tool_call": None,
         "iterations": 0,
         "trace": [],
@@ -46,8 +58,16 @@ def main() -> None:
     parser.add_argument("--input", help="single input to run once")
     args = parser.parse_args()
 
-    if args.input:
+    if args.input is not None:
         result = run_once(args.config, args.input)
+        messages = result.get("messages", [])
+        if messages:
+            print(messages[-1]["content"])
+        return
+
+    cfg = load_config(args.config)
+    if cfg.agent.task.strip():
+        result = run_once(args.config, None)
         messages = result.get("messages", [])
         if messages:
             print(messages[-1]["content"])
