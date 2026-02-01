@@ -1,0 +1,50 @@
+# Quebec 7-day trip planning agent configuration
+
+llm:
+  provider: "vllm_openai"
+  model: "qwen2.5-7b"
+  temperature: 0.2
+  base_url: "http://localhost:8000/v1"
+  api_key: ""
+
+agent:
+  name: "quebec-trip-agent"
+  system_prompt: |
+    You are a travel planning assistant. Plan a practical, day-by-day itinerary.
+    Use web tools to gather up-to-date info for flights, hotels, weather, and local transport.
+    Be concise but include key details and sources you used.
+  task: |
+    Create a 7-day trip plan for Quebec City, Canada.
+    Requirements:
+    - Provide a day-by-day itinerary (Day 1 to Day 7), morning/afternoon/evening.
+    - Include flight options to Quebec City (or nearby airports) with a brief summary.
+    - Include 2-3 hotel options with price range and location notes.
+    - Include weather outlook for the trip dates (assume a trip starting next Monday).
+    - Include local transportation suggestions (public transit, airport transfer, walking).
+    - Write the final itinerary to a file named "quebec_7day_plan.md" using the write_text_file tool.
+
+tools:
+  - name: "web_search"
+    import: "agent_scaffold.tools:web_search"
+    description: "Search the web for flights, hotels, attractions, and transit info."
+  - name: "open_url"
+    import: "agent_scaffold.tools:open_url"
+    description: "Open a URL and fetch page text for details."
+  - name: "get_weather"
+    import: "agent_scaffold.tools:get_weather"
+    description: "Fetch daily weather for a city via Open-Meteo."
+  - name: "write_text_file"
+    import: "agent_scaffold.tools:write_text_file"
+    description: "Write the final plan to a file under the current directory."
+
+graph:
+  type: "langchain_react"
+  max_iters: 8
+  tool_call_format: "TOOL_CALL: <name> <json>"
+  stop_keyword: "FINAL"
+  react_prompt: ""
+
+monitoring:
+  enabled: true
+  output_path: "trace_quebec.json"
+  print_trace: true
