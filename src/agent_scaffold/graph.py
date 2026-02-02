@@ -19,7 +19,7 @@ def build_graph(cfg: AppConfig) -> Any:
 
     builder: StateGraph = StateGraph(dict)
     builder.add_node("agent", agent_node(cfg, llm))
-    builder.add_node("tool", tool_node(cfg, tools))
+    builder.add_node("tool", tool_node(cfg, tools, llm.estimate_tokens))
 
     def _route(state: dict[str, Any]) -> str:
         if state.get("tool_call"):
@@ -166,18 +166,26 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
 
         steps = []
         for action, observation in result.get("intermediate_steps", []):
+            tool_input = getattr(action, "tool_input", "")
             log_text = getattr(action, "log", "")
             thought_text = ""
             for line in str(log_text).splitlines():
                 if line.strip().lower().startswith("thought"):
                     thought_text = line.strip()
                     break
+            tool_usage = {
+                "input_tokens": llm.estimate_tokens(str(tool_input)),
+                "output_tokens": llm.estimate_tokens(str(observation)),
+                "total_tokens": llm.estimate_tokens(str(tool_input)) + llm.estimate_tokens(str(observation)),
+                "source": "estimated",
+            }
             steps.append(
                 {
                     "tool": getattr(action, "tool", ""),
-                    "tool_input": getattr(action, "tool_input", ""),
+                    "tool_input": tool_input,
                     "log": log_text,
                     "observation": observation,
+                    "usage": tool_usage,
                 }
             )
             if cfg.monitoring.print_trace:
@@ -185,11 +193,20 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                     print("\n[THOUGHT]")
                     print(thought_text)
                 print("\n[TOOL INPUT]")
-                print(f"{getattr(action, 'tool', '')} {getattr(action, 'tool_input', '')}")
+                print(f"{getattr(action, 'tool', '')} {tool_input}")
                 print("[TOOL OUTPUT]")
                 print(observation)
+                print(f"[TOKENS] input={tool_usage.get('input_tokens')} output={tool_usage.get('output_tokens')} total={tool_usage.get('total_tokens')} source={tool_usage.get('source')}")
 
         trace = state.setdefault("trace", [])
+        prompt_tokens = llm.estimate_tokens(user_input)
+        completion_tokens = llm.estimate_tokens(output)
+        usage = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+            "source": "estimated",
+        }
         trace.append(
             {
                 "step": "langchain_react",
@@ -197,11 +214,13 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                 "latency_ms": int((time.time() - start) * 1000),
                 "input": {"input": user_input},
                 "output": {"content": output, "intermediate_steps": steps},
+                "usage": usage,
             }
         )
         if cfg.monitoring.print_trace:
             print("[LLM OUTPUT]")
             print(output)
+            print(f"[TOKENS] prompt={usage.get('prompt_tokens')} completion={usage.get('completion_tokens')} total={usage.get('total_tokens')} source={usage.get('source')}")
         return state
 
     builder: StateGraph = StateGraph(dict)

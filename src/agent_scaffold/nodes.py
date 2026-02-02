@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import json
 import re
 import time
 from typing import Any, Callable
@@ -77,6 +78,16 @@ def agent_node(cfg: AppConfig, llm: LLMAdapter) -> Callable[[dict[str, Any]], di
         call = parse_tool_call(response.content)
         state["tool_call"] = call
         end = time.time()
+        usage = response.usage
+        if not usage:
+            prompt_tokens = sum(llm.estimate_tokens(m.get("content", "")) for m in input_messages)
+            completion_tokens = llm.estimate_tokens(response.content)
+            usage = {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+                "source": "estimated",
+            }
         trace = state.setdefault("trace", [])
         trace.append(
             {
@@ -85,11 +96,14 @@ def agent_node(cfg: AppConfig, llm: LLMAdapter) -> Callable[[dict[str, Any]], di
                 "latency_ms": int((end - start) * 1000),
                 "input": {"messages": input_messages},
                 "output": {"content": response.content, "tool_call": call},
+                "usage": usage,
             }
         )
         if cfg.monitoring.print_trace:
             print("[LLM OUTPUT]")
             print(response.content)
+            if usage:
+                print(f"[TOKENS] prompt={usage.get('prompt_tokens')} completion={usage.get('completion_tokens')} total={usage.get('total_tokens')} source={usage.get('source')}")
             if call:
                 print(f"[TOOL CALL] {call[0]} {call[1]}")
         return state
@@ -97,7 +111,9 @@ def agent_node(cfg: AppConfig, llm: LLMAdapter) -> Callable[[dict[str, Any]], di
     return _run
 
 
-def tool_node(cfg: AppConfig, tools: dict[str, ToolFn]) -> Callable[[dict[str, Any]], dict[str, Any]]:
+def tool_node(
+    cfg: AppConfig, tools: dict[str, ToolFn], estimate_tokens: Callable[[str], int]
+) -> Callable[[dict[str, Any]], dict[str, Any]]:
     def _run(state: dict[str, Any]) -> dict[str, Any]:
         call = state.get("tool_call")
         if not call:
@@ -115,6 +131,14 @@ def tool_node(cfg: AppConfig, tools: dict[str, ToolFn]) -> Callable[[dict[str, A
         state["tool_call"] = None
         state["iterations"] = int(state.get("iterations", 0)) + 1
         end = time.time()
+        input_text = json.dumps({"tool": name, "args": payload}, ensure_ascii=False)
+        output_text = str(result)
+        usage = {
+            "input_tokens": estimate_tokens(input_text),
+            "output_tokens": estimate_tokens(output_text),
+            "total_tokens": estimate_tokens(input_text) + estimate_tokens(output_text),
+            "source": "estimated",
+        }
         trace = state.setdefault("trace", [])
         trace.append(
             {
@@ -123,6 +147,7 @@ def tool_node(cfg: AppConfig, tools: dict[str, ToolFn]) -> Callable[[dict[str, A
                 "latency_ms": int((end - start) * 1000),
                 "input": {"tool": name, "args": payload},
                 "output": {"result": result},
+                "usage": usage,
             }
         )
         if cfg.monitoring.print_trace:
@@ -130,6 +155,7 @@ def tool_node(cfg: AppConfig, tools: dict[str, ToolFn]) -> Callable[[dict[str, A
             print(f"{name} {payload}")
             print("[TOOL OUTPUT]")
             print(result)
+            print(f"[TOKENS] input={usage.get('input_tokens')} output={usage.get('output_tokens')} total={usage.get('total_tokens')} source={usage.get('source')}")
         return state
 
     return _run
