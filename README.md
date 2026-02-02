@@ -1,6 +1,6 @@
 # LangGraph Agent Scaffolding
 
-A configurable LangGraph agent scaffold. You can modify `config.yaml` to define different agent behavior, models, tools, and graph settings.
+A configurable LangGraph agent scaffold. You can modify `*.yaml` to define different agent behavior, models, tools, and graph settings, or add YAML files to implement other agents.
 
 ## Layout
 - `config.yaml` example configuration
@@ -9,7 +9,7 @@ A configurable LangGraph agent scaffold. You can modify `config.yaml` to define 
 ## Quick Start
 ```bash
 pip install -r requirements.txt
-python -m agent_scaffold.main --config config.yaml --input "Hi, what can you do?"
+python src/agent_scaffold/main.py --config travel.yaml
 ```
 
 ## Config Overview
@@ -20,4 +20,3 @@ python -m agent_scaffold.main --config config.yaml --input "Hi, what can you do?
 
 Note: For LangChain v1.x, legacy agent classes are provided by `langchain-classic`.
 
-See inline comments in `config.yaml` for more details.
