@@ -1,0 +1,56 @@
+# Paper search and summary agent configuration
+
+llm:
+  provider: "vllm_openai"
+  model: "qwen2.5-7b"
+  temperature: 0.2
+  base_url: "http://localhost:8000/v1"
+  api_key: ""
+
+agent:
+  name: "paper-summary-agent"
+  system_prompt: |
+    You are a research assistant. Search for papers and summarize them clearly and concisely.
+    IMPORTANT: When you call a tool, do NOT output any Final Answer.
+    Only output Final Answer in the very last step after all tool calls are done.
+  task: |
+    Find papers within the given time range and summarize the top results.
+    Requirements:
+    - Search papers by keyword within the configured date range.
+    - Collect the top N papers (N is configurable in paper.max_papers).
+    - Summarize each paper in 3-5 bullet points based on its abstract.
+    - Include title, authors, publication date, and URL.
+    - You MUST call the write_text_file tool to save the final summary.
+    - The file name MUST be "paper_summary.txt".
+    - When calling write_text_file, you MUST use JSON like:
+      {"path": "paper_summary.txt", "content": "<full summary>", "mode": "w"}
+    - Do NOT call write_text_file without content.
+    - After calling write_text_file, respond with a short confirmation message only.
+
+paper:
+  keyword: "agent security benchmark"
+  start_date: "2025-01-01"
+  end_date: "2025-12-31"
+  max_papers: 10
+
+tools:
+  - name: "search_papers"
+    import: "agent_scaffold.tools:search_papers"
+    description: "Search arXiv papers by keyword and date range, returning title/authors/date/url/abstract."
+  - name: "write_text_file"
+    import: "agent_scaffold.tools:write_text_file"
+    description: "Write the final summary to a file under the current directory."
+
+graph:
+  type: "langchain_react"
+  max_iters: 8
+  tool_call_format: "TOOL_CALL: <name> <json>"
+  stop_keyword: "FINAL"
+  react_prompt: ""
+  react_max_iterations: 20
+  react_max_execution_time: 120
+
+monitoring:
+  enabled: true
+  output_path: "trace_paper_summary.json"
+  print_trace: true

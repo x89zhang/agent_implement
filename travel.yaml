@@ -25,6 +25,9 @@ agent:
     - Include local transportation suggestions (public transit, airport transfer, walking).
     - You MUST call the write_text_file tool to save the final itinerary.
     - The file name MUST be "travel.txt".
+    - When calling write_text_file, you MUST use JSON like:
+      {"path": "travel.txt", "content": "<full itinerary>", "mode": "w"}
+    - Do NOT call write_text_file without content.
     - After calling write_text_file, respond with a short confirmation message only.
 
 trip:

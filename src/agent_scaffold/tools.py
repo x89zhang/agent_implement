@@ -8,10 +8,12 @@ import operator as op
 import re
 import urllib.parse
 import urllib.request
+import urllib.error
 from pathlib import Path
 from typing import Any
 
 import yaml
+import xml.etree.ElementTree as ET
 
 
 _OPS: dict[type[ast.AST], Any] = {
@@ -159,6 +161,16 @@ def get_weather(city: str | None = None, start_date: str | None = None, end_date
                 end_date = parsed.get("end_date", end_date)
         # Strip any key=value fragments that may have been embedded in the city string.
         city = re.sub(r"\b(start_date|end_date|city)\s*=\s*[^,]+", "", city).strip(" ,")
+        if start_date:
+            start_date = _normalize_date(start_date, trip_defaults=trip)
+        if end_date:
+            end_date = _normalize_date(end_date, trip_defaults=trip)
+        if start_date and end_date:
+            try:
+                if dt.date.fromisoformat(end_date) < dt.date.fromisoformat(start_date):
+                    end_date = start_date
+            except Exception:
+                pass
     query = str(city).strip()
     if not query:
         raise ValueError("City is required")
@@ -208,7 +220,10 @@ def get_weather(city: str | None = None, start_date: str | None = None, end_date
     if end_date:
         params["end_date"] = end_date
     forecast_url = "https://api.open-meteo.com/v1/forecast?" + urllib.parse.urlencode(params)
-    forecast = _http_get_json(forecast_url)
+    try:
+        forecast = _http_get_json(forecast_url)
+    except urllib.error.HTTPError as exc:
+        return json.dumps({"error": f"Weather API error: {exc.code} {exc.reason}"}, ensure_ascii=False)
     return json.dumps(forecast, ensure_ascii=False, indent=2)
 
 
@@ -221,10 +236,18 @@ def write_text_file(path: str | None, content: str = "", mode: str = "w") -> str
     if isinstance(path, str) and (
         "path=" in path or "content=" in path or path.strip().startswith("{") or "\n" in path
     ):
-        parsed = _parse_tool_input(path)
+        raw = path
+        parsed = _parse_tool_input(raw)
         path = str(parsed.get("path", path))
         content = str(parsed.get("content", content))
         mode = str(parsed.get("mode", mode))
+        if not content and isinstance(raw, str) and "\"content\"" in raw:
+            path_match = re.search(r'"path"\s*:\s*"([^"]+)"', raw)
+            content_match = re.search(r'"content"\s*:\s*"(.*)"\s*(?:,|}\s*$)', raw, re.DOTALL)
+            if path_match:
+                path = path_match.group(1)
+            if content_match:
+                content = content_match.group(1)
     if not content:
         return "Content is required. Please provide content to write."
     base = Path.cwd().resolve()
@@ -237,6 +260,60 @@ def write_text_file(path: str | None, content: str = "", mode: str = "w") -> str
     return str(target)
 
 
+def search_papers(
+    keyword: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    max_results: int | None = None,
+) -> str:
+    """
+    Search arXiv papers by keyword and optional date range (YYYY-MM-DD).
+    Returns JSON list with title, authors, published, url, and abstract.
+    """
+    paper_cfg = _load_paper_defaults()
+    if not keyword:
+        keyword = str(paper_cfg.get("keyword", "")).strip()
+    if not keyword:
+        raise ValueError("Keyword is required")
+    if start_date is None:
+        start_date = str(paper_cfg.get("start_date", "")).strip() or None
+    if end_date is None:
+        end_date = str(paper_cfg.get("end_date", "")).strip() or None
+    if max_results is None:
+        max_results = int(paper_cfg.get("max_papers", 10) or 10)
+
+    raw_limit = max(20, int(max_results) * 3)
+    query = f"all:{keyword}"
+    params = {
+        "search_query": query,
+        "start": 0,
+        "max_results": raw_limit,
+        "sortBy": "submittedDate",
+        "sortOrder": "descending",
+    }
+    url = "https://export.arxiv.org/api/query?" + urllib.parse.urlencode(params)
+    data = _http_get_text(url)
+    items = _parse_arxiv_feed(data)
+
+    start_dt = _parse_date(start_date)
+    end_dt = _parse_date(end_date)
+    if end_dt:
+        end_dt = end_dt + dt.timedelta(days=1)
+
+    filtered = []
+    for item in items:
+        pub = _parse_date(item.get("published"))
+        if start_dt and pub and pub < start_dt:
+            continue
+        if end_dt and pub and pub >= end_dt:
+            continue
+        filtered.append(item)
+        if len(filtered) >= int(max_results):
+            break
+
+    return json.dumps(filtered, ensure_ascii=False, indent=2)
+
+
 def _http_get_json(url: str) -> dict[str, Any]:
     req = urllib.request.Request(
         url,
@@ -246,6 +323,17 @@ def _http_get_json(url: str) -> dict[str, Any]:
     with urllib.request.urlopen(req, timeout=20) as resp:
         content = resp.read()
     return json.loads(content.decode("utf-8", errors="ignore"))
+
+
+def _http_get_text(url: str) -> str:
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "agent-scaffold/1.0"},
+        method="GET",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        content = resp.read()
+    return content.decode("utf-8", errors="ignore")
 
 
 def _load_trip_defaults() -> dict[str, Any]:
@@ -262,6 +350,22 @@ def _load_trip_defaults() -> dict[str, Any]:
         return {}
     trip = raw.get("trip") or {}
     return trip if isinstance(trip, dict) else {}
+
+
+def _load_paper_defaults() -> dict[str, Any]:
+    """
+    Load paper defaults from a yaml config located one level above the current run directory.
+    The expected file name is <run_dir_name>.yaml (e.g. run dir "paper_summary" -> "../paper_summary.yaml").
+    """
+    run_dir = Path.cwd().resolve()
+    cfg_path = run_dir.parent / f"{run_dir.name}.yaml"
+    if not cfg_path.exists():
+        return {}
+    raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        return {}
+    paper = raw.get("paper") or {}
+    return paper if isinstance(paper, dict) else {}
 
 
 def _parse_tool_input(text: str) -> dict[str, Any]:
@@ -289,6 +393,53 @@ def _parse_tool_input(text: str) -> dict[str, Any]:
     return result
 
 
+def _parse_date(text: str | None) -> dt.date | None:
+    if not text:
+        return None
+    value = str(text).strip()
+    if not value:
+        return None
+    try:
+        return dt.date.fromisoformat(value)
+    except Exception:
+        return None
+
+
+def _parse_arxiv_feed(xml_text: str) -> list[dict[str, Any]]:
+    ns = {"atom": "http://www.w3.org/2005/Atom"}
+    root = ET.fromstring(xml_text)
+    items: list[dict[str, Any]] = []
+    for entry in root.findall("atom:entry", ns):
+        title = _get_text(entry, "atom:title", ns)
+        summary = _get_text(entry, "atom:summary", ns)
+        published = _get_text(entry, "atom:published", ns)
+        link = ""
+        for l in entry.findall("atom:link", ns):
+            if l.attrib.get("rel") == "alternate":
+                link = l.attrib.get("href", "")
+                break
+        authors = [a.text or "" for a in entry.findall("atom:author/atom:name", ns)]
+        items.append(
+            {
+                "title": _clean_ws(title),
+                "authors": [a for a in authors if a],
+                "published": published,
+                "url": link,
+                "abstract": _clean_ws(summary),
+            }
+        )
+    return items
+
+
+def _get_text(node: ET.Element, path: str, ns: dict[str, str]) -> str:
+    found = node.find(path, ns)
+    return found.text if found is not None and found.text else ""
+
+
+def _clean_ws(text: str) -> str:
+    return " ".join(text.split())
+
+
 def _resolve_date_range(trip: dict[str, Any]) -> tuple[str | None, str | None]:
     start = str(trip.get("start", "")).strip().lower()
     days = trip.get("days")
@@ -314,3 +465,17 @@ def _resolve_date_range(trip: dict[str, Any]) -> tuple[str | None, str | None]:
 
     end_date = start_date + dt.timedelta(days=days_int - 1)
     return start_date.isoformat(), end_date.isoformat()
+
+
+def _normalize_date(value: str, trip_defaults: dict[str, Any] | None = None) -> str | None:
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    if text == "next monday":
+        trip_defaults = trip_defaults or {}
+        start_date, _ = _resolve_date_range(trip_defaults)
+        return start_date
+    try:
+        return dt.date.fromisoformat(text).isoformat()
+    except Exception:
+        return None
