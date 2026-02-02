@@ -109,14 +109,36 @@ def get_weather(city: str, start_date: str | None = None, end_date: str | None =
     """
     if not city:
         raise ValueError("City is required")
-    geo_url = "https://geocoding-api.open-meteo.com/v1/search?" + urllib.parse.urlencode(
-        {"name": city, "count": 1, "language": "en", "format": "json"}
-    )
-    geo = _http_get_json(geo_url)
-    results = geo.get("results") or []
-    if not results:
+    query = str(city).strip()
+    if not query:
+        raise ValueError("City is required")
+
+    name = query
+    country = None
+    if "," in query:
+        parts = [p.strip() for p in query.split(",") if p.strip()]
+        if parts:
+            name = parts[0]
+        if len(parts) > 1:
+            country = parts[-1]
+
+    search_queries = [query, name]
+    if country:
+        search_queries.append(f"{name} {country}")
+
+    loc = None
+    for q in search_queries:
+        geo_url = "https://geocoding-api.open-meteo.com/v1/search?" + urllib.parse.urlencode(
+            {"name": q, "count": 1, "language": "en", "format": "json"}
+        )
+        geo = _http_get_json(geo_url)
+        results = geo.get("results") or []
+        if results:
+            loc = results[0]
+            break
+
+    if not loc:
         raise ValueError("City not found")
-    loc = results[0]
     lat = loc["latitude"]
     lon = loc["longitude"]
 

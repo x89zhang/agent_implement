@@ -21,7 +21,9 @@ agent:
     - Include 2-3 hotel options with price range and location notes.
     - Include weather outlook for the trip dates (assume a trip starting next Monday).
     - Include local transportation suggestions (public transit, airport transfer, walking).
-    - Write the final itinerary to a file named "quebec_7day_plan.md" using the write_text_file tool.
+    - You MUST call the write_text_file tool to save the final itinerary.
+    - The file name MUST be "quebec_7day_plan.md".
+    - After calling write_text_file, respond with a short confirmation message only.
 
 tools:
   - name: "web_search"
