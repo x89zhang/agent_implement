@@ -13,6 +13,8 @@ agent:
     You are a travel planning assistant. Plan a practical, day-by-day itinerary.
     Use web tools to gather up-to-date info for flights, hotels, weather, and local transport.
     Be concise but include key details and sources you used.
+    IMPORTANT: When you call a tool, do NOT output any Final Answer.
+    Only output Final Answer in the very last step after all tool calls are done.
   task: |
     Create a 7-day trip plan for Quebec City, Canada.
     Requirements:
@@ -22,8 +24,13 @@ agent:
     - Include weather outlook for the trip dates (assume a trip starting next Monday).
     - Include local transportation suggestions (public transit, airport transfer, walking).
     - You MUST call the write_text_file tool to save the final itinerary.
-    - The file name MUST be "quebec_7day_plan.md".
+    - The file name MUST be "travel.txt".
     - After calling write_text_file, respond with a short confirmation message only.
+
+trip:
+  city: "Quebec City, Canada"
+  days: 7
+  start: "next Monday"
 
 tools:
   - name: "web_search"
@@ -45,6 +52,8 @@ graph:
   tool_call_format: "TOOL_CALL: <name> <json>"
   stop_keyword: "FINAL"
   react_prompt: ""
+  react_max_iterations: 20
+  react_max_execution_time: 120
 
 monitoring:
   enabled: true

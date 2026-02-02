@@ -135,6 +135,9 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             tools=tools,
             verbose=False,
             return_intermediate_steps=True,
+            max_iterations=cfg.graph.react_max_iterations,
+            max_execution_time=cfg.graph.react_max_execution_time,
+            handle_parsing_errors=True,
         )
     else:
         executor = initialize_agent(
@@ -143,6 +146,9 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             agent=AgentType.REACT_DESCRIPTION,
             verbose=False,
             return_intermediate_steps=True,
+            max_iterations=cfg.graph.react_max_iterations,
+            max_execution_time=cfg.graph.react_max_execution_time,
+            handle_parsing_errors=True,
         )
 
     def _node(state: dict[str, Any]) -> dict[str, Any]:

@@ -37,6 +37,8 @@ class GraphConfig:
     tool_call_format: str = "TOOL_CALL: <name> <json>"
     stop_keyword: str = "FINAL"
     react_prompt: str = ""
+    react_max_iterations: int = 15
+    react_max_execution_time: int = 120
 
 
 @dataclass
@@ -101,6 +103,8 @@ def load_config(path: str | Path) -> AppConfig:
         tool_call_format=str(graph_raw.get("tool_call_format", "TOOL_CALL: <name> <json>")),
         stop_keyword=str(graph_raw.get("stop_keyword", "FINAL")),
         react_prompt=str(graph_raw.get("react_prompt", "")),
+        react_max_iterations=int(graph_raw.get("react_max_iterations", 15)),
+        react_max_execution_time=int(graph_raw.get("react_max_execution_time", 120)),
     )
 
     monitoring_raw = raw.get("monitoring", {}) or {}

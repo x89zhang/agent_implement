@@ -27,6 +27,8 @@ graph:
   tool_call_format: "TOOL_CALL: <name> <json>"
   stop_keyword: "FINAL"
   react_prompt: ""          # Optional ReAct prompt template with {tools} {tool_names} {input} {agent_scratchpad}
+  react_max_iterations: 20
+  react_max_execution_time: 120
 
 monitoring:
   enabled: true

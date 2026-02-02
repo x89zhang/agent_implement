@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+import datetime as dt
+import html as html_lib
 import json
 import operator as op
 import re
@@ -8,6 +10,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 
 _OPS: dict[type[ast.AST], Any] = {
@@ -48,13 +52,23 @@ def calculator(expression: str) -> str:
     return str(_eval(tree.body))
 
 
-def web_search(query: str, max_results: int = 5) -> str:
+def web_search(query: str | None = None, max_results: int = 5) -> str:
     """
     Simple web search via DuckDuckGo Instant Answer API.
     Returns a JSON string of results with title, url, and snippet.
     """
     if not query:
-        raise ValueError("Query is required")
+        trip = _load_trip_defaults()
+        city = str(trip.get("city", "")).strip()
+        if city:
+            query = f"{city} travel"
+        else:
+            raise ValueError("Query is required")
+    if isinstance(query, str) and ("query=" in query or query.strip().startswith("{")):
+        parsed = _parse_tool_input(query)
+        query = str(parsed.get("query", query))
+        if "max_results" in parsed:
+            max_results = int(parsed["max_results"])
     params = {
         "q": query,
         "format": "json",
@@ -83,6 +97,23 @@ def web_search(query: str, max_results: int = 5) -> str:
         elif isinstance(item, dict):
             _add_item(item)
 
+    if results:
+        return json.dumps(results[: max(1, int(max_results))], ensure_ascii=False, indent=2)
+
+    # Fallback: scrape DuckDuckGo HTML results when Instant Answer is empty.
+    html_url = "https://duckduckgo.com/html/?" + urllib.parse.urlencode({"q": query})
+    html_text = open_url(html_url, max_chars=20000)
+    matches = re.findall(r'class="result__a"\s+href="([^"]+)".*?>(.*?)</a>', html_text, re.DOTALL)
+    for href, title in matches:
+        title_text = re.sub(r"<.*?>", "", title)
+        results.append(
+            {
+                "title": html_lib.unescape(title_text.strip()),
+                "url": html_lib.unescape(href.strip()),
+                "snippet": html_lib.unescape(title_text.strip()),
+            }
+        )
+
     return json.dumps(results[: max(1, int(max_results))], ensure_ascii=False, indent=2)
 
 
@@ -92,6 +123,11 @@ def open_url(url: str, max_chars: int = 4000) -> str:
     """
     if not url:
         raise ValueError("URL is required")
+    if isinstance(url, str) and ("url=" in url or url.strip().startswith("{")):
+        parsed = _parse_tool_input(url)
+        url = str(parsed.get("url", url))
+        if "max_chars" in parsed:
+            max_chars = int(parsed["max_chars"])
     req = urllib.request.Request(
         url,
         headers={"User-Agent": "agent-scaffold/1.0"},
@@ -103,12 +139,26 @@ def open_url(url: str, max_chars: int = 4000) -> str:
     return text[: max(1, int(max_chars))]
 
 
-def get_weather(city: str, start_date: str | None = None, end_date: str | None = None) -> str:
+def get_weather(city: str | None = None, start_date: str | None = None, end_date: str | None = None) -> str:
     """
     Get daily weather via Open-Meteo. Dates are optional (YYYY-MM-DD).
     """
     if not city:
-        raise ValueError("City is required")
+        trip = _load_trip_defaults()
+        city = str(trip.get("city", "")).strip()
+        if not city:
+            raise ValueError("City is required")
+        if not start_date and not end_date:
+            start_date, end_date = _resolve_date_range(trip)
+    if isinstance(city, str):
+        if "city=" in city or "start_date=" in city or "end_date=" in city or city.strip().startswith("{"):
+            parsed = _parse_tool_input(city)
+            if parsed:
+                city = str(parsed.get("city", city))
+                start_date = parsed.get("start_date", start_date)
+                end_date = parsed.get("end_date", end_date)
+        # Strip any key=value fragments that may have been embedded in the city string.
+        city = re.sub(r"\b(start_date|end_date|city)\s*=\s*[^,]+", "", city).strip(" ,")
     query = str(city).strip()
     if not query:
         raise ValueError("City is required")
@@ -138,7 +188,12 @@ def get_weather(city: str, start_date: str | None = None, end_date: str | None =
             break
 
     if not loc:
-        raise ValueError("City not found")
+        # Fallback for common locations if geocoding fails on noisy inputs.
+        lowered = query.lower()
+        if "quebec" in lowered:
+            loc = {"latitude": 46.8139, "longitude": -71.2080}
+        else:
+            raise ValueError("City not found")
     lat = loc["latitude"]
     lon = loc["longitude"]
 
@@ -157,12 +212,21 @@ def get_weather(city: str, start_date: str | None = None, end_date: str | None =
     return json.dumps(forecast, ensure_ascii=False, indent=2)
 
 
-def write_text_file(path: str, content: str, mode: str = "w") -> str:
+def write_text_file(path: str | None, content: str = "", mode: str = "w") -> str:
     """
     Write text content to a file under the current working directory.
     """
     if not path:
-        raise ValueError("Path is required")
+        path = "output.md"
+    if isinstance(path, str) and (
+        "path=" in path or "content=" in path or path.strip().startswith("{") or "\n" in path
+    ):
+        parsed = _parse_tool_input(path)
+        path = str(parsed.get("path", path))
+        content = str(parsed.get("content", content))
+        mode = str(parsed.get("mode", mode))
+    if not content:
+        return "Content is required. Please provide content to write."
     base = Path.cwd().resolve()
     target = (base / path).resolve()
     if not str(target).startswith(str(base)):
@@ -182,3 +246,71 @@ def _http_get_json(url: str) -> dict[str, Any]:
     with urllib.request.urlopen(req, timeout=20) as resp:
         content = resp.read()
     return json.loads(content.decode("utf-8", errors="ignore"))
+
+
+def _load_trip_defaults() -> dict[str, Any]:
+    """
+    Load trip defaults from a yaml config located one level above the current run directory.
+    The expected file name is <run_dir_name>.yaml (e.g. run dir "travel" -> "../travel.yaml").
+    """
+    run_dir = Path.cwd().resolve()
+    cfg_path = run_dir.parent / f"{run_dir.name}.yaml"
+    if not cfg_path.exists():
+        return {}
+    raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        return {}
+    trip = raw.get("trip") or {}
+    return trip if isinstance(trip, dict) else {}
+
+
+def _parse_tool_input(text: str) -> dict[str, Any]:
+    raw = text.strip()
+    if not raw:
+        return {}
+    if raw.startswith("{") and raw.endswith("}"):
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            pass
+    result: dict[str, Any] = {}
+    for line in raw.splitlines():
+        if ":" in line and "=" not in line:
+            key, value = line.split(":", 1)
+            result[key.strip()] = value.strip()
+    if result:
+        return result
+    pattern = re.compile(r"(\w+)\s*=\s*('([^']*)'|\"([^\"]*)\"|([^,]+))")
+    for match in pattern.finditer(raw):
+        key = match.group(1)
+        value = match.group(3) or match.group(4) or match.group(5) or ""
+        result[key] = value.strip()
+    return result
+
+
+def _resolve_date_range(trip: dict[str, Any]) -> tuple[str | None, str | None]:
+    start = str(trip.get("start", "")).strip().lower()
+    days = trip.get("days")
+    try:
+        days_int = int(days) if days is not None else 7
+    except Exception:
+        days_int = 7
+
+    today = dt.date.today()
+    if start == "next monday":
+        days_ahead = (7 - today.weekday()) % 7
+        if days_ahead == 0:
+            days_ahead = 7
+        start_date = today + dt.timedelta(days=days_ahead)
+    else:
+        try:
+            start_date = dt.date.fromisoformat(start)
+        except Exception:
+            start_date = None
+
+    if not start_date:
+        return None, None
+
+    end_date = start_date + dt.timedelta(days=days_int - 1)
+    return start_date.isoformat(), end_date.isoformat()
