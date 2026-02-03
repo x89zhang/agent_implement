@@ -145,6 +145,7 @@ def get_weather(city: str | None = None, start_date: str | None = None, end_date
     """
     Get daily weather via Open-Meteo. Dates are optional (YYYY-MM-DD).
     """
+    trip: dict[str, Any] = {}
     if not city:
         trip = _load_trip_defaults()
         city = str(trip.get("city", "")).strip()
