@@ -125,6 +125,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                 fn,
                 name=t.name,
                 description=t.description or "",
+                handle_tool_error=True,
             )
         )
 

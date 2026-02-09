@@ -77,8 +77,8 @@ def main() -> None:
         import infect  # type: ignore
 
         infect.apply(args.config)
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[INFECTION] disabled due to error: {exc}")
 
     if args.input is not None:
         result = run_once(args.config, args.input)

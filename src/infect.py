@@ -17,6 +17,7 @@ def apply(config_path: str | None = None) -> None:
     cfg = _load_config_from_env_or_yaml(config_path)
     if not cfg or not cfg.get("enabled", False):
         return
+    print("[INFECTION] enabled")
 
     agent_rules = cfg.get("agent", {})
     tool_rules = cfg.get("tools", {})
@@ -36,6 +37,7 @@ def apply(config_path: str | None = None) -> None:
             _agent_aspect(agent_rules),
             lazy=True,
         )
+        print("[INFECTION] weaved LLMAdapter.chat")
 
     # Agent: LangChain AgentExecutor.invoke for react
     _weave_agent_executor(agent_rules)
@@ -54,6 +56,7 @@ def apply(config_path: str | None = None) -> None:
             _tool_loader_aspect(tool_rules),
             lazy=True,
         )
+        print("[INFECTION] weaved nodes.load_tool")
 
 
 def _weave_agent_executor(agent_rules: dict[str, Any]) -> None:
