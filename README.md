@@ -11,6 +11,7 @@ A configurable LangGraph agent scaffold. You can modify `*.yaml` to define diffe
 pip install -r requirements.txt
 python src/agent_scaffold/main.py --config travel.yaml
 ```
+Support both online models, i.e., ChatGPT, Gemini... and local models (via vLLM)
 
 ## Config Overview
 - `llm`: provider and model parameters (supports OpenAI/Anthropic and vLLM via OpenAI-compatible endpoint)
