@@ -3,11 +3,16 @@ from __future__ import annotations
 import ast
 import base64
 import datetime as dt
+import email
+from email.message import EmailMessage
 import html as html_lib
+import imaplib
 import json
 import operator as op
 import os
 import re
+import smtplib
+import ssl
 import urllib.parse
 import urllib.request
 import urllib.error
@@ -567,6 +572,209 @@ def github_add_issue_comment(
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
+def email_check_inbox(
+    imap_host: str | None = None,
+    imap_port: int | None = None,
+    username: str | None = None,
+    password: str | None = None,
+    mailbox: str = "INBOX",
+    unseen_only: bool = True,
+    limit: int = 10,
+    use_ssl: bool | None = None,
+) -> str:
+    """
+    Check inbox messages via IMAP and return recent message metadata.
+    """
+    if isinstance(imap_host, str) and ("=" in imap_host or imap_host.strip().startswith("{")):
+        parsed = _parse_tool_input(imap_host)
+        if parsed:
+            imap_host = parsed.get("imap_host", imap_host)
+            imap_port = int(parsed.get("imap_port", imap_port or 0)) or None
+            username = parsed.get("username", username)
+            password = parsed.get("password", password)
+            mailbox = str(parsed.get("mailbox", mailbox))
+            if "unseen_only" in parsed:
+                unseen_only = _coerce_bool(parsed.get("unseen_only"))
+            if "limit" in parsed:
+                limit = int(parsed.get("limit"))
+            if "use_ssl" in parsed:
+                use_ssl = _coerce_bool(parsed.get("use_ssl"))
+
+    cfg = _load_email_defaults()
+    strict_target = bool(cfg.get("strict_target", False))
+    if strict_target:
+        imap_host = str(cfg.get("imap_host") or "").strip()
+        imap_port = int(cfg.get("imap_port") or (993 if cfg.get("use_ssl", True) else 143))
+        username = str(cfg.get("username") or "").strip()
+        mailbox = str(cfg.get("mailbox") or "INBOX")
+        use_ssl = bool(cfg.get("use_ssl", True))
+        password_env = str(cfg.get("password_env") or "EMAIL_PASSWORD")
+        password = os.environ.get(password_env, "").strip() or str(cfg.get("password") or "").strip()
+    else:
+        imap_host = str(imap_host or cfg.get("imap_host") or "").strip()
+        imap_port = int(imap_port or cfg.get("imap_port") or (993 if cfg.get("use_ssl", True) else 143))
+        username = str(username or cfg.get("username") or "").strip()
+        mailbox = str(mailbox or cfg.get("mailbox") or "INBOX")
+        if use_ssl is None:
+            use_ssl = bool(cfg.get("use_ssl", True))
+        if not password:
+            password_env = str(cfg.get("password_env") or "EMAIL_PASSWORD")
+            password = os.environ.get(password_env, "").strip() or str(cfg.get("password") or "").strip()
+    if not imap_host or not username or not password:
+        return json.dumps(
+            {"error": "imap_host, username, and password are required (password can come from env)"},
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    messages: list[dict[str, Any]] = []
+    try:
+        if use_ssl:
+            conn = imaplib.IMAP4_SSL(imap_host, imap_port)
+        else:
+            conn = imaplib.IMAP4(imap_host, imap_port)
+        conn.login(username, password)
+        conn.select(mailbox)
+        criteria = "(UNSEEN)" if unseen_only else "(ALL)"
+        status, data = conn.search(None, criteria)
+        if status != "OK":
+            conn.logout()
+            return json.dumps({"error": "imap search failed"}, ensure_ascii=False, indent=2)
+        msg_ids = data[0].split() if data and data[0] else []
+        msg_ids = msg_ids[-max(1, int(limit)) :]
+        for mid in reversed(msg_ids):
+            fetch_status, fetched = conn.fetch(mid, "(RFC822)")
+            if fetch_status != "OK" or not fetched:
+                continue
+            raw = fetched[0][1]
+            msg = email.message_from_bytes(raw)
+            snippet = ""
+            if msg.is_multipart():
+                for part in msg.walk():
+                    if part.get_content_type() == "text/plain":
+                        payload = part.get_payload(decode=True) or b""
+                        snippet = payload.decode(errors="ignore").strip()
+                        break
+            else:
+                payload = msg.get_payload(decode=True) or b""
+                snippet = payload.decode(errors="ignore").strip()
+            messages.append(
+                {
+                    "id": mid.decode(errors="ignore"),
+                    "from": msg.get("From"),
+                    "to": msg.get("To"),
+                    "subject": msg.get("Subject"),
+                    "date": msg.get("Date"),
+                    "snippet": snippet[:300],
+                }
+            )
+        conn.logout()
+    except Exception as exc:
+        return json.dumps({"error": f"imap_error: {exc}"}, ensure_ascii=False, indent=2)
+
+    return json.dumps(messages, ensure_ascii=False, indent=2)
+
+
+def email_send(
+    to: str | None = None,
+    subject: str = "",
+    body: str = "",
+    cc: str = "",
+    bcc: str = "",
+    from_email: str | None = None,
+    smtp_host: str | None = None,
+    smtp_port: int | None = None,
+    username: str | None = None,
+    password: str | None = None,
+    use_ssl: bool | None = None,
+) -> str:
+    """
+    Send an email via SMTP.
+    """
+    if isinstance(to, str) and ("=" in to or to.strip().startswith("{")):
+        parsed = _parse_tool_input(to)
+        if parsed:
+            to = parsed.get("to", to)
+            subject = str(parsed.get("subject", subject))
+            body = str(parsed.get("body", body))
+            cc = str(parsed.get("cc", cc))
+            bcc = str(parsed.get("bcc", bcc))
+            from_email = parsed.get("from_email", from_email)
+            smtp_host = parsed.get("smtp_host", smtp_host)
+            if parsed.get("smtp_port") is not None:
+                smtp_port = int(parsed.get("smtp_port"))
+            username = parsed.get("username", username)
+            password = parsed.get("password", password)
+            if "use_ssl" in parsed:
+                use_ssl = _coerce_bool(parsed.get("use_ssl"))
+
+    cfg = _load_email_defaults()
+    strict_target = bool(cfg.get("strict_target", False))
+    if strict_target:
+        smtp_host = str(cfg.get("smtp_host") or "").strip()
+        smtp_port = int(cfg.get("smtp_port") or (465 if cfg.get("use_ssl", True) else 587))
+        username = str(cfg.get("username") or "").strip()
+        from_email = str(cfg.get("from_email") or username).strip()
+        # Outlook commonly uses 587+STARTTLS; allow explicit override while defaulting to config.
+        use_ssl = bool(cfg.get("use_ssl", True))
+        if smtp_port == 587:
+            use_ssl = False
+        password_env = str(cfg.get("password_env") or "EMAIL_PASSWORD")
+        password = os.environ.get(password_env, "").strip() or str(cfg.get("password") or "").strip()
+    else:
+        smtp_host = str(smtp_host or cfg.get("smtp_host") or "").strip()
+        smtp_port = int(smtp_port or cfg.get("smtp_port") or (465 if cfg.get("use_ssl", True) else 587))
+        username = str(username or cfg.get("username") or "").strip()
+        from_email = str(from_email or cfg.get("from_email") or username).strip()
+        if use_ssl is None:
+            use_ssl = bool(cfg.get("use_ssl", True))
+        if not password:
+            password_env = str(cfg.get("password_env") or "EMAIL_PASSWORD")
+            password = os.environ.get(password_env, "").strip() or str(cfg.get("password") or "").strip()
+    if not to or not subject or not body:
+        return json.dumps({"error": "to, subject, and body are required"}, ensure_ascii=False, indent=2)
+    if not smtp_host or not username or not password or not from_email:
+        return json.dumps(
+            {"error": "smtp_host, username, from_email, and password are required (password can come from env)"},
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    msg = EmailMessage()
+    msg["From"] = from_email
+    msg["To"] = to
+    if cc:
+        msg["Cc"] = cc
+    msg["Subject"] = subject
+    msg.set_content(body)
+
+    try:
+        if use_ssl:
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(smtp_host, smtp_port, context=context, timeout=30) as server:
+                server.login(username, password)
+                server.send_message(msg, to_addrs=_flatten_recipients(to, cc, bcc))
+        else:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
+                server.starttls(context=ssl.create_default_context())
+                server.login(username, password)
+                server.send_message(msg, to_addrs=_flatten_recipients(to, cc, bcc))
+    except Exception as exc:
+        return json.dumps({"error": f"smtp_error: {exc}"}, ensure_ascii=False, indent=2)
+
+    return json.dumps(
+        {
+            "status": "sent",
+            "to": to,
+            "cc": cc,
+            "bcc": bcc,
+            "subject": subject,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
 def _http_get_json(url: str) -> dict[str, Any]:
     req = urllib.request.Request(
         url,
@@ -635,6 +843,22 @@ def _load_web_defaults() -> dict[str, Any]:
         return {}
     web_cfg = raw.get("web") or {}
     return web_cfg if isinstance(web_cfg, dict) else {}
+
+
+def _load_email_defaults() -> dict[str, Any]:
+    """
+    Load email defaults from a yaml config located one level above current run directory.
+    Expected file name is <run_dir_name>.yaml (e.g. run dir "email" -> "../email.yaml").
+    """
+    run_dir = Path.cwd().resolve()
+    cfg_path = run_dir.parent / f"{run_dir.name}.yaml"
+    if not cfg_path.exists():
+        return {}
+    raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        return {}
+    email_cfg = raw.get("email") or {}
+    return email_cfg if isinstance(email_cfg, dict) else {}
 
 
 def _parse_tool_input(text: str) -> dict[str, Any]:
@@ -887,6 +1111,23 @@ def _github_request(
 
 def _is_github_error(data: Any) -> bool:
     return isinstance(data, dict) and "error" in data
+
+
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    return text in {"1", "true", "yes", "y", "on"}
+
+
+def _flatten_recipients(to: str, cc: str = "", bcc: str = "") -> list[str]:
+    recipients: list[str] = []
+    for chunk in (to, cc, bcc):
+        if not chunk:
+            continue
+        parts = [x.strip() for x in str(chunk).split(",") if x.strip()]
+        recipients.extend(parts)
+    return recipients
 
 
 def _parse_github_repo_ref(value: str) -> tuple[str | None, str | None]:

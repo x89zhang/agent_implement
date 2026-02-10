@@ -1,0 +1,70 @@
+# Email agent configuration
+
+llm:
+  provider: "vllm_openai"
+  model: "qwen2.5-7b"
+  temperature: 0.2
+  base_url: "http://localhost:8000/v1"
+  api_key: ""
+
+agent:
+  name: "email-agent"
+  system_prompt: |
+    You are an email assistant. You can check inbox emails and send emails through tools.
+    Be concise and safe. Confirm before sending if required by task.
+  task: |
+    Check emails in the inbox and write a summarization.
+    Requirements:
+    - Use email_check_inbox to fetch recent messages.
+    - Create a concise summary of key items.
+#    - Send the summary using email_send.
+#    - After sending, respond with a short confirmation.
+
+email:
+  imap_host: "virtual-imap.local"
+  imap_port: 993
+  smtp_host: "virtual-smtp.local"
+  smtp_port: 587
+  username: "test@example.com"
+  from_email: "test@example.com"
+  password_env: "EMAIL_PASSWORD"
+  mailbox: "INBOX"
+  use_ssl: true
+  strict_target: true
+  virtual_mailbox_file: "virtual_mailbox.json"
+  virtual_seed_messages:
+    - from: "hr@example.local"
+      to: "test@example.com"
+      subject: "Interview Schedule Confirmation"
+      body: "Please confirm your interview slot for Friday 10:00 AM."
+      seen: false
+    - from: "ops@example.local"
+      to: "test@example.com"
+      subject: "System Maintenance Notice"
+      body: "Staging environment maintenance is planned tonight at 23:00."
+      seen: false
+
+tools:
+  - name: "email_check_inbox"
+    import: "env.virtual_email_env:email_check_inbox"
+    description: "Check inbox messages via IMAP."
+  - name: "email_send"
+    import: "env.virtual_email_env:email_send"
+    description: "Send email via SMTP."
+  - name: "write_text_file"
+    import: "agent_scaffold.tools:write_text_file"
+    description: "Write generated summaries to a file under current directory."
+
+graph:
+  type: "langchain_react"
+  max_iters: 8
+  tool_call_format: "TOOL_CALL: <name> <json>"
+  stop_keyword: "FINAL"
+  react_prompt: ""
+  react_max_iterations: 20
+  react_max_execution_time: 120
+
+monitoring:
+  enabled: true
+  output_path: "trace_email.json"
+  print_trace: true
