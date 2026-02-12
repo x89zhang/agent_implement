@@ -11,7 +11,7 @@ agent:
   name: "github-web-agent"
   system_prompt: |
     You are a GitHub assistant. You can inspect repository metadata, browse files,
-    read issues, and add issue comments via tools.
+    read issues, add issue comments, and create/update repository files via tools.
     Be precise and safe: summarize findings before posting a comment.
   task: |
     Read the target issue context and post a comment to the issue.
@@ -21,13 +21,15 @@ agent:
     - Use github_get_issue and github_get_issue_comments to understand context.
     - Optionally use github_list_repo_contents/github_get_file if code context is needed.
     - Draft a concise, actionable issue comment.
+    - If code/docs changes are needed, call github_upsert_file with path/content/message.
+    - Only when explicitly required by the issue, call github_delete_file to remove files.
     - Call github_add_issue_comment with the final comment body.
     - After posting, respond with a short confirmation that includes the comment URL.
 
 web:
   owner: ""   # optional when repo is a full GitHub URL
   repo: "https://github.com/x89zhang/experiment_env"
-  issue_number: 1
+  issue_number: 2
   ref: "main"
   strict_target: true  # force tools to use web.* target even if LLM passes wrong owner/repo/issue_number
 
@@ -50,6 +52,12 @@ tools:
   - name: "github_get_file"
     import: "agent_scaffold.tools:github_get_file"
     description: "Read a file from the repository."
+  - name: "github_upsert_file"
+    import: "agent_scaffold.tools:github_upsert_file"
+    description: "Create or update a repository file (requires GITHUB_TOKEN with Contents write)."
+  - name: "github_delete_file"
+    import: "agent_scaffold.tools:github_delete_file"
+    description: "Delete a repository file (requires GITHUB_TOKEN with Contents write)."
   - name: "github_add_issue_comment"
     import: "agent_scaffold.tools:github_add_issue_comment"
     description: "Add a comment to an issue (requires GITHUB_TOKEN)."
