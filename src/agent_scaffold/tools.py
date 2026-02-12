@@ -326,6 +326,7 @@ def github_get_repo(owner: str | None = None, repo: str | None = None) -> str:
     """
     Get repository metadata from GitHub.
     """
+    _enforce_web_action("repo_read")
     owner, repo = _resolve_repo(owner, repo)
     data = _github_request("GET", f"/repos/{owner}/{repo}")
     if _is_github_error(data):
@@ -352,6 +353,7 @@ def github_list_issues(
     """
     List repository issues (excluding pull requests).
     """
+    _enforce_web_action("issue_read")
     owner, repo = _resolve_repo(owner, repo)
     params = urllib.parse.urlencode({"state": state, "per_page": max(1, min(int(per_page), 100))})
     data = _github_request("GET", f"/repos/{owner}/{repo}/issues?{params}")
@@ -382,6 +384,7 @@ def github_get_issue(owner: str | None = None, repo: str | None = None, issue_nu
     """
     Get issue details.
     """
+    _enforce_web_action("issue_read")
     owner, repo = _resolve_repo(owner, repo)
     issue_number = _resolve_issue_number(issue_number)
     data = _github_request("GET", f"/repos/{owner}/{repo}/issues/{issue_number}")
@@ -414,6 +417,7 @@ def github_get_issue_comments(
     """
     Get issue comments.
     """
+    _enforce_web_action("issue_read")
     owner, repo = _resolve_repo(owner, repo)
     issue_number = _resolve_issue_number(issue_number)
     params = urllib.parse.urlencode({"per_page": max(1, min(int(per_page), 100))})
@@ -453,6 +457,7 @@ def github_list_repo_contents(
     """
     List files/directories in a repository path.
     """
+    _enforce_web_action("file_list")
     owner, repo = _resolve_repo(owner, repo)
     ref_value = ref or _load_web_defaults().get("ref") or ""
     endpoint = f"/repos/{owner}/{repo}/contents/{path.lstrip('/')}"
@@ -488,6 +493,7 @@ def github_get_file(
     """
     Get file content from a GitHub repository.
     """
+    _enforce_web_action("file_read")
     owner, repo = _resolve_repo(owner, repo)
     if not path:
         raise ValueError("path is required")
@@ -518,6 +524,7 @@ def github_add_issue_comment(
     """
     Add a comment to an issue. Requires env var GITHUB_TOKEN with repo access.
     """
+    _enforce_web_action("issue_comment")
     # Some models pass a JSON payload into the wrong argument.
     if not body:
         for candidate in (owner, repo):
@@ -585,6 +592,7 @@ def github_upsert_file(
     Create or update a file in a GitHub repository via Contents API.
     Requires env var GITHUB_TOKEN with Contents: write permission.
     """
+    _enforce_web_action("file_upsert")
     # Handle malformed tool calls where JSON payload is passed in a wrong argument.
     if not content:
         for candidate in (owner, repo, path):
@@ -682,6 +690,7 @@ def github_delete_file(
     Delete a file in a GitHub repository via Contents API.
     Requires env var GITHUB_TOKEN with Contents: write permission.
     """
+    _enforce_web_action("file_delete")
     for candidate in (owner, repo, path):
         if not isinstance(candidate, str):
             continue
@@ -1171,11 +1180,35 @@ def _normalize_date(value: str, trip_defaults: dict[str, Any] | None = None) -> 
         return None
 
 
+def _enforce_web_action(action: str) -> None:
+    web_cfg = _load_web_defaults()
+    allowed = web_cfg.get("allowed_actions")
+    if not allowed:
+        return
+
+    if isinstance(allowed, str):
+        items = [x.strip() for x in allowed.split(",")]
+    elif isinstance(allowed, list):
+        items = [str(x).strip() for x in allowed]
+    else:
+        raise ValueError("web.allowed_actions must be a list or comma-separated string")
+
+    allowed_set = {x for x in items if x}
+    if not allowed_set:
+        return
+    if action not in allowed_set:
+        raise ValueError(f"action '{action}' is not allowed by web.allowed_actions")
+
+
 def _resolve_repo(owner: str | None, repo: str | None) -> tuple[str, str]:
     web_cfg = _load_web_defaults()
     if bool(web_cfg.get("strict_target", False)):
-        owner = web_cfg.get("owner")
-        repo = web_cfg.get("repo")
+        # In strict_target mode, only override fields explicitly configured in web.*.
+        # This keeps owner/repo optional in yaml while still enforcing configured targets.
+        if web_cfg.get("owner") is not None:
+            owner = web_cfg.get("owner")
+        if web_cfg.get("repo") is not None:
+            repo = web_cfg.get("repo")
     owner_val = owner
     repo_val = repo
     if isinstance(owner_val, dict):
@@ -1244,9 +1277,11 @@ def _resolve_issue_number(issue_number: int | None) -> int:
     web_cfg = _load_web_defaults()
     if bool(web_cfg.get("strict_target", False)):
         value = web_cfg.get("issue_number")
-        if value is None:
-            raise ValueError("issue_number is required")
-        return int(value)
+        if value is not None:
+            return int(value)
+        if issue_number is not None:
+            return int(issue_number)
+        raise ValueError("issue_number is required")
     if issue_number is not None:
         return int(issue_number)
     value = web_cfg.get("issue_number")
