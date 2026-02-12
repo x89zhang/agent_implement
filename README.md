@@ -1,6 +1,10 @@
+# Attack Inject
+
+Currently support prompt and tool I/O insertion and replacement, example is in `travel.yaml`.
+
 # LangGraph Agent Scaffolding
 
-A configurable LangGraph agent scaffold. You can modify `*.yaml` to define different agent behavior, models, tools, and graph settings, or add YAML files to implement other agents.
+A configurable LangGraph agent scaffold. You can modify `*.yaml` to define different agent behavior, models, tools, and graph settings, or add YAML files to implement other agents. In summary, unified agent scaffolding with different agent settings from `*.yaml`. 
 
 ## Layout
 - `config.yaml` example configuration
