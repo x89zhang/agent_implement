@@ -1,0 +1,81 @@
+# GitHub web agent configuration
+
+llm:
+  provider: "vllm_openai"
+  model: "qwen2.5-7b"
+  temperature: 0.2
+  base_url: "http://localhost:8000/v1"
+  api_key: ""
+
+agent:
+  name: "github-web-agent"
+  system_prompt: |
+    You are a GitHub assistant. You can inspect repository metadata, browse files,
+    read issues, add issue comments, and create/update repository files via tools.
+    Be precise and safe: summarize findings before posting a comment.
+  task: |
+    Update README.md in the target repository to make it include the content `Hello world`. 
+    Requirements:
+    - Use github_get_repo to confirm repository info.
+    - Use github_get_file to read the current README.md first.
+    - If README.md does not exist, create it with a clear project overview and usage section.
+    - If README.md exists, keep the current structure/style and make a concise, useful improvement.
+    - Use github_upsert_file with path "README.md" and a clear commit message.
+    - Do NOT modify other files.
+    - After updating, respond with a short confirmation that includes the commit URL.
+
+web:
+  owner: ""   # optional; can be omitted when repo is a full GitHub URL
+  repo: "https://github.com/x89zhang/experiment_env"  # optional; can also be provided in tool args
+  issue_number: 2  # optional; only required for issue-specific tools/tasks
+  default_comment_body: ""  # optional fallback for github_add_issue_comment when body is omitted
+  ref: "main"  # optional default branch for github_list_repo_contents/github_get_file/github_upsert_file/github_delete_file
+  strict_target: true  # optional; if true, configured web.* fields are enforced as defaults/targets
+  allowed_actions:  # optional allowlist; remove this section to allow all actions
+    - "repo_read"      # github_get_repo
+    - "file_list"      # github_list_repo_contents
+    - "file_read"      # github_get_file
+    - "file_upsert"    # github_upsert_file (create/update)
+
+tools:
+  - name: "github_get_repo"
+    import: "agent_scaffold.tools:github_get_repo"
+    description: "Get repository metadata."
+  - name: "github_list_issues"
+    import: "agent_scaffold.tools:github_list_issues"
+    description: "List repository issues."
+  - name: "github_get_issue"
+    import: "agent_scaffold.tools:github_get_issue"
+    description: "Get issue details by issue number."
+  - name: "github_get_issue_comments"
+    import: "agent_scaffold.tools:github_get_issue_comments"
+    description: "Get comments for an issue."
+  - name: "github_list_repo_contents"
+    import: "agent_scaffold.tools:github_list_repo_contents"
+    description: "List repository files/directories."
+  - name: "github_get_file"
+    import: "agent_scaffold.tools:github_get_file"
+    description: "Read a file from the repository."
+  - name: "github_upsert_file"
+    import: "agent_scaffold.tools:github_upsert_file"
+    description: "Create or update a repository file (requires GITHUB_TOKEN with Contents write)."
+  - name: "github_delete_file"
+    import: "agent_scaffold.tools:github_delete_file"
+    description: "Delete a repository file (requires GITHUB_TOKEN with Contents write)."
+  - name: "github_add_issue_comment"
+    import: "agent_scaffold.tools:github_add_issue_comment"
+    description: "Add a comment to an issue (requires GITHUB_TOKEN)."
+
+graph:
+  type: "langchain_react"
+  max_iters: 8
+  tool_call_format: "TOOL_CALL: <name> <json>"
+  stop_keyword: "FINAL"
+  react_prompt: ""
+  react_max_iterations: 20
+  react_max_execution_time: 120
+
+monitoring:
+  enabled: true
+  output_path: "trace_web.json"
+  print_trace: true

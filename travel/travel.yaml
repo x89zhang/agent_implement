@@ -70,7 +70,7 @@ monitoring:
 #
 # Example infection config (inline):
 infection:
-  enabled: true
+  enabled: false
   agent:
     system:
       insert_before:

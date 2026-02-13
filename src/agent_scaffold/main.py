@@ -26,7 +26,8 @@ def run_once(cfg_path: str, user_input: str | None) -> dict[str, Any]:
     cfg = load_config(cfg_path)
     graph = build_graph(cfg)
 
-    run_dir = (Path.cwd() / Path(cfg_path).stem).resolve()
+    cfg_file = Path(cfg_path).resolve()
+    run_dir = cfg_file.parent
     run_dir.mkdir(parents=True, exist_ok=True)
 
     run_start = time.time()
@@ -42,11 +43,17 @@ def run_once(cfg_path: str, user_input: str | None) -> dict[str, Any]:
         "trace": [],
     }
     prev_cwd = Path.cwd()
+    prev_cfg_env = os.environ.get("AGENT_CONFIG_PATH")
     try:
         # Ensure all generated files (including write_text_file outputs) go into run_dir.
+        os.environ["AGENT_CONFIG_PATH"] = str(cfg_file)
         os.chdir(run_dir)
         result = graph.invoke(state)
     finally:
+        if prev_cfg_env is None:
+            os.environ.pop("AGENT_CONFIG_PATH", None)
+        else:
+            os.environ["AGENT_CONFIG_PATH"] = prev_cfg_env
         os.chdir(prev_cwd)
     run_end = time.time()
     if cfg.monitoring.enabled:

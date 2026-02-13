@@ -496,7 +496,15 @@ def github_get_file(
     _enforce_web_action("file_read")
     owner, repo = _resolve_repo(owner, repo)
     if not path:
-        raise ValueError("path is required")
+        return json.dumps(
+            {
+                "error": "path is required",
+                "hint": "Provide a repository-relative file path, e.g. README.md or docs/intro.md",
+                "expected_args": {"path": "README.md", "ref": "optional"},
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
     ref_value = ref or _load_web_defaults().get("ref") or ""
     endpoint = f"/repos/{owner}/{repo}/contents/{path.lstrip('/')}"
     if ref_value:
@@ -505,7 +513,14 @@ def github_get_file(
     if _is_github_error(data):
         return json.dumps(data, ensure_ascii=False, indent=2)
     if data.get("type") != "file":
-        raise ValueError("Requested path is not a file")
+        return json.dumps(
+            {
+                "error": "requested path is not a file",
+                "path": path,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
     content = data.get("content", "") or ""
     encoding = data.get("encoding", "")
     if encoding == "base64":
@@ -619,14 +634,37 @@ def github_upsert_file(
     owner, repo = _resolve_repo(owner, repo)
     normalized_path = str(path or "").strip().lstrip("/")
     if not normalized_path:
-        raise ValueError("path is required")
+        return json.dumps(
+            {
+                "error": "path is required",
+                "hint": "Provide a repository-relative file path, e.g. README.md or docs/intro.md",
+                "expected_args": {
+                    "path": "README.md",
+                    "content": "<new file content>",
+                    "message": "docs: update README",
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
     if content == "":
-        raise ValueError("content is required")
+        return json.dumps(
+            {
+                "error": "content is required",
+                "path": normalized_path,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
 
     ref_value = str(branch or _load_web_defaults().get("ref") or "").strip()
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     if not token:
-        raise ValueError("GITHUB_TOKEN is required for github_upsert_file")
+        return json.dumps(
+            {"error": "GITHUB_TOKEN is required for github_upsert_file"},
+            ensure_ascii=False,
+            indent=2,
+        )
 
     existing_sha = str(sha or "").strip()
     action = "create"
@@ -713,12 +751,24 @@ def github_delete_file(
     owner, repo = _resolve_repo(owner, repo)
     normalized_path = str(path or "").strip().lstrip("/")
     if not normalized_path:
-        raise ValueError("path is required")
+        return json.dumps(
+            {
+                "error": "path is required",
+                "hint": "Provide a repository-relative file path, e.g. README.md or docs/intro.md",
+                "expected_args": {"path": "README.md", "message": "docs: remove obsolete file"},
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
 
     ref_value = str(branch or _load_web_defaults().get("ref") or "").strip()
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     if not token:
-        raise ValueError("GITHUB_TOKEN is required for github_delete_file")
+        return json.dumps(
+            {"error": "GITHUB_TOKEN is required for github_delete_file"},
+            ensure_ascii=False,
+            indent=2,
+        )
 
     target_sha = str(sha or "").strip()
     if not target_sha:
@@ -730,7 +780,14 @@ def github_delete_file(
             return json.dumps(existing, ensure_ascii=False, indent=2)
         target_sha = str((existing or {}).get("sha") or "").strip()
         if not target_sha:
-            raise ValueError("Could not determine file sha; provide sha explicitly")
+            return json.dumps(
+                {
+                    "error": "could not determine file sha; provide sha explicitly",
+                    "path": normalized_path,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
 
     commit_message = str(message or "").strip() or f"Delete {normalized_path}"
     payload: dict[str, Any] = {
@@ -986,14 +1043,35 @@ def _http_get_text(url: str) -> str:
     return content.decode("utf-8", errors="ignore")
 
 
+def _resolve_run_config_path(run_dir: Path) -> Path | None:
+    """
+    Resolve the per-run config path.
+    Prefer AGENT_CONFIG_PATH when provided, then "<run_dir>/<run_dir_name>.yaml",
+    then fall back to
+    "<run_dir>/../<run_dir_name>.yaml" for backward compatibility.
+    """
+    env_cfg = str(os.environ.get("AGENT_CONFIG_PATH", "")).strip()
+    if env_cfg:
+        env_path = Path(env_cfg).resolve()
+        if env_path.exists():
+            return env_path
+    local_cfg = run_dir / f"{run_dir.name}.yaml"
+    if local_cfg.exists():
+        return local_cfg
+    legacy_cfg = run_dir.parent / f"{run_dir.name}.yaml"
+    if legacy_cfg.exists():
+        return legacy_cfg
+    return None
+
+
 def _load_trip_defaults() -> dict[str, Any]:
     """
-    Load trip defaults from a yaml config located one level above the current run directory.
-    The expected file name is <run_dir_name>.yaml (e.g. run dir "travel" -> "../travel.yaml").
+    Load trip defaults from the run config yaml.
+    Expected file name is <run_dir_name>.yaml (e.g. run dir "travel" -> "travel/travel.yaml").
     """
     run_dir = Path.cwd().resolve()
-    cfg_path = run_dir.parent / f"{run_dir.name}.yaml"
-    if not cfg_path.exists():
+    cfg_path = _resolve_run_config_path(run_dir)
+    if not cfg_path:
         return {}
     raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
@@ -1004,12 +1082,12 @@ def _load_trip_defaults() -> dict[str, Any]:
 
 def _load_paper_defaults() -> dict[str, Any]:
     """
-    Load paper defaults from a yaml config located one level above the current run directory.
-    The expected file name is <run_dir_name>.yaml (e.g. run dir "paper_summary" -> "../paper_summary.yaml").
+    Load paper defaults from the run config yaml.
+    Expected file name is <run_dir_name>.yaml (e.g. run dir "paper_summary" -> "paper_summary/paper_summary.yaml").
     """
     run_dir = Path.cwd().resolve()
-    cfg_path = run_dir.parent / f"{run_dir.name}.yaml"
-    if not cfg_path.exists():
+    cfg_path = _resolve_run_config_path(run_dir)
+    if not cfg_path:
         return {}
     raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
@@ -1020,12 +1098,12 @@ def _load_paper_defaults() -> dict[str, Any]:
 
 def _load_web_defaults() -> dict[str, Any]:
     """
-    Load web defaults from a yaml config located one level above current run directory.
-    Expected file name is <run_dir_name>.yaml (e.g. run dir "web" -> "../web.yaml").
+    Load web defaults from the run config yaml.
+    Expected file name is <run_dir_name>.yaml (e.g. run dir "web" -> "web/web.yaml").
     """
     run_dir = Path.cwd().resolve()
-    cfg_path = run_dir.parent / f"{run_dir.name}.yaml"
-    if not cfg_path.exists():
+    cfg_path = _resolve_run_config_path(run_dir)
+    if not cfg_path:
         return {}
     raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
@@ -1036,12 +1114,12 @@ def _load_web_defaults() -> dict[str, Any]:
 
 def _load_email_defaults() -> dict[str, Any]:
     """
-    Load email defaults from a yaml config located one level above current run directory.
-    Expected file name is <run_dir_name>.yaml (e.g. run dir "email" -> "../email.yaml").
+    Load email defaults from the run config yaml.
+    Expected file name is <run_dir_name>.yaml (e.g. run dir "email" -> "email/email.yaml").
     """
     run_dir = Path.cwd().resolve()
-    cfg_path = run_dir.parent / f"{run_dir.name}.yaml"
-    if not cfg_path.exists():
+    cfg_path = _resolve_run_config_path(run_dir)
+    if not cfg_path:
         return {}
     raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):

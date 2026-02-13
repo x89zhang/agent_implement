@@ -155,7 +155,13 @@ def virtual_email_reset() -> str:
 
 def _load_email_defaults() -> dict[str, Any]:
     run_dir = Path.cwd().resolve()
-    cfg_path = run_dir.parent / f"{run_dir.name}.yaml"
+    env_cfg = str(os.environ.get("AGENT_CONFIG_PATH", "")).strip()
+    if env_cfg:
+        cfg_path = Path(env_cfg).resolve()
+    else:
+        local_cfg = run_dir / f"{run_dir.name}.yaml"
+        legacy_cfg = run_dir.parent / f"{run_dir.name}.yaml"
+        cfg_path = local_cfg if local_cfg.exists() else legacy_cfg
     if not cfg_path.exists():
         return {}
     raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
