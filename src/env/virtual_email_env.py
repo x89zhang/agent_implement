@@ -171,13 +171,32 @@ def _load_email_defaults() -> dict[str, Any]:
     return email_cfg if isinstance(email_cfg, dict) else {}
 
 
+def _config_path() -> Path | None:
+    run_dir = Path.cwd().resolve()
+    env_cfg = str(os.environ.get("AGENT_CONFIG_PATH", "")).strip()
+    if env_cfg:
+        cfg_path = Path(env_cfg).resolve()
+        return cfg_path if cfg_path.exists() else None
+    local_cfg = run_dir / f"{run_dir.name}.yaml"
+    legacy_cfg = run_dir.parent / f"{run_dir.name}.yaml"
+    if local_cfg.exists():
+        return local_cfg.resolve()
+    if legacy_cfg.exists():
+        return legacy_cfg.resolve()
+    return None
+
+
 def _state_path() -> Path:
     cfg = _load_email_defaults()
     run_dir = Path.cwd().resolve()
     relative = str(cfg.get("virtual_mailbox_file") or "virtual_mailbox.json").strip()
     target = (run_dir / relative).resolve()
-    if not str(target).startswith(str(run_dir)):
-        raise ValueError("virtual_mailbox_file must be under the run directory")
+    cfg_path = _config_path()
+    allowed_root = run_dir
+    if cfg_path is not None and cfg_path.parent == run_dir:
+        allowed_root = run_dir.parent
+    if not str(target).startswith(str(allowed_root)):
+        raise ValueError("virtual_mailbox_file must be under the project directory")
     return target
 
 

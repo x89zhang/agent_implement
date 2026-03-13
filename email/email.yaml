@@ -31,7 +31,7 @@ email:
   mailbox: "INBOX"
   use_ssl: true
   strict_target: true
-  virtual_mailbox_file: "virtual_mailbox.json"
+  virtual_mailbox_file: "../simulated_envs/virtual_mailbox.json"
   virtual_seed_messages:
     - from: "hr@example.local"
       to: "test@example.com"

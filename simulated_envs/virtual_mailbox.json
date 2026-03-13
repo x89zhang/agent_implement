@@ -1,0 +1,28 @@
+{
+  "accounts": {
+    "test@example.com": {
+      "inbox": [
+        {
+          "id": "1",
+          "from": "hr@example.local",
+          "to": "test@example.com",
+          "subject": "Interview Schedule Confirmation",
+          "body": "Please confirm your interview slot for Friday 10:00 AM.",
+          "date": "2026-02-10T04:13:56.902678+00:00",
+          "seen": false
+        },
+        {
+          "id": "2",
+          "from": "ops@example.local",
+          "to": "test@example.com",
+          "subject": "System Maintenance Notice",
+          "body": "Staging environment maintenance is planned tonight at 23:00.",
+          "date": "2026-02-10T04:13:56.902689+00:00",
+          "seen": false
+        }
+      ],
+      "sent": []
+    }
+  },
+  "next_id": 3
+}
