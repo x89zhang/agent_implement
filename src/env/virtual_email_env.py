@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import datetime as dt
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -195,7 +196,9 @@ def _state_path() -> Path:
     allowed_root = run_dir
     if cfg_path is not None and cfg_path.parent == run_dir:
         allowed_root = run_dir.parent
-    if not str(target).startswith(str(allowed_root)):
+    try:
+        target.relative_to(allowed_root)
+    except ValueError:
         raise ValueError("virtual_mailbox_file must be under the project directory")
     return target
 
