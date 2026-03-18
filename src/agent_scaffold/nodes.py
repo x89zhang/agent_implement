@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib
 import json
-import json
 import re
 import time
 from typing import Any, Callable
@@ -57,6 +56,38 @@ def parse_tool_call(text: str) -> tuple[str, dict[str, Any]] | None:
     return name, payload
 
 
+def _copy_message(msg: dict[str, Any]) -> dict[str, Any]:
+    copied: dict[str, Any] = {
+        "role": msg.get("role", ""),
+        "content": msg.get("content", ""),
+    }
+    for key in ("tool_calls", "function_call", "provider_specific_fields", "extra"):
+        if key in msg:
+            value = msg.get(key)
+            if isinstance(value, dict):
+                copied[key] = dict(value)
+            elif isinstance(value, list):
+                copied[key] = list(value)
+            else:
+                copied[key] = value
+    return copied
+
+
+def _append_trace_message(state: dict[str, Any], message: dict[str, Any]) -> None:
+    trace_messages = state.setdefault("trace_messages", [])
+    trace_messages.append(_copy_message(message))
+
+
+def _update_usage_totals(state: dict[str, Any], usage: dict[str, Any] | None) -> None:
+    if not usage:
+        return
+    stats = state.setdefault("trace_stats", {})
+    stats["api_calls"] = int(stats.get("api_calls", 0)) + 1
+    stats["prompt_tokens"] = int(stats.get("prompt_tokens", 0)) + int(usage.get("prompt_tokens") or 0)
+    stats["completion_tokens"] = int(stats.get("completion_tokens", 0)) + int(usage.get("completion_tokens") or 0)
+    stats["total_tokens"] = int(stats.get("total_tokens", 0)) + int(usage.get("total_tokens") or 0)
+
+
 def agent_node(cfg: AppConfig, llm: LLMAdapter) -> Callable[[dict[str, Any]], dict[str, Any]]:
     def _run(state: dict[str, Any]) -> dict[str, Any]:
         start = time.time()
@@ -99,6 +130,47 @@ def agent_node(cfg: AppConfig, llm: LLMAdapter) -> Callable[[dict[str, Any]], di
                 "usage": usage,
             }
         )
+        _update_usage_totals(state, usage)
+        assistant_message = {
+            "role": "assistant",
+            "content": response.content,
+            "tool_calls": (
+                [
+                    {
+                        "type": "tool_call",
+                        "name": call[0],
+                        "arguments": call[1],
+                    }
+                ]
+                if call
+                else None
+            ),
+            "function_call": None,
+            "provider_specific_fields": {
+                "refusal": None,
+                "reasoning": None,
+            },
+            "extra": {
+                "timestamp": end,
+                "response": {
+                    "model": cfg.llm.model,
+                    "provider": cfg.llm.provider,
+                    "usage": usage,
+                },
+                "actions": (
+                    [
+                        {
+                            "tool": call[0],
+                            "arguments": call[1],
+                        }
+                    ]
+                    if call
+                    else []
+                ),
+                "latency_ms": int((end - start) * 1000),
+            },
+        }
+        _append_trace_message(state, assistant_message)
         if cfg.monitoring.print_trace:
             print("[LLM OUTPUT]")
             print(response.content)
@@ -150,6 +222,20 @@ def tool_node(
                 "usage": usage,
             }
         )
+        tool_message = {
+            "role": "user",
+            "content": f"TOOL_RESULT: {result}",
+            "extra": {
+                "tool": name,
+                "args": payload,
+                "raw_output": result,
+                "returncode": 0 if not str(result).startswith("Tool execution failed:") else 1,
+                "exception_info": str(result) if str(result).startswith("Tool execution failed:") else "",
+                "timestamp": end,
+                "usage": usage,
+            },
+        }
+        _append_trace_message(state, tool_message)
         if cfg.monitoring.print_trace:
             print("\n[TOOL INPUT]")
             print(f"{name} {payload}")

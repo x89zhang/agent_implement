@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 from typing import Any
 import time
 
@@ -7,7 +9,7 @@ from langgraph.graph import END, StateGraph
 
 from .config import AppConfig
 from .llm import LLMAdapter
-from .nodes import agent_node, load_tool, tool_node
+from .nodes import agent_node, load_tool, tool_node, _append_trace_message, _update_usage_totals
 
 
 def build_graph(cfg: AppConfig) -> Any:
@@ -189,6 +191,56 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                     "usage": tool_usage,
                 }
             )
+            _append_trace_message(
+                state,
+                {
+                    "role": "assistant",
+                    "content": log_text or "",
+                    "tool_calls": [
+                        {
+                            "type": "tool_call",
+                            "name": getattr(action, "tool", ""),
+                            "arguments": _maybe_parse_json(tool_input),
+                        }
+                    ],
+                    "function_call": None,
+                    "provider_specific_fields": {
+                        "refusal": None,
+                        "reasoning": thought_text or None,
+                    },
+                    "extra": {
+                        "timestamp": time.time(),
+                        "response": {
+                            "model": cfg.llm.model,
+                            "provider": cfg.llm.provider,
+                            "log": log_text,
+                        },
+                        "actions": [
+                            {
+                                "tool": getattr(action, "tool", ""),
+                                "arguments": _maybe_parse_json(tool_input),
+                            }
+                        ],
+                        "usage": tool_usage,
+                    },
+                },
+            )
+            _append_trace_message(
+                state,
+                {
+                    "role": "user",
+                    "content": str(observation),
+                    "extra": {
+                        "tool": getattr(action, "tool", ""),
+                        "tool_input": tool_input,
+                        "raw_output": str(observation),
+                        "returncode": 0,
+                        "exception_info": "",
+                        "timestamp": time.time(),
+                        "usage": tool_usage,
+                    },
+                },
+            )
             if cfg.monitoring.print_trace:
                 if thought_text:
                     print("\n[THOUGHT]")
@@ -208,6 +260,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             "total_tokens": prompt_tokens + completion_tokens,
             "source": "estimated",
         }
+        _update_usage_totals(state, usage)
         trace.append(
             {
                 "step": "langchain_react",
@@ -217,6 +270,30 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                 "output": {"content": output, "intermediate_steps": steps},
                 "usage": usage,
             }
+        )
+        _append_trace_message(
+            state,
+            {
+                "role": "assistant",
+                "content": output,
+                "tool_calls": None,
+                "function_call": None,
+                "provider_specific_fields": {
+                    "refusal": None,
+                    "reasoning": None,
+                },
+                "extra": {
+                    "timestamp": time.time(),
+                    "response": {
+                        "model": cfg.llm.model,
+                        "provider": cfg.llm.provider,
+                        "intermediate_steps": len(steps),
+                    },
+                    "actions": [],
+                    "latency_ms": int((time.time() - start) * 1000),
+                    "usage": usage,
+                },
+            },
         )
         if cfg.monitoring.print_trace:
             print("[LLM OUTPUT]")
@@ -229,3 +306,23 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
     builder.set_entry_point("react")
     builder.add_edge("react", END)
     return builder.compile()
+
+
+def _maybe_parse_json(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text:
+        return value
+    if text.startswith("{") or text.startswith("["):
+        try:
+            return json.loads(text)
+        except Exception:
+            return value
+    match = re.search(r"(\{.*\}|\[.*\])", text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except Exception:
+            return value
+    return value

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import json
 import os
 import sys
@@ -41,6 +42,13 @@ def run_once(cfg_path: str, user_input: str | None) -> dict[str, Any]:
         "tool_call": None,
         "iterations": 0,
         "trace": [],
+        "trace_messages": build_initial_messages(cfg) + initial_messages + input_messages,
+        "trace_stats": {
+            "api_calls": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        },
     }
     prev_cwd = Path.cwd()
     prev_cfg_env = os.environ.get("AGENT_CONFIG_PATH")
@@ -57,8 +65,30 @@ def run_once(cfg_path: str, user_input: str | None) -> dict[str, Any]:
         os.chdir(prev_cwd)
     run_end = time.time()
     if cfg.monitoring.enabled:
-        output_path = run_dir / f"trace_{Path(cfg_path).stem}.json"
+        configured_output = cfg.monitoring.output_path.strip()
+        if configured_output:
+            output_path = Path(configured_output)
+            if not output_path.is_absolute():
+                output_path = run_dir / output_path
+        else:
+            output_path = run_dir / f"trace_{Path(cfg_path).stem}.json"
+        stats = result.get("trace_stats", {})
         payload = {
+            "info": {
+                "model_stats": {
+                    "api_calls": int(stats.get("api_calls", 0)),
+                    "prompt_tokens": int(stats.get("prompt_tokens", 0)),
+                    "completion_tokens": int(stats.get("completion_tokens", 0)),
+                    "total_tokens": int(stats.get("total_tokens", 0)),
+                },
+                "config": asdict(cfg),
+                "final": result.get("messages", [])[-1]["content"] if result.get("messages") else "",
+                "run_dir": str(run_dir),
+                "timestamp": run_start,
+                "latency_ms": int((run_end - run_start) * 1000),
+            },
+            "messages": result.get("trace_messages", []),
+            "trajectory_format": "agent_scaffold.v2",
             "input": user_input,
             "final": result.get("messages", [])[-1]["content"] if result.get("messages") else "",
             "run_dir": str(run_dir),
@@ -66,6 +96,7 @@ def run_once(cfg_path: str, user_input: str | None) -> dict[str, Any]:
             "latency_ms": int((run_end - run_start) * 1000),
             "trace": result.get("trace", []),
         }
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
     return result
