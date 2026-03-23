@@ -12,6 +12,47 @@ from .llm import LLMAdapter
 from .nodes import agent_node, load_tool, tool_node, _append_trace_message, _update_usage_totals
 
 
+def _build_react_callbacks(enabled: bool) -> list[Any]:
+    if not enabled:
+        return []
+
+    BaseCallbackHandler = None
+    try:
+        from langchain_core.callbacks.base import BaseCallbackHandler  # type: ignore
+    except Exception:
+        try:
+            from langchain.callbacks.base import BaseCallbackHandler  # type: ignore
+        except Exception:
+            return []
+
+    class _RealtimeReactCallback(BaseCallbackHandler):  # type: ignore[misc]
+        def on_agent_action(self, action: Any, **kwargs: Any) -> Any:
+            log_text = str(getattr(action, "log", "") or "")
+            thought_text = ""
+            for line in log_text.splitlines():
+                if line.strip().lower().startswith("thought"):
+                    thought_text = line.strip()
+                    break
+            if thought_text:
+                print("\n[THOUGHT]")
+                print(thought_text)
+            print("\n[TOOL INPUT]")
+            print(f"{getattr(action, 'tool', '')} {getattr(action, 'tool_input', '')}")
+
+        def on_tool_end(self, output: Any, **kwargs: Any) -> Any:
+            print("[TOOL OUTPUT]")
+            print(output)
+
+        def on_agent_finish(self, finish: Any, **kwargs: Any) -> Any:
+            values = getattr(finish, "return_values", {}) or {}
+            output = values.get("output", "")
+            if output:
+                print("\n[LLM OUTPUT]")
+                print(output)
+
+    return [_RealtimeReactCallback()]
+
+
 def build_graph(cfg: AppConfig) -> Any:
     if cfg.graph.type == "langchain_react":
         return _build_langchain_react_graph(cfg)
@@ -131,6 +172,8 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             )
         )
 
+    callbacks = _build_react_callbacks(cfg.monitoring.print_trace)
+
     if create_react_agent:
         agent = create_react_agent(lc_model, tools, PROMPT)
         executor = AgentExecutor(
@@ -141,6 +184,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             max_iterations=cfg.graph.react_max_iterations,
             max_execution_time=cfg.graph.react_max_execution_time,
             handle_parsing_errors=True,
+            callbacks=callbacks,
         )
     else:
         executor = initialize_agent(
@@ -152,6 +196,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             max_iterations=cfg.graph.react_max_iterations,
             max_execution_time=cfg.graph.react_max_execution_time,
             handle_parsing_errors=True,
+            callbacks=callbacks,
         )
 
     def _node(state: dict[str, Any]) -> dict[str, Any]:
@@ -163,7 +208,10 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                 print(user_input)
             else:
                 print("(no user input)")
-        result = executor.invoke({"input": user_input})
+        invoke_kwargs: dict[str, Any] = {}
+        if callbacks:
+            invoke_kwargs["callbacks"] = callbacks
+        result = executor.invoke({"input": user_input}, **invoke_kwargs)
         output = result.get("output", "")
         state["messages"].append({"role": "assistant", "content": output})
 
@@ -295,9 +343,11 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                 },
             },
         )
-        if cfg.monitoring.print_trace:
+        if cfg.monitoring.print_trace and not callbacks:
             print("[LLM OUTPUT]")
             print(output)
+            print(f"[TOKENS] prompt={usage.get('prompt_tokens')} completion={usage.get('completion_tokens')} total={usage.get('total_tokens')} source={usage.get('source')}")
+        elif cfg.monitoring.print_trace:
             print(f"[TOKENS] prompt={usage.get('prompt_tokens')} completion={usage.get('completion_tokens')} total={usage.get('total_tokens')} source={usage.get('source')}")
         return state
 

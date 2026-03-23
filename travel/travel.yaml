@@ -1,4 +1,4 @@
-# Quebec 7-day trip planning agent configuration
+# Travel planning agent configuration
 
 llm:
   provider: "vllm_openai"
@@ -18,9 +18,10 @@ agent:
     IMPORTANT: When you call a tool, do NOT output any Final Answer.
     Only output Final Answer in the very last step after all tool calls are done.
   task: |
-    Create a 7-day trip plan for Quebec City, Canada.
+    Create a trip plan using the resolved trip parameters provided in this prompt.
+    The runtime will append the concrete destination, trip length, and trip dates for this run below.
     Requirements:
-    - Provide a day-by-day itinerary (Day 1 to Day 7).
+    - Provide a day-by-day itinerary covering the full configured trip length.
     - For EVERY day, use the same structured format and include all of the following:
       - Hotel: which hotel the traveler stays at that night.
       - Breakfast: where to eat breakfast.
@@ -33,10 +34,16 @@ agent:
     - Prefer specific place names over generic descriptions like "have dinner downtown" or "explore the city".
     - If the same hotel is used across multiple days, still repeat it in each day's section.
     - If a meal is simple or optional on arrival/departure day, still provide a practical recommendation.
-    - Include flight options to Quebec City (or nearby airports) with a brief summary.
+    - Plan the itinerary day by day, not all at once from a single generic search.
+    - Before writing the final itinerary, gather enough information to support each day's hotel, meals, and activities.
+    - For each day, explicitly choose that day's breakfast, lunch, dinner, and main activities based on retrieved places relevant to that day.
+    - Try to avoid reusing the same restaurant across multiple days unless there is a clear reason, and if you reuse one, mention why briefly.
+    - Do not invent restaurants, hotels, or attractions. Prefer places that were found via tools.
+    - If you do not have enough concrete options for a day, do more searching before writing the final itinerary.
+    - Include flight options to the configured destination (or nearby airports) with a brief summary.
     - Include 2-3 hotel options with price range and location notes.
-    - Include weather outlook for the trip dates (assume a trip starting next Monday).
-    - Include local transportation suggestions (public transit, airport transfer, walking).
+    - Include weather outlook for the configured trip dates.
+    - Include local transportation suggestions for the configured destination (public transit, airport transfer, walking).
     - Use a clear markdown structure so each day is easy to scan.
     - Follow this daily template:
       ## Day X: <theme>
@@ -48,6 +55,9 @@ agent:
       - Dinner:
       - Evening activity:
       - Transportation notes:
+      - Notes: brief reason these places fit this day and area.
+    - The itinerary should match the configured destination, dates, and number of days without repeating those fixed inputs unnecessarily throughout the prompt.
+    - The final itinerary should feel like each day was individually planned, with varied meals and activities across the trip whenever practical.
     - You MUST call the write_text_file tool to save the final itinerary.
     - The file name MUST be "travel.txt".
     - When calling write_text_file, you MUST use JSON like:
@@ -57,7 +67,7 @@ agent:
     - After calling write_text_file, respond with a short confirmation message only.
 
 trip:
-  city: "Quebec City, Canada"
+  city: "Montreal, Canada"
   days: 7
   start: "next Monday"
 

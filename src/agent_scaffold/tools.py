@@ -61,6 +61,24 @@ def calculator(expression: str) -> str:
     return str(_eval(tree.body))
 
 
+def _normalize_search_query(query: str, max_chars: int = 180) -> str:
+    text = str(query).replace("\\n", " ").replace("\n", " ").replace("\r", " ")
+    text = re.sub(r"[`*_#>\[\]\{\}\(\)\"]", " ", text)
+    text = re.sub(r"\b(Thought|Action|Observation|Final Answer|Requirements?)\b\s*:?", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) <= max_chars:
+        return text
+
+    # Keep the query keyword-like when the model dumps a long instruction block into search.
+    tokens = re.findall(r"[A-Za-z0-9&'\-./]+", text)
+    compact = " ".join(tokens[: min(len(tokens), 24)]).strip()
+    if compact:
+        text = compact
+    if len(text) > max_chars:
+        text = text[:max_chars].rsplit(" ", 1)[0].strip() or text[:max_chars].strip()
+    return text
+
+
 def web_search(query: str | None = None, max_results: int = 5) -> str:
     """
     Simple web search via DuckDuckGo Instant Answer API.
@@ -78,6 +96,9 @@ def web_search(query: str | None = None, max_results: int = 5) -> str:
         query = str(parsed.get("query", query))
         if "max_results" in parsed:
             max_results = int(parsed["max_results"])
+    query = _normalize_search_query(str(query or ""))
+    if not query:
+        raise ValueError("Query is required")
     params = {
         "q": query,
         "format": "json",
@@ -85,7 +106,18 @@ def web_search(query: str | None = None, max_results: int = 5) -> str:
         "skip_disambig": "1",
     }
     url = "https://api.duckduckgo.com/?" + urllib.parse.urlencode(params)
-    data = _http_get_json(url)
+    try:
+        data = _http_get_json(url)
+    except urllib.error.HTTPError as exc:
+        if exc.code != 414:
+            raise
+        # Retry once with a more aggressively compacted query.
+        query = _normalize_search_query(query, max_chars=100)
+        if not query:
+            raise ValueError("Query became empty after shortening")
+        params["q"] = query
+        url = "https://api.duckduckgo.com/?" + urllib.parse.urlencode(params)
+        data = _http_get_json(url)
     results: list[dict[str, str]] = []
 
     def _add_item(item: dict[str, Any]) -> None:
@@ -124,6 +156,123 @@ def web_search(query: str | None = None, max_results: int = 5) -> str:
         )
 
     return json.dumps(results[: max(1, int(max_results))], ensure_ascii=False, indent=2)
+
+
+def research_search(
+    query: str | None = None,
+    max_results: int | None = None,
+    domains: list[str] | str | None = None,
+) -> str:
+    """
+    Search the web for research-style source collection.
+    Returns applied parameters and normalized search results.
+    """
+    research_cfg = _load_research_defaults()
+    configured_query = str(research_cfg.get("topic") or research_cfg.get("query") or "").strip()
+    if configured_query:
+        query = configured_query
+    if not query:
+        raise ValueError("Query is required")
+
+    configured_max_results = research_cfg.get("max_results")
+    if configured_max_results not in (None, ""):
+        max_results = int(configured_max_results)
+    if max_results is None:
+        max_results = 5
+
+    configured_domains = research_cfg.get("domains")
+    resolved_domains = _coerce_string_list(configured_domains if configured_domains not in (None, "") else domains)
+    query = _normalize_search_query(str(query))
+    if not query:
+        raise ValueError("Query is required")
+
+    search_terms = query
+    if resolved_domains:
+        search_terms = f"{query} " + " ".join(f"site:{domain}" for domain in resolved_domains)
+
+    html_url = "https://duckduckgo.com/html/?" + urllib.parse.urlencode({"q": search_terms})
+    html_text = open_url(html_url, max_chars=60000)
+    results = _extract_duckduckgo_results(html_text)
+    if not results:
+        fallback = web_search(query=query, max_results=int(max_results))
+        try:
+            parsed_fallback = json.loads(fallback)
+        except Exception:
+            parsed_fallback = []
+        payload = {
+            "applied": {
+                "query": query,
+                "max_results": int(max_results),
+                "domains": resolved_domains,
+                "search_terms": search_terms,
+                "source": "duckduckgo_instant_answer_fallback",
+            },
+            "count": len(parsed_fallback) if isinstance(parsed_fallback, list) else 0,
+            "results": parsed_fallback if isinstance(parsed_fallback, list) else [],
+        }
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+
+    payload = {
+        "applied": {
+            "query": query,
+            "max_results": int(max_results),
+            "domains": resolved_domains,
+            "search_terms": search_terms,
+            "source": "duckduckgo_html",
+        },
+        "count": min(len(results), int(max_results)),
+        "results": results[: max(1, int(max_results))],
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def research_read(url: str, max_chars: int | None = None) -> str:
+    """
+    Fetch a URL and convert the response into research-friendly plain text.
+    """
+    research_cfg = _load_research_defaults()
+    configured_max_chars = research_cfg.get("max_chars_per_page")
+    if configured_max_chars not in (None, ""):
+        max_chars = int(configured_max_chars)
+    if max_chars is None:
+        max_chars = 12000
+
+    if isinstance(url, str) and ("url=" in url or "max_chars=" in url or url.strip().startswith("{")):
+        parsed = _parse_tool_input(url)
+        url = str(parsed.get("url", url))
+        if "max_chars" in parsed and parsed.get("max_chars") not in (None, ""):
+            max_chars = int(parsed["max_chars"])
+    if not url:
+        raise ValueError("URL is required")
+
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "agent-scaffold/1.0"},
+        method="GET",
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        content = resp.read()
+        content_type = str(resp.headers.get("Content-Type", ""))
+
+    text = content.decode("utf-8", errors="ignore")
+    title = ""
+    if "html" in content_type.lower() or "<html" in text.lower():
+        title_match = re.search(r"<title[^>]*>(.*?)</title>", text, flags=re.IGNORECASE | re.DOTALL)
+        if title_match:
+            title = html_lib.unescape(re.sub(r"\s+", " ", title_match.group(1))).strip()
+        clean_text = _html_to_text(text)
+    else:
+        clean_text = text.strip()
+
+    truncated = len(clean_text) > int(max_chars)
+    payload = {
+        "url": url,
+        "title": title,
+        "content_type": content_type,
+        "content": clean_text[: max(1, int(max_chars))],
+        "truncated": truncated,
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 def open_url(url: str, max_chars: int = 4000) -> str:
@@ -269,6 +418,7 @@ def write_text_file(path: str | None, content: str = "", mode: str = "w") -> str
                 content = content_match.group(1)
     if not content:
         return "Content is required. Please provide content to write."
+    content = _normalize_text_content(content)
     base = Path.cwd().resolve()
     target = (base / path).resolve()
     if not str(target).startswith(str(base)):
@@ -277,6 +427,81 @@ def write_text_file(path: str | None, content: str = "", mode: str = "w") -> str
     with open(target, mode, encoding="utf-8") as f:
         f.write(content)
     return str(target)
+
+
+def augment_task_with_trip_context(task: str, trip: dict[str, Any]) -> str:
+    if not task:
+        return task
+    city = str(trip.get("city", "")).strip()
+    days = trip.get("days")
+    try:
+        days_int = int(days) if days is not None else None
+    except Exception:
+        days_int = None
+    start_date, end_date = _resolve_date_range(trip)
+    notes: list[str] = []
+    if city:
+        notes.append(f"- Resolved destination for this run: {city}.")
+    if days_int is not None:
+        notes.append(f"- Resolved trip length for this run: {days_int} days.")
+    if start_date and end_date:
+        notes.append(f"- Resolved trip dates for this run: {start_date} to {end_date}.")
+        notes.append("- When checking weather or mentioning dates, use these exact dates and do not guess the year.")
+    if not notes or "Resolved destination for this run:" in task:
+        return task
+    return f"{task.rstrip()}\n" + "\n".join(notes)
+
+
+def recover_written_file(result: dict[str, Any], run_dir: Path, task: str) -> Path | None:
+    target = _expected_output_file(run_dir, task)
+    if target.exists():
+        return target
+
+    trace = result.get("trace", [])
+    payload: dict[str, Any] | None = None
+    for entry in reversed(trace if isinstance(trace, list) else []):
+        output = entry.get("output", {}) if isinstance(entry, dict) else {}
+        steps = output.get("intermediate_steps", []) if isinstance(output, dict) else []
+        for step in reversed(steps if isinstance(steps, list) else []):
+            if not isinstance(step, dict):
+                continue
+            tool_name = str(step.get("tool", ""))
+            tool_input = step.get("tool_input")
+            if tool_name == "write_text_file":
+                if isinstance(tool_input, dict):
+                    payload = tool_input
+                elif isinstance(tool_input, str):
+                    try:
+                        parsed = json.loads(tool_input)
+                    except Exception:
+                        parsed = None
+                    if isinstance(parsed, dict):
+                        payload = parsed
+                if payload:
+                    break
+            log_text = str(step.get("log", ""))
+            payload = _extract_write_payload_from_log(log_text)
+            if payload:
+                break
+        if payload:
+            break
+
+    if not payload:
+        return None
+
+    path = str(payload.get("path") or target.name)
+    content = _normalize_text_content(str(payload.get("content") or ""))
+    mode = str(payload.get("mode") or "w")
+    if not content:
+        return None
+
+    destination = (run_dir / path).resolve()
+    if not str(destination).startswith(str(run_dir.resolve())):
+        return None
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with open(destination, mode, encoding="utf-8") as f:
+        f.write(content)
+    return destination
 
 
 def search_papers(
@@ -1094,6 +1319,102 @@ def _http_get_text(url: str) -> str:
     return content.decode("utf-8", errors="ignore")
 
 
+def _extract_duckduckgo_results(html_text: str) -> list[dict[str, str]]:
+    results: list[dict[str, str]] = []
+    blocks = re.findall(
+        r'(<div[^>]+class="[^"]*result[^"]*"[\s\S]*?</div>\s*</div>)',
+        html_text,
+        flags=re.IGNORECASE,
+    )
+    if not blocks:
+        blocks = re.findall(
+            r'(<a[^>]+class="[^"]*result__a[^"]*"[\s\S]*?</a>[\s\S]{0,1200})',
+            html_text,
+            flags=re.IGNORECASE,
+        )
+
+    for block in blocks:
+        link_match = re.search(
+            r'class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+            block,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not link_match:
+            continue
+        raw_href = html_lib.unescape(link_match.group(1).strip())
+        title_html = link_match.group(2)
+        snippet_match = re.search(
+            r'class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</',
+            block,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        snippet_html = snippet_match.group(1) if snippet_match else ""
+        resolved_url = _resolve_duckduckgo_href(raw_href)
+        title = _compact_text(_html_to_text(title_html))
+        snippet = _compact_text(_html_to_text(snippet_html))
+        if not resolved_url or not title:
+            continue
+        results.append(
+            {
+                "title": title,
+                "url": resolved_url,
+                "snippet": snippet,
+            }
+        )
+    return results
+
+
+def _resolve_duckduckgo_href(href: str) -> str:
+    if href.startswith("//"):
+        return "https:" + href
+    if href.startswith("/l/?"):
+        parsed = urllib.parse.urlparse(href)
+        qs = urllib.parse.parse_qs(parsed.query)
+        uddg = qs.get("uddg") or []
+        if uddg:
+            return urllib.parse.unquote(uddg[0])
+    return href
+
+
+def _html_to_text(html_text: str) -> str:
+    text = re.sub(r"(?is)<(script|style|noscript).*?>.*?</\1>", " ", html_text)
+    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?i)</p\s*>", "\n\n", text)
+    text = re.sub(r"(?i)</div\s*>", "\n", text)
+    text = re.sub(r"(?i)</li\s*>", "\n", text)
+    text = re.sub(r"(?is)<[^>]+>", " ", text)
+    text = html_lib.unescape(text)
+    text = text.replace("\r", "")
+    text = re.sub(r"\n[ \t]+", "\n", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _compact_text(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text)).strip()
+
+
+def _coerce_string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                parsed = None
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+        return [part.strip() for part in re.split(r"[,\\n]", text) if part.strip()]
+    return [str(value).strip()] if str(value).strip() else []
+
+
 def _resolve_run_config_path(run_dir: Path) -> Path | None:
     """
     Resolve the per-run config path.
@@ -1161,6 +1482,81 @@ def _load_web_defaults() -> dict[str, Any]:
         return {}
     web_cfg = raw.get("web") or {}
     return web_cfg if isinstance(web_cfg, dict) else {}
+
+
+def _load_research_defaults() -> dict[str, Any]:
+    """
+    Load deep research defaults from the run config yaml.
+    Expected file name is <run_dir_name>.yaml (e.g. run dir "deep_research" -> "deep_research/deep_research.yaml").
+    """
+    run_dir = Path.cwd().resolve()
+    cfg_path = _resolve_run_config_path(run_dir)
+    if not cfg_path:
+        return {}
+    raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        return {}
+    research_cfg = raw.get("research") or {}
+    return research_cfg if isinstance(research_cfg, dict) else {}
+
+
+def _expected_output_file(run_dir: Path, task: str) -> Path:
+    match = re.search(r'The file name MUST be "([^"]+)"', task)
+    if match:
+        return run_dir / match.group(1)
+    return run_dir / f"{run_dir.name}.txt"
+
+
+def _normalize_text_content(content: str) -> str:
+    text = str(content)
+    if "\n" not in text and "\\n" in text:
+        text = text.replace("\\r\\n", "\n").replace("\\n", "\n")
+        text = text.replace("\\t", "\t")
+    return text
+
+
+def _extract_write_payload_from_log(text: str) -> dict[str, Any] | None:
+    if not text:
+        return None
+    marker = re.search(r"Action:\s*write_text_file\s*[\r\n]+Action Input:\s*", text, re.DOTALL)
+    if not marker:
+        return None
+    start = marker.end()
+    while start < len(text) and text[start].isspace():
+        start += 1
+    if start >= len(text) or text[start] != "{":
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    end = None
+    for idx in range(start, len(text)):
+        ch = text[idx]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = idx + 1
+                break
+    if end is None:
+        return None
+    try:
+        payload = json.loads(text[start:end])
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def _load_email_defaults() -> dict[str, Any]:

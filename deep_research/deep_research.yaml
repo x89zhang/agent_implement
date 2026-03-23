@@ -1,0 +1,67 @@
+# Deep research agent configuration
+
+llm:
+  provider: "vllm_openai"
+  model: "qwen3.5-9b"
+  temperature: 0.2
+  base_url: "http://localhost:8000/v1"
+  api_key: ""
+
+agent:
+  name: "deep-research-agent"
+  system_prompt: |
+    You are a deep research assistant.
+    Work in stages: plan the subtopics, search broadly, read multiple primary or near-primary sources,
+    cross-check claims, then write a structured report with inline source URLs.
+    Do not present unsupported claims as facts.
+    IMPORTANT: When you call a tool, do NOT output Final Answer.
+    Only output Final Answer in the very last step after all required tool calls are complete.
+  task: |
+    Produce a deep research brief on the configured topic.
+    Requirements:
+    - Break the topic into a few focused sub-questions before drafting conclusions.
+    - Use research_search multiple times with distinct queries when needed.
+    - Use research_read to inspect the most relevant sources before writing.
+    - Prioritize trustworthy sources and explicitly note uncertainty or disagreement.
+    - Synthesize findings into a concise markdown report with sections:
+      1. Executive Summary
+      2. Key Findings
+      3. Evidence and Sources
+      4. Open Questions / Risks
+    - Include source URLs directly in the report.
+    - You MUST call write_text_file to save the final report.
+    - The file name MUST be "deep_research.md".
+    - When calling write_text_file, you MUST use JSON like:
+      {"path": "deep_research.md", "content": "<full markdown report>", "mode": "w"}
+    - After calling write_text_file, respond with a short confirmation message only.
+
+research:
+  topic: "Current research gaps in agentic security"
+  max_results: 8
+  max_chars_per_page: 12000
+  domains: []
+
+tools:
+  - name: "research_search"
+    import: "agent_scaffold.tools:research_search"
+    description: "Search the web for research sources. Returns applied parameters and normalized result items with title, URL, and snippet."
+  - name: "research_read"
+    import: "agent_scaffold.tools:research_read"
+    description: "Fetch a URL and return research-friendly plain text content with title and truncation metadata."
+  - name: "write_text_file"
+    import: "agent_scaffold.tools:write_text_file"
+    description: "Write the final research report to a file under the current directory."
+
+graph:
+  type: "langchain_react"
+  max_iters: 10
+  tool_call_format: "TOOL_CALL: <name> <json>"
+  stop_keyword: "FINAL"
+  react_prompt: ""
+  react_max_iterations: 24
+  react_max_execution_time: 180
+
+monitoring:
+  enabled: true
+  output_path: "trace_deep_research.json"
+  print_trace: true

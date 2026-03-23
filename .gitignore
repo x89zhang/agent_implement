@@ -2,3 +2,5 @@
 !/simulated_envs/virtual_mailbox.json
 *.pyc
 *.txt
+*.md
+!README.md
