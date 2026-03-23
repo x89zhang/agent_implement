@@ -18,6 +18,8 @@ agent:
     Requirements:
     - Search papers by keyword within the configured date range.
     - Collect the top N papers (N is configurable in paper.max_papers).
+    - Treat the applied parameters returned by search_papers as the source of truth for the report.
+    - Summarize papers from the returned papers list only. Do not report alternate keywords, date ranges, or paper counts that were not applied by the tool.
     - Summarize each paper in 3-5 bullet points based on its abstract.
     - Include title, authors, publication date, and URL.
     - You MUST call the write_text_file tool to save the final summary.
@@ -36,7 +38,7 @@ paper:
 tools:
   - name: "search_papers"
     import: "agent_scaffold.tools:search_papers"
-    description: "Search arXiv papers by keyword and date range, returning title/authors/date/url/abstract."
+    description: "Search arXiv papers using the configured paper values as source of truth, returning applied query parameters and a papers list with title/authors/date/url/abstract."
   - name: "write_text_file"
     import: "agent_scaffold.tools:write_text_file"
     description: "Write the final summary to a file under the current directory."

@@ -276,50 +276,90 @@ def search_papers(
 ) -> str:
     """
     Search arXiv papers by keyword and optional date range (YYYY-MM-DD).
+    When the run config provides paper defaults, those values are authoritative.
     Returns JSON list with title, authors, published, url, and abstract.
     """
     paper_cfg = _load_paper_defaults()
-    if not keyword:
-        keyword = str(paper_cfg.get("keyword", "")).strip()
+    configured_keyword = str(paper_cfg.get("keyword", "")).strip()
+    if configured_keyword:
+        keyword = configured_keyword
+    elif not keyword:
+        keyword = None
     if not keyword:
         raise ValueError("Keyword is required")
-    if start_date is None:
-        start_date = str(paper_cfg.get("start_date", "")).strip() or None
-    if end_date is None:
-        end_date = str(paper_cfg.get("end_date", "")).strip() or None
-    if max_results is None:
-        max_results = int(paper_cfg.get("max_papers", 10) or 10)
+    configured_start_date = str(paper_cfg.get("start_date", "")).strip() or None
+    if configured_start_date:
+        start_date = configured_start_date
+    configured_end_date = str(paper_cfg.get("end_date", "")).strip() or None
+    if configured_end_date:
+        end_date = configured_end_date
+    configured_max_papers = paper_cfg.get("max_papers")
+    if configured_max_papers not in (None, ""):
+        max_results = int(configured_max_papers)
+    elif max_results is None:
+        max_results = 10
 
-    raw_limit = max(20, int(max_results) * 3)
-    query = f"all:{keyword}"
-    params = {
-        "search_query": query,
-        "start": 0,
-        "max_results": raw_limit,
-        "sortBy": "submittedDate",
-        "sortOrder": "descending",
-    }
-    url = "https://export.arxiv.org/api/query?" + urllib.parse.urlencode(params)
-    data = _http_get_text(url)
-    items = _parse_arxiv_feed(data)
-
+    target_results = int(max_results)
+    batch_size = max(20, target_results * 3)
+    max_batches = 10
+    keyword_text = str(keyword).strip()
+    if any(ch.isspace() for ch in keyword_text):
+        query = f'all:"{keyword_text}"'
+    else:
+        query = f"all:{keyword_text}"
     start_dt = _parse_date(start_date)
     end_dt = _parse_date(end_date)
     if end_dt:
         end_dt = end_dt + dt.timedelta(days=1)
 
     filtered = []
-    for item in items:
-        pub = _parse_date(item.get("published"))
-        if start_dt and pub and pub < start_dt:
-            continue
-        if end_dt and pub and pub >= end_dt:
-            continue
-        filtered.append(item)
-        if len(filtered) >= int(max_results):
+    seen_urls: set[str] = set()
+    for batch_index in range(max_batches):
+        params = {
+            "search_query": query,
+            "start": batch_index * batch_size,
+            "max_results": batch_size,
+            "sortBy": "submittedDate",
+            "sortOrder": "descending",
+        }
+        url = "https://export.arxiv.org/api/query?" + urllib.parse.urlencode(params)
+        data = _http_get_text(url)
+        items = _parse_arxiv_feed(data)
+        if not items:
             break
 
-    return json.dumps(filtered, ensure_ascii=False, indent=2)
+        reached_older_than_range = False
+        for item in items:
+            pub = _parse_date(item.get("published"))
+            if end_dt and pub and pub >= end_dt:
+                continue
+            if start_dt and pub and pub < start_dt:
+                reached_older_than_range = True
+                continue
+            url_value = str(item.get("url", "")).strip()
+            if url_value and url_value in seen_urls:
+                continue
+            if url_value:
+                seen_urls.add(url_value)
+            filtered.append(item)
+            if len(filtered) >= target_results:
+                break
+
+        if len(filtered) >= target_results or reached_older_than_range:
+            break
+
+    payload = {
+        "applied": {
+            "keyword": keyword_text,
+            "start_date": start_date,
+            "end_date": end_date,
+            "max_results": target_results,
+            "search_query": query,
+        },
+        "count": len(filtered),
+        "papers": filtered,
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 def github_get_repo(owner: str | None = None, repo: str | None = None) -> str:
@@ -1167,6 +1207,15 @@ def _parse_date(text: str | None) -> dt.date | None:
         return None
     try:
         return dt.date.fromisoformat(value)
+    except Exception:
+        pass
+    try:
+        normalized = value.replace("Z", "+00:00")
+        return dt.datetime.fromisoformat(normalized).date()
+    except Exception:
+        pass
+    try:
+        return dt.date.fromisoformat(value[:10])
     except Exception:
         return None
 
