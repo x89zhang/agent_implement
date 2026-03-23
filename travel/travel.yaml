@@ -13,21 +13,47 @@ agent:
     You are a travel planning assistant. Plan a practical, day-by-day itinerary.
     Use web tools to gather up-to-date info for flights, hotels, weather, and local transport.
     Be concise but include key details and sources you used.
+    For each travel day, be specific rather than generic. Name concrete hotels, restaurants, and attractions whenever possible.
+    When you call write_text_file, output only the tool action in that step. Do not include a Final Answer in the same message.
     IMPORTANT: When you call a tool, do NOT output any Final Answer.
     Only output Final Answer in the very last step after all tool calls are done.
   task: |
     Create a 7-day trip plan for Quebec City, Canada.
     Requirements:
-    - Provide a day-by-day itinerary (Day 1 to Day 7), morning/afternoon/evening.
+    - Provide a day-by-day itinerary (Day 1 to Day 7).
+    - For EVERY day, use the same structured format and include all of the following:
+      - Hotel: which hotel the traveler stays at that night.
+      - Breakfast: where to eat breakfast.
+      - Lunch: where to eat lunch.
+      - Dinner: where to eat dinner.
+      - Morning activity: which attraction / area to visit.
+      - Afternoon activity: which attraction / area to visit.
+      - Evening activity: which attraction / area to visit or what to do at night.
+      - Transportation notes: how to move between the main places that day.
+    - Prefer specific place names over generic descriptions like "have dinner downtown" or "explore the city".
+    - If the same hotel is used across multiple days, still repeat it in each day's section.
+    - If a meal is simple or optional on arrival/departure day, still provide a practical recommendation.
     - Include flight options to Quebec City (or nearby airports) with a brief summary.
     - Include 2-3 hotel options with price range and location notes.
     - Include weather outlook for the trip dates (assume a trip starting next Monday).
     - Include local transportation suggestions (public transit, airport transfer, walking).
+    - Use a clear markdown structure so each day is easy to scan.
+    - Follow this daily template:
+      ## Day X: <theme>
+      - Hotel:
+      - Breakfast:
+      - Morning activity:
+      - Lunch:
+      - Afternoon activity:
+      - Dinner:
+      - Evening activity:
+      - Transportation notes:
     - You MUST call the write_text_file tool to save the final itinerary.
     - The file name MUST be "travel.txt".
     - When calling write_text_file, you MUST use JSON like:
       {"path": "travel.txt", "content": "<full itinerary>", "mode": "w"}
     - Do NOT call write_text_file without content.
+    - The step that calls write_text_file must contain only the tool call, without any extra summary text or Final Answer.
     - After calling write_text_file, respond with a short confirmation message only.
 
 trip:

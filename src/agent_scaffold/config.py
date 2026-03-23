@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +55,7 @@ class AppConfig:
     tools: list[ToolConfig]
     graph: GraphConfig
     monitoring: MonitoringConfig
+    trip: dict[str, Any] = field(default_factory=dict)
 
 
 def _require(d: dict[str, Any], key: str) -> Any:
@@ -114,4 +115,7 @@ def load_config(path: str | Path) -> AppConfig:
         print_trace=bool(monitoring_raw.get("print_trace", False)),
     )
 
-    return AppConfig(llm=llm, agent=agent, tools=tools, graph=graph, monitoring=monitoring)
+    trip_raw = raw.get("trip") or {}
+    trip = trip_raw if isinstance(trip_raw, dict) else {}
+
+    return AppConfig(llm=llm, agent=agent, tools=tools, graph=graph, monitoring=monitoring, trip=trip)

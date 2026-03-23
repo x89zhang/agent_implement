@@ -152,14 +152,11 @@ def get_weather(city: str | None = None, start_date: str | None = None, end_date
     """
     Get daily weather via Open-Meteo. Dates are optional (YYYY-MM-DD).
     """
-    trip: dict[str, Any] = {}
+    trip = _load_trip_defaults()
     if not city:
-        trip = _load_trip_defaults()
         city = str(trip.get("city", "")).strip()
         if not city:
             raise ValueError("City is required")
-        if not start_date and not end_date:
-            start_date, end_date = _resolve_date_range(trip)
     if isinstance(city, str):
         if "city=" in city or "start_date=" in city or "end_date=" in city or city.strip().startswith("{"):
             parsed = _parse_tool_input(city)
@@ -173,6 +170,20 @@ def get_weather(city: str | None = None, start_date: str | None = None, end_date
             start_date = _normalize_date(start_date, trip_defaults=trip)
         if end_date:
             end_date = _normalize_date(end_date, trip_defaults=trip)
+        resolved_start, resolved_end = _resolve_date_range(trip)
+        if resolved_start and resolved_end:
+            if not start_date:
+                start_date = resolved_start
+            if not end_date:
+                end_date = resolved_end
+            if start_date and end_date:
+                try:
+                    supplied_start = dt.date.fromisoformat(start_date)
+                    expected_start = dt.date.fromisoformat(resolved_start)
+                    if abs((supplied_start - expected_start).days) > 30:
+                        start_date, end_date = resolved_start, resolved_end
+                except Exception:
+                    start_date, end_date = resolved_start, resolved_end
         if start_date and end_date:
             try:
                 if dt.date.fromisoformat(end_date) < dt.date.fromisoformat(start_date):
