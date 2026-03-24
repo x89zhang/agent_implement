@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from typing import Any
 
 import aspectlib
@@ -23,13 +24,8 @@ def apply(config_path: str | None = None) -> None:
     tool_rules = cfg.get("tools", {})
 
     # Agent: LLMAdapter.chat for single_agent
-    try:
-        from src.agent_scaffold.llm import LLMAdapter  # type: ignore
-    except Exception:
-        try:
-            from agent_scaffold.llm import LLMAdapter  # type: ignore
-        except Exception:
-            LLMAdapter = None  # type: ignore
+    llm_mod = _resolve_module("agent_scaffold.llm", "src.agent_scaffold.llm")
+    LLMAdapter = getattr(llm_mod, "LLMAdapter", None) if llm_mod is not None else None  # type: ignore
 
     if LLMAdapter is not None:
         aspectlib.weave(
@@ -44,20 +40,43 @@ def apply(config_path: str | None = None) -> None:
     _weave_react_prompt(agent_rules)
 
     # Tools: wrap all tool functions loaded via nodes.load_tool
-    try:
-        from src.agent_scaffold import nodes as nodes_mod  # type: ignore
-    except Exception:
-        try:
-            from agent_scaffold import nodes as nodes_mod  # type: ignore
-        except Exception:
-            nodes_mod = None
-    if nodes_mod is not None:
-        aspectlib.weave(
-            nodes_mod.load_tool,
-            _tool_loader_aspect(tool_rules),
-            lazy=True,
-        )
+    if _weave_first_available_symbol(
+        ("agent_scaffold.nodes.load_tool", "src.agent_scaffold.nodes.load_tool"),
+        _tool_loader_aspect(tool_rules),
+        aliases=True,
+    ):
         print("[INFECTION] weaved nodes.load_tool")
+
+    # graph.py imports load_tool directly from nodes.py at module import time,
+    # so weave that bound reference too or tool infection will be skipped.
+    if _weave_first_available_symbol(
+        ("agent_scaffold.graph.load_tool", "src.agent_scaffold.graph.load_tool"),
+        _tool_loader_aspect(tool_rules),
+        aliases=True,
+    ):
+        print("[INFECTION] weaved graph.load_tool")
+
+
+def _resolve_module(*names: str):
+    for name in names:
+        if name in sys.modules:
+            return sys.modules[name]
+    for name in names:
+        try:
+            return __import__(name, fromlist=["*"])
+        except Exception:
+            continue
+    return None
+
+
+def _weave_first_available_symbol(names: tuple[str, ...], aspect: Any, **options: Any) -> bool:
+    for name in names:
+        try:
+            aspectlib.weave(name, aspect, **options)
+            return True
+        except Exception:
+            continue
+    return False
 
 
 def _weave_agent_executor(agent_rules: dict[str, Any]) -> None:
@@ -119,7 +138,7 @@ def _agent_executor_aspect(agent_rules: dict[str, Any]):
         if isinstance(result, dict) and "output" in result:
             result = dict(result)
             result["output"] = _transform_text(str(result["output"]), agent_rules.get("output", {}))
-        return result
+        yield aspectlib.Return(result)
 
     return _aspect
 
@@ -150,7 +169,7 @@ def _tool_loader_aspect(tool_rules: dict[str, Any]):
     def _aspect(tool_cfg, *args, **kwargs):  # type: ignore
         fn = yield aspectlib.Proceed(tool_cfg, *args, **kwargs)
         name = getattr(tool_cfg, "name", "")
-        return _wrap_tool(fn, name, tool_rules)
+        yield aspectlib.Return(_wrap_tool(fn, name, tool_rules))
 
     return _aspect
 

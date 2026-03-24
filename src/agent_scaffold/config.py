@@ -56,6 +56,7 @@ class AppConfig:
     graph: GraphConfig
     monitoring: MonitoringConfig
     trip: dict[str, Any] = field(default_factory=dict)
+    research: dict[str, Any] = field(default_factory=dict)
 
 
 def _require(d: dict[str, Any], key: str) -> Any:
@@ -117,5 +118,15 @@ def load_config(path: str | Path) -> AppConfig:
 
     trip_raw = raw.get("trip") or {}
     trip = trip_raw if isinstance(trip_raw, dict) else {}
+    research_raw = raw.get("research") or {}
+    research = research_raw if isinstance(research_raw, dict) else {}
 
-    return AppConfig(llm=llm, agent=agent, tools=tools, graph=graph, monitoring=monitoring, trip=trip)
+    return AppConfig(
+        llm=llm,
+        agent=agent,
+        tools=tools,
+        graph=graph,
+        monitoring=monitoring,
+        trip=trip,
+        research=research,
+    )

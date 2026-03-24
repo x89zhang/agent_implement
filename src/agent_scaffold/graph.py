@@ -190,6 +190,9 @@ def _build_react_callbacks(enabled: bool) -> list[Any]:
 
     class _RealtimeReactCallback(BaseCallbackHandler):  # type: ignore[misc]
         def on_agent_action(self, action: Any, **kwargs: Any) -> Any:
+            tool_name = str(getattr(action, "tool", "") or "")
+            if tool_name == "_Exception":
+                return
             log_text = str(getattr(action, "log", "") or "")
             thought_text = ""
             for line in log_text.splitlines():
@@ -200,7 +203,7 @@ def _build_react_callbacks(enabled: bool) -> list[Any]:
                 print("\n[THOUGHT]")
                 print(thought_text)
             print("\n[TOOL INPUT]")
-            print(f"{getattr(action, 'tool', '')} {getattr(action, 'tool_input', '')}")
+            print(f"{tool_name} {getattr(action, 'tool_input', '')}")
 
         def on_tool_end(self, output: Any, **kwargs: Any) -> Any:
             print("[TOOL OUTPUT]")
@@ -300,8 +303,18 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
     else:
         try:
             from langchain.agents.react.prompt import PROMPT  # type: ignore
+            extra_rules = (
+                "Additional rules:\n"
+                "- Output exactly one action per response.\n"
+                "- Do not emit multiple Action blocks in one message.\n"
+                "- Do not invent Observation lines; wait for the tool result.\n"
+                "- If you are done, output Final Answer instead of another Thought-only message.\n"
+                "- Do not output </think> or other XML-style reasoning tags.\n\n"
+            )
             if role_prefix:
-                PROMPT = PromptTemplate.from_template(f"{role_prefix}\n\n{PROMPT.template}")
+                PROMPT = PromptTemplate.from_template(f"{role_prefix}\n\n{extra_rules}{PROMPT.template}")
+            else:
+                PROMPT = PromptTemplate.from_template(f"{extra_rules}{PROMPT.template}")
         except Exception:
             prompt_text = (
                 "You are a helpful assistant.\n\n"
@@ -316,6 +329,12 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                 "... (this Thought/Action/Action Input/Observation can repeat)\n"
                 "Thought: I now know the final answer\n"
                 "Final Answer: the final answer to the original question\n\n"
+                "Additional rules:\n"
+                "- Output exactly one action per response.\n"
+                "- Do not emit multiple Action blocks in one message.\n"
+                "- Do not invent Observation lines; wait for the tool result.\n"
+                "- If you are done, output Final Answer instead of another Thought-only message.\n"
+                "- Do not output </think> or other XML-style reasoning tags.\n\n"
                 "Question: {input}\n"
                 "{agent_scratchpad}"
             )
@@ -441,12 +460,13 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                     },
                 },
             )
-            if cfg.monitoring.print_trace and not callbacks:
-                if thought_text:
-                    print("\n[THOUGHT]")
-                    print(thought_text)
-                print("\n[TOOL INPUT]")
-                print(f"{step.get('tool', '')} {tool_input}")
+            if cfg.monitoring.print_trace:
+                if not callbacks:
+                    if thought_text:
+                        print("\n[THOUGHT]")
+                        print(thought_text)
+                    print("\n[TOOL INPUT]")
+                    print(f"{step.get('tool', '')} {tool_input}")
                 print("[TOOL OUTPUT]")
                 print(step.get("observation", ""))
                 print(f"[TOKENS] input={tool_usage.get('input_tokens')} output={tool_usage.get('output_tokens')} total={tool_usage.get('total_tokens')} source={tool_usage.get('source')}")

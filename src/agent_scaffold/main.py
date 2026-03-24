@@ -17,12 +17,12 @@ try:
     from .config import load_config
     from .graph import build_graph
     from .nodes import build_initial_messages
-    from .tools import augment_task_with_trip_context, recover_written_file
+    from .tools import augment_task_with_research_context, augment_task_with_trip_context, recover_written_file
 except ImportError:  # Fallback when executed as a script
     from agent_scaffold.config import load_config
     from agent_scaffold.graph import build_graph
     from agent_scaffold.nodes import build_initial_messages
-    from agent_scaffold.tools import augment_task_with_trip_context, recover_written_file
+    from agent_scaffold.tools import augment_task_with_research_context, augment_task_with_trip_context, recover_written_file
 
 
 def run_once(cfg_path: str, user_input: str | None) -> dict[str, Any]:
@@ -35,6 +35,7 @@ def run_once(cfg_path: str, user_input: str | None) -> dict[str, Any]:
 
     run_start = time.time()
     task = augment_task_with_trip_context(cfg.agent.task.strip(), cfg.trip)
+    task = augment_task_with_research_context(task, cfg.research)
     initial_messages = [{"role": "user", "content": task}] if task else []
     input_messages = (
         [{"role": "user", "content": user_input}] if user_input else []

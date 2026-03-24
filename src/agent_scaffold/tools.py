@@ -11,6 +11,7 @@ import json
 import operator as op
 import os
 import re
+import socket
 import smtplib
 import ssl
 import urllib.parse
@@ -99,6 +100,24 @@ def web_search(query: str | None = None, max_results: int = 5) -> str:
     query = _normalize_search_query(str(query or ""))
     if not query:
         raise ValueError("Query is required")
+    queries = _candidate_search_queries(query)
+    all_results: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for candidate in queries:
+        for item in _duckduckgo_search_once(candidate):
+            key = (item.get("title", ""), item.get("url", ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            all_results.append(item)
+        if all_results:
+            break
+
+    return json.dumps(all_results[: max(1, int(max_results))], ensure_ascii=False, indent=2)
+
+
+def _duckduckgo_search_once(query: str) -> list[dict[str, str]]:
     params = {
         "q": query,
         "format": "json",
@@ -139,23 +158,48 @@ def web_search(query: str | None = None, max_results: int = 5) -> str:
             _add_item(item)
 
     if results:
-        return json.dumps(results[: max(1, int(max_results))], ensure_ascii=False, indent=2)
+        return results
 
     # Fallback: scrape DuckDuckGo HTML results when Instant Answer is empty.
     html_url = "https://duckduckgo.com/html/?" + urllib.parse.urlencode({"q": query})
     html_text = open_url(html_url, max_chars=20000)
-    matches = re.findall(r'class="result__a"\s+href="([^"]+)".*?>(.*?)</a>', html_text, re.DOTALL)
-    for href, title in matches:
-        title_text = re.sub(r"<.*?>", "", title)
-        results.append(
-            {
-                "title": html_lib.unescape(title_text.strip()),
-                "url": html_lib.unescape(href.strip()),
-                "snippet": html_lib.unescape(title_text.strip()),
-            }
-        )
+    return _extract_duckduckgo_results(html_text)
 
-    return json.dumps(results[: max(1, int(max_results))], ensure_ascii=False, indent=2)
+
+def _candidate_search_queries(query: str) -> list[str]:
+    candidates: list[str] = []
+
+    def _add(value: str) -> None:
+        normalized = _normalize_search_query(value)
+        if normalized and normalized not in candidates:
+            candidates.append(normalized)
+
+    _add(query)
+
+    # Future-year modifiers often hurt entity-style searches like hotels and restaurants.
+    without_years = re.sub(r"\b20\d{2}\b", " ", query)
+    without_years = re.sub(r"\s+", " ", without_years).strip()
+    if without_years and without_years != query:
+        _add(without_years)
+
+    # Rephrase common travel commerce searches into keyword-heavy forms.
+    lowered = without_years.lower() if without_years else query.lower()
+    if "hotel" in lowered:
+        city = _extract_destination_fragment(lowered)
+        if city:
+            _add(f"{city} downtown hotels")
+            _add(f"best hotels in {city} downtown")
+    if "restaurant" in lowered or "food" in lowered:
+        city = _extract_destination_fragment(lowered)
+        if city:
+            _add(f"best restaurants in {city}")
+    return candidates
+
+
+def _extract_destination_fragment(query: str) -> str:
+    text = re.sub(r"\b(hotels?|restaurants?|downtown|canada|202\d|best|in|near|for)\b", " ", query, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip(" ,")
+    return text
 
 
 def research_search(
@@ -250,9 +294,34 @@ def research_read(url: str, max_chars: int | None = None) -> str:
         headers={"User-Agent": "agent-scaffold/1.0"},
         method="GET",
     )
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        content = resp.read()
-        content_type = str(resp.headers.get("Content-Type", ""))
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            content = resp.read()
+            content_type = str(resp.headers.get("Content-Type", ""))
+    except urllib.error.HTTPError as exc:
+        return json.dumps(
+            {
+                "url": url,
+                "error": f"HTTP error: {exc.code} {exc.reason}",
+                "content_type": "",
+                "content": "",
+                "truncated": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    except (urllib.error.URLError, TimeoutError, socket.timeout) as exc:
+        return json.dumps(
+            {
+                "url": url,
+                "error": f"Network error: {exc}",
+                "content_type": "",
+                "content": "",
+                "truncated": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
 
     text = content.decode("utf-8", errors="ignore")
     title = ""
@@ -448,6 +517,28 @@ def augment_task_with_trip_context(task: str, trip: dict[str, Any]) -> str:
         notes.append(f"- Resolved trip dates for this run: {start_date} to {end_date}.")
         notes.append("- When checking weather or mentioning dates, use these exact dates and do not guess the year.")
     if not notes or "Resolved destination for this run:" in task:
+        return task
+    return f"{task.rstrip()}\n" + "\n".join(notes)
+
+
+def augment_task_with_research_context(task: str, research: dict[str, Any]) -> str:
+    if not task:
+        return task
+    topic = str(research.get("topic", "")).strip()
+    max_results = research.get("max_results")
+    domains = research.get("domains")
+    notes: list[str] = []
+    if topic:
+        notes.append(f"- Resolved research topic for this run: {topic}.")
+        notes.append("- Use this exact topic unless the user overrides it.")
+    if max_results is not None:
+        try:
+            notes.append(f"- Default research search result limit for this run: {int(max_results)}.")
+        except Exception:
+            pass
+    if isinstance(domains, list) and domains:
+        notes.append(f"- Preferred research domains for this run: {', '.join(str(d) for d in domains)}.")
+    if not notes or "Resolved research topic for this run:" in task:
         return task
     return f"{task.rstrip()}\n" + "\n".join(notes)
 

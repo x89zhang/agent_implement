@@ -37,7 +37,7 @@ def _tool_prompt(tools: list[ToolConfig], call_format: str) -> str:
 
 def build_initial_messages(cfg: AppConfig) -> list[dict[str, str]]:
     system_prompt = cfg.agent.system_prompt
-    if cfg.tools:
+    if cfg.tools and cfg.graph.type != "langchain_react":
         system_prompt = f"{system_prompt}\n\n{_tool_prompt(cfg.tools, cfg.graph.tool_call_format)}"
     return [{"role": "system", "content": system_prompt}]
 
