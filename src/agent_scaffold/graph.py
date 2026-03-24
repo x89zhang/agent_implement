@@ -12,6 +12,169 @@ from .llm import LLMAdapter
 from .nodes import agent_node, load_tool, tool_node, _append_trace_message, _update_usage_totals
 
 
+def _extract_react_actions(log_text: str) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    if not log_text:
+        return actions
+
+    text = str(log_text)
+    pos = 0
+    while True:
+        action_match = re.search(r"Action:\s*([a-zA-Z0-9_\-]+)", text[pos:])
+        if not action_match:
+            break
+        action_name = action_match.group(1)
+        action_abs_start = pos + action_match.start()
+        action_abs_end = pos + action_match.end()
+        input_match = re.search(r"Action Input:\s*", text[action_abs_end:])
+        if not input_match:
+            break
+        input_start = action_abs_end + input_match.end()
+        while input_start < len(text) and text[input_start].isspace():
+            input_start += 1
+
+        payload: Any = ""
+        next_pos = input_start
+        if input_start < len(text) and text[input_start] in "{[":
+            opener = text[input_start]
+            closer = "}" if opener == "{" else "]"
+            depth = 0
+            in_string = False
+            escape = False
+            end = None
+            for idx in range(input_start, len(text)):
+                ch = text[idx]
+                if in_string:
+                    if escape:
+                        escape = False
+                    elif ch == "\\":
+                        escape = True
+                    elif ch == '"':
+                        in_string = False
+                    continue
+                if ch == '"':
+                    in_string = True
+                    continue
+                if ch == opener:
+                    depth += 1
+                elif ch == closer:
+                    depth -= 1
+                    if depth == 0:
+                        end = idx + 1
+                        break
+            if end is None:
+                break
+            payload = _maybe_parse_json(text[input_start:end])
+            next_pos = end
+        else:
+            line_end = text.find("\n", input_start)
+            if line_end == -1:
+                line_end = len(text)
+            payload = text[input_start:line_end].strip()
+            next_pos = line_end
+
+        thought_text = ""
+        for line in reversed(text[:action_abs_start].splitlines()):
+            if line.strip().lower().startswith("thought"):
+                thought_text = line.strip()
+                break
+
+        actions.append(
+            {
+                "tool": action_name,
+                "tool_input": payload,
+                "log": text[action_abs_start:next_pos].strip(),
+                "thought": thought_text or None,
+            }
+        )
+        pos = next_pos
+
+    return actions
+
+
+def _expand_react_steps(
+    intermediate_steps: list[Any],
+    raw_tools: dict[str, Any],
+    estimate_tokens: Any,
+    print_trace: bool,
+) -> list[dict[str, Any]]:
+    expanded: list[dict[str, Any]] = []
+    for action, observation in intermediate_steps:
+        tool_name = getattr(action, "tool", "")
+        tool_input = getattr(action, "tool_input", "")
+        log_text = getattr(action, "log", "")
+
+        if tool_name == "_Exception":
+            recovered_actions = _extract_react_actions(str(log_text))
+            if recovered_actions:
+                for recovered in recovered_actions:
+                    recovered_name = str(recovered.get("tool", ""))
+                    recovered_input = recovered.get("tool_input", {})
+                    if recovered_name not in raw_tools:
+                        recovered_output = f"Tool not found: {recovered_name}"
+                    else:
+                        try:
+                            if isinstance(recovered_input, dict):
+                                recovered_output = str(raw_tools[recovered_name](**recovered_input))
+                            else:
+                                recovered_output = str(raw_tools[recovered_name](recovered_input))
+                        except Exception as exc:
+                            recovered_output = f"Tool execution failed: {exc}"
+                    usage = {
+                        "input_tokens": estimate_tokens(str(recovered_input)),
+                        "output_tokens": estimate_tokens(str(recovered_output)),
+                        "total_tokens": estimate_tokens(str(recovered_input)) + estimate_tokens(str(recovered_output)),
+                        "source": "estimated",
+                    }
+                    expanded.append(
+                        {
+                            "tool": recovered_name,
+                            "tool_input": recovered_input,
+                            "log": str(recovered.get("log", "")),
+                            "observation": recovered_output,
+                            "usage": usage,
+                            "thought": recovered.get("thought"),
+                        }
+                    )
+                    if print_trace:
+                        thought_text = str(recovered.get("thought") or "").strip()
+                        if thought_text:
+                            print("\n[THOUGHT]")
+                            print(thought_text)
+                        print("\n[TOOL INPUT]")
+                        print(f"{recovered_name} {recovered_input}")
+                        print("[TOOL OUTPUT]")
+                        print(recovered_output)
+                        print(
+                            f"[TOKENS] input={usage.get('input_tokens')} output={usage.get('output_tokens')} "
+                            f"total={usage.get('total_tokens')} source={usage.get('source')}"
+                        )
+                continue
+
+        thought_text = ""
+        for line in str(log_text).splitlines():
+            if line.strip().lower().startswith("thought"):
+                thought_text = line.strip()
+                break
+        usage = {
+            "input_tokens": estimate_tokens(str(tool_input)),
+            "output_tokens": estimate_tokens(str(observation)),
+            "total_tokens": estimate_tokens(str(tool_input)) + estimate_tokens(str(observation)),
+            "source": "estimated",
+        }
+        expanded.append(
+            {
+                "tool": tool_name,
+                "tool_input": tool_input,
+                "log": log_text,
+                "observation": observation,
+                "usage": usage,
+                "thought": thought_text or None,
+            }
+        )
+    return expanded
+
+
 def _build_react_callbacks(enabled: bool) -> list[Any]:
     if not enabled:
         return []
@@ -160,9 +323,11 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                 prompt_text = f"{role_prefix}\n\n{prompt_text}"
             PROMPT = PromptTemplate.from_template(prompt_text)
 
+    raw_tools: dict[str, Any] = {}
     tools = []
     for t in cfg.tools:
         fn = load_tool(t)
+        raw_tools[t.name] = fn
         tools.append(
             StructuredTool.from_function(
                 fn,
@@ -215,30 +380,17 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
         output = result.get("output", "")
         state["messages"].append({"role": "assistant", "content": output})
 
-        steps = []
-        for action, observation in result.get("intermediate_steps", []):
-            tool_input = getattr(action, "tool_input", "")
-            log_text = getattr(action, "log", "")
-            thought_text = ""
-            for line in str(log_text).splitlines():
-                if line.strip().lower().startswith("thought"):
-                    thought_text = line.strip()
-                    break
-            tool_usage = {
-                "input_tokens": llm.estimate_tokens(str(tool_input)),
-                "output_tokens": llm.estimate_tokens(str(observation)),
-                "total_tokens": llm.estimate_tokens(str(tool_input)) + llm.estimate_tokens(str(observation)),
-                "source": "estimated",
-            }
-            steps.append(
-                {
-                    "tool": getattr(action, "tool", ""),
-                    "tool_input": tool_input,
-                    "log": log_text,
-                    "observation": observation,
-                    "usage": tool_usage,
-                }
-            )
+        steps = _expand_react_steps(
+            result.get("intermediate_steps", []),
+            raw_tools=raw_tools,
+            estimate_tokens=llm.estimate_tokens,
+            print_trace=cfg.monitoring.print_trace and bool(callbacks),
+        )
+        for step in steps:
+            tool_input = step.get("tool_input", "")
+            log_text = step.get("log", "")
+            thought_text = step.get("thought")
+            tool_usage = step.get("usage", {})
             _append_trace_message(
                 state,
                 {
@@ -247,7 +399,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                     "tool_calls": [
                         {
                             "type": "tool_call",
-                            "name": getattr(action, "tool", ""),
+                            "name": step.get("tool", ""),
                             "arguments": _maybe_parse_json(tool_input),
                         }
                     ],
@@ -265,7 +417,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                         },
                         "actions": [
                             {
-                                "tool": getattr(action, "tool", ""),
+                                "tool": step.get("tool", ""),
                                 "arguments": _maybe_parse_json(tool_input),
                             }
                         ],
@@ -277,11 +429,11 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                 state,
                 {
                     "role": "user",
-                    "content": str(observation),
+                    "content": str(step.get("observation", "")),
                     "extra": {
-                        "tool": getattr(action, "tool", ""),
+                        "tool": step.get("tool", ""),
                         "tool_input": tool_input,
-                        "raw_output": str(observation),
+                        "raw_output": str(step.get("observation", "")),
                         "returncode": 0,
                         "exception_info": "",
                         "timestamp": time.time(),
@@ -289,14 +441,14 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                     },
                 },
             )
-            if cfg.monitoring.print_trace:
+            if cfg.monitoring.print_trace and not callbacks:
                 if thought_text:
                     print("\n[THOUGHT]")
                     print(thought_text)
                 print("\n[TOOL INPUT]")
-                print(f"{getattr(action, 'tool', '')} {tool_input}")
+                print(f"{step.get('tool', '')} {tool_input}")
                 print("[TOOL OUTPUT]")
-                print(observation)
+                print(step.get("observation", ""))
                 print(f"[TOKENS] input={tool_usage.get('input_tokens')} output={tool_usage.get('output_tokens')} total={tool_usage.get('total_tokens')} source={tool_usage.get('source')}")
 
         trace = state.setdefault("trace", [])
