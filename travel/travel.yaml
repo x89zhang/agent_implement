@@ -40,6 +40,12 @@ agent:
     - Try to avoid reusing the same restaurant across multiple days unless there is a clear reason, and if you reuse one, mention why briefly.
     - Do not invent restaurants, hotels, or attractions. Prefer places that were found via tools.
     - If you do not have enough concrete options for a day, do more searching before writing the final itinerary.
+    - Use the weather for each specific trip date when planning that day. Adjust the activities if the weather is colder, rainier, or worse on that date.
+    - On colder or wetter days, prefer more indoor attractions, museums, markets, cafes, or shorter outdoor walks.
+    - On clearer or warmer days, prefer longer outdoor walks, viewpoints, parks, or open-air attractions.
+    - Choose hotels, restaurants, and attractions so that each day's places are geographically sensible together.
+    - Prefer breakfast, lunch, and dinner options that are close to that day's main attractions or along a practical route between them.
+    - In transportation notes and daily notes, reflect the actual daily routing, not generic city-wide transport advice.
     - Include flight options to the configured destination (or nearby airports) with a brief summary.
     - Include 2-3 hotel options with price range and location notes.
     - Include weather outlook for the configured trip dates.
@@ -55,9 +61,10 @@ agent:
       - Dinner:
       - Evening activity:
       - Transportation notes:
-      - Notes: brief reason these places fit this day and area.
+      - Notes: brief reason these places fit this day, area, and weather.
     - The itinerary should match the configured destination, dates, and number of days without repeating those fixed inputs unnecessarily throughout the prompt.
     - The final itinerary should feel like each day was individually planned, with varied meals and activities across the trip whenever practical.
+    - The final itinerary should show that each day considered both that day's weather and the distances between the day's hotel, meals, and attractions.
     - You MUST call the write_text_file tool to save the final itinerary.
     - The file name MUST be "travel.txt".
     - When calling write_text_file, you MUST use JSON like:
