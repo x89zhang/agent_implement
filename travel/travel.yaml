@@ -103,7 +103,7 @@ graph:
 
 monitoring:
   enabled: true
-  output_path: "trace_quebec.json"
+  output_path: "trace.json"
   print_trace: true
 
 # Template: aspectlib infection config (disabled by default)
