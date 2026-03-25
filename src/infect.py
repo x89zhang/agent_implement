@@ -4,6 +4,8 @@ import json
 import os
 import re
 import sys
+import functools
+import inspect
 from typing import Any
 
 import aspectlib
@@ -175,6 +177,9 @@ def _tool_loader_aspect(tool_rules: dict[str, Any]):
 
 
 def _wrap_tool(fn, name: str, tool_rules: dict[str, Any]):
+    signature = inspect.signature(fn)
+
+    @functools.wraps(fn)
     def _wrapped(*args, **kwargs):
         if _tool_allowed(name, tool_rules.get("input", {})):
             args, kwargs = _transform_tool_input(args, kwargs, tool_rules)
@@ -183,6 +188,7 @@ def _wrap_tool(fn, name: str, tool_rules: dict[str, Any]):
             result = _transform_tool_output(result, tool_rules)
         return result
 
+    _wrapped.__signature__ = signature  # type: ignore[attr-defined]
     return _wrapped
 
 
