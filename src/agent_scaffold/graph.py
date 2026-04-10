@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import functools
+import inspect
 import json
 import re
 from typing import Any
@@ -9,7 +11,14 @@ from langgraph.graph import END, StateGraph
 
 from .config import AppConfig
 from .llm import LLMAdapter
-from .nodes import agent_node, load_tool, tool_node, _append_trace_message, _update_usage_totals
+from .nodes import (
+    agent_node,
+    load_tool,
+    tool_node,
+    _append_trace_message,
+    _flush_trace_snapshot,
+    _update_usage_totals,
+)
 
 
 def _extract_react_actions(log_text: str) -> list[dict[str, Any]]:
@@ -200,23 +209,46 @@ def _build_react_callbacks(enabled: bool) -> list[Any]:
                     thought_text = line.strip()
                     break
             if thought_text:
-                print("\n[THOUGHT]")
-                print(thought_text)
-            print("\n[TOOL INPUT]")
-            print(f"{tool_name} {getattr(action, 'tool_input', '')}")
+                print("\n[THOUGHT]", flush=True)
+                print(thought_text, flush=True)
 
         def on_tool_end(self, output: Any, **kwargs: Any) -> Any:
-            print("[TOOL OUTPUT]")
-            print(output)
+            return None
 
         def on_agent_finish(self, finish: Any, **kwargs: Any) -> Any:
             values = getattr(finish, "return_values", {}) or {}
             output = values.get("output", "")
             if output:
-                print("\n[LLM OUTPUT]")
-                print(output)
+                print("\n[LLM OUTPUT]", flush=True)
+                print(output, flush=True)
 
     return [_RealtimeReactCallback()]
+
+
+def _build_traced_react_tool(name: str, fn: Any, enabled: bool) -> Any:
+    if not enabled:
+        return fn
+
+    @functools.wraps(fn)
+    def _wrapped(*args: Any, **kwargs: Any) -> Any:
+        if kwargs:
+            rendered_input = kwargs
+        elif len(args) == 1:
+            rendered_input = args[0]
+        else:
+            rendered_input = list(args)
+        print("\n[TOOL INPUT]", flush=True)
+        print(f"{name} {rendered_input}", flush=True)
+        result = fn(*args, **kwargs)
+        print("[TOOL OUTPUT]", flush=True)
+        print(result, flush=True)
+        return result
+
+    try:
+        _wrapped.__signature__ = inspect.signature(fn)  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    return _wrapped
 
 
 def build_graph(cfg: AppConfig) -> Any:
@@ -347,9 +379,10 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
     for t in cfg.tools:
         fn = load_tool(t)
         raw_tools[t.name] = fn
+        lc_fn = _build_traced_react_tool(t.name, fn, cfg.monitoring.print_trace)
         tools.append(
             StructuredTool.from_function(
-                fn,
+                lc_fn,
                 name=t.name,
                 description=t.description or "",
                 handle_tool_error=True,
@@ -387,11 +420,11 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
         start = time.time()
         user_input = state["messages"][-1]["content"] if state.get("messages") else ""
         if cfg.monitoring.print_trace:
-            print("\n[LLM INPUT]")
+            print("\n[LLM INPUT]", flush=True)
             if user_input:
-                print(user_input)
+                print(user_input, flush=True)
             else:
-                print("(no user input)")
+                print("(no user input)", flush=True)
         invoke_kwargs: dict[str, Any] = {}
         if callbacks:
             invoke_kwargs["callbacks"] = callbacks
@@ -460,6 +493,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                     },
                 },
             )
+            _flush_trace_snapshot(state)
             if cfg.monitoring.print_trace:
                 if not callbacks:
                     if thought_text:
@@ -515,6 +549,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                 },
             },
         )
+        _flush_trace_snapshot(state)
         if cfg.monitoring.print_trace and not callbacks:
             print("[LLM OUTPUT]")
             print(output)

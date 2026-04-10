@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+from pathlib import Path
 import re
 import time
 from typing import Any, Callable
@@ -76,6 +77,55 @@ def _copy_message(msg: dict[str, Any]) -> dict[str, Any]:
 def _append_trace_message(state: dict[str, Any], message: dict[str, Any]) -> None:
     trace_messages = state.setdefault("trace_messages", [])
     trace_messages.append(_copy_message(message))
+
+
+def _build_trace_payload(state: dict[str, Any]) -> dict[str, Any] | None:
+    persist = state.get("_trace_persist")
+    if not isinstance(persist, dict):
+        return None
+    stats = state.get("trace_stats", {})
+    messages = state.get("messages", []) or []
+    final_content = messages[-1]["content"] if messages else ""
+    return {
+        "info": {
+            "model_stats": {
+                "api_calls": int(stats.get("api_calls", 0)),
+                "prompt_tokens": int(stats.get("prompt_tokens", 0)),
+                "completion_tokens": int(stats.get("completion_tokens", 0)),
+                "total_tokens": int(stats.get("total_tokens", 0)),
+            },
+            "config": persist.get("config", {}),
+            "final": final_content,
+            "run_dir": str(persist.get("run_dir", "")),
+            "timestamp": persist.get("timestamp"),
+            "latency_ms": int((time.time() - float(persist.get("started_at", time.time()))) * 1000),
+        },
+        "messages": state.get("trace_messages", []),
+        "trajectory_format": "agent_scaffold.v2",
+        "input": persist.get("input"),
+        "final": final_content,
+        "run_dir": str(persist.get("run_dir", "")),
+        "timestamp": persist.get("timestamp"),
+        "latency_ms": int((time.time() - float(persist.get("started_at", time.time()))) * 1000),
+        "trace": state.get("trace", []),
+    }
+
+
+def _flush_trace_snapshot(state: dict[str, Any]) -> None:
+    persist = state.get("_trace_persist")
+    if not isinstance(persist, dict):
+        return
+    output_path = persist.get("output_path")
+    if not output_path:
+        return
+    payload = _build_trace_payload(state)
+    if payload is None:
+        return
+    path = Path(str(output_path))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f"{path.name}.tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(path)
 
 
 def _update_usage_totals(state: dict[str, Any], usage: dict[str, Any] | None) -> None:
@@ -171,6 +221,7 @@ def agent_node(cfg: AppConfig, llm: LLMAdapter) -> Callable[[dict[str, Any]], di
             },
         }
         _append_trace_message(state, assistant_message)
+        _flush_trace_snapshot(state)
         if cfg.monitoring.print_trace:
             print("[LLM OUTPUT]")
             print(response.content)
@@ -236,6 +287,7 @@ def tool_node(
             },
         }
         _append_trace_message(state, tool_message)
+        _flush_trace_snapshot(state)
         if cfg.monitoring.print_trace:
             print("\n[TOOL INPUT]")
             print(f"{name} {payload}")
