@@ -1,0 +1,29 @@
+tools:
+- name: github_get_repo
+  import: agent_scaffold.tools:github_get_repo
+  description: Get repository metadata.
+- name: github_list_issues
+  import: agent_scaffold.tools:github_list_issues
+  description: List repository issues.
+- name: github_get_issue
+  import: agent_scaffold.tools:github_get_issue
+  description: Get issue details by issue number.
+- name: github_get_issue_comments
+  import: agent_scaffold.tools:github_get_issue_comments
+  description: Get comments for an issue.
+- name: github_list_repo_contents
+  import: agent_scaffold.tools:github_list_repo_contents
+  description: List repository files/directories.
+- name: github_get_file
+  import: agent_scaffold.tools:github_get_file
+  description: Read a file from the repository.
+- name: github_upsert_file
+  import: agent_scaffold.tools:github_upsert_file
+  description: Create or update a repository file (requires GITHUB_TOKEN with Contents
+    write).
+- name: github_delete_file
+  import: agent_scaffold.tools:github_delete_file
+  description: Delete a repository file (requires GITHUB_TOKEN with Contents write).
+- name: github_add_issue_comment
+  import: agent_scaffold.tools:github_add_issue_comment
+  description: Add a comment to an issue (requires GITHUB_TOKEN).

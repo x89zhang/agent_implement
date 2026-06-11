@@ -9,6 +9,8 @@ from typing import Any, Callable
 
 from .config import AppConfig, ToolConfig
 from .llm import LLMAdapter
+from .middleware import build_middleware_manager
+from .skills import load_enabled_skills, render_skill_context, validate_skill_tools
 
 
 ToolFn = Callable[..., str]
@@ -37,10 +39,17 @@ def _tool_prompt(tools: list[ToolConfig], call_format: str) -> str:
 
 
 def build_initial_messages(cfg: AppConfig) -> list[dict[str, str]]:
-    system_prompt = cfg.agent.system_prompt
+    system_parts = [cfg.agent.system_prompt]
+    skills = load_enabled_skills(cfg)
+    skill_context = render_skill_context(skills)
+    if skill_context:
+        system_parts.append(skill_context)
+    missing_tool_warnings = validate_skill_tools(skills, {tool.name for tool in cfg.tools})
+    if missing_tool_warnings:
+        system_parts.append("# Harness Warnings\n" + "\n".join(f"- {item}" for item in missing_tool_warnings))
     if cfg.tools and cfg.graph.type != "langchain_react":
-        system_prompt = f"{system_prompt}\n\n{_tool_prompt(cfg.tools, cfg.graph.tool_call_format)}"
-    return [{"role": "system", "content": system_prompt}]
+        system_parts.append(_tool_prompt(cfg.tools, cfg.graph.tool_call_format))
+    return [{"role": "system", "content": "\n\n".join(part.strip() for part in system_parts if part.strip())}]
 
 
 _TOOL_RE = re.compile(r"^TOOL_CALL:\s*([a-zA-Z0-9_\-]+)\s*(\{.*\})\s*$", re.DOTALL)
@@ -108,6 +117,8 @@ def _build_trace_payload(state: dict[str, Any]) -> dict[str, Any] | None:
         "timestamp": persist.get("timestamp"),
         "latency_ms": int((time.time() - float(persist.get("started_at", time.time()))) * 1000),
         "trace": state.get("trace", []),
+        "harness": state.get("harness", {}),
+        "plan": state.get("plan", []),
     }
 
 
@@ -139,10 +150,18 @@ def _update_usage_totals(state: dict[str, Any], usage: dict[str, Any] | None) ->
 
 
 def agent_node(cfg: AppConfig, llm: LLMAdapter) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    middleware = build_middleware_manager(cfg)
+
     def _run(state: dict[str, Any]) -> dict[str, Any]:
         start = time.time()
         messages = state["messages"]
-        input_messages = [dict(m) for m in messages]
+        runtime_messages = [dict(m) for m in messages]
+        middleware_chunks = middleware.before_model(state)
+        if middleware_chunks:
+            reminder = {"role": "system", "content": "\n\n".join(middleware_chunks)}
+            insert_at = 1 if runtime_messages and runtime_messages[0].get("role") == "system" else 0
+            runtime_messages.insert(insert_at, reminder)
+        input_messages = [dict(m) for m in runtime_messages]
         if cfg.monitoring.print_trace:
             last_user = ""
             for msg in reversed(input_messages):
@@ -154,10 +173,11 @@ def agent_node(cfg: AppConfig, llm: LLMAdapter) -> Callable[[dict[str, Any]], di
                 print(last_user)
             else:
                 print("(no user input)")
-        response = llm.chat(messages)
+        response = llm.chat(runtime_messages)
         messages.append({"role": "assistant", "content": response.content})
         call = parse_tool_call(response.content)
         state["tool_call"] = call
+        middleware.after_model(state, response.content, call)
         end = time.time()
         usage = response.usage
         if not usage:
@@ -237,19 +257,26 @@ def agent_node(cfg: AppConfig, llm: LLMAdapter) -> Callable[[dict[str, Any]], di
 def tool_node(
     cfg: AppConfig, tools: dict[str, ToolFn], estimate_tokens: Callable[[str], int]
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    middleware = build_middleware_manager(cfg)
+
     def _run(state: dict[str, Any]) -> dict[str, Any]:
         call = state.get("tool_call")
         if not call:
             return state
         start = time.time()
         name, payload = call
-        if name not in tools:
+        decision = middleware.before_tool(state, name, payload)
+        if not decision.allowed:
+            result = f"Tool execution blocked by middleware: {decision.reason}"
+        elif name not in tools:
             result = f"Tool not found: {name}"
         else:
             try:
                 result = str(tools[name](**payload))
             except Exception as exc:
                 result = f"Tool execution failed: {exc}"
+        failed = (not decision.allowed) or str(result).startswith("Tool execution failed:") or str(result).startswith("Tool not found:")
+        middleware.after_tool(state, name, payload, result, failed)
         state["messages"].append({"role": "assistant", "content": f"TOOL_RESULT: {result}"})
         state["tool_call"] = None
         state["iterations"] = int(state.get("iterations", 0)) + 1
@@ -280,8 +307,8 @@ def tool_node(
                 "tool": name,
                 "args": payload,
                 "raw_output": result,
-                "returncode": 0 if not str(result).startswith("Tool execution failed:") else 1,
-                "exception_info": str(result) if str(result).startswith("Tool execution failed:") else "",
+                "returncode": 1 if failed else 0,
+                "exception_info": str(result) if failed else "",
                 "timestamp": end,
                 "usage": usage,
             },

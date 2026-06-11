@@ -1,0 +1,13 @@
+tools:
+  - name: "web_search"
+    import: "agent_scaffold.tools:web_search"
+    description: "Search the web for relevant sources and return result items with title, URL, and snippet."
+  - name: "research_read"
+    import: "agent_scaffold.tools:research_read"
+    description: "Fetch a URL and return cleaned plain text content with title and truncation metadata."
+  - name: "open_url"
+    import: "agent_scaffold.tools:open_url"
+    description: "Open a URL and fetch raw page text when a cleaner reader is not enough."
+  - name: "calculator"
+    import: "agent_scaffold.tools:calculator"
+    description: "Safe arithmetic calculator for numeric reasoning."

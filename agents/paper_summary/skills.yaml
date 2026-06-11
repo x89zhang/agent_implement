@@ -1,0 +1,3 @@
+base_dir: ../../skills
+enabled:
+  - paper_summary

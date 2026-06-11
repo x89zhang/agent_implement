@@ -1,0 +1,10 @@
+enabled: true
+type: static
+max_steps: 6
+steps:
+- Resolve the destination, dates, and trip requirements.
+- Research flights, hotels, attractions, restaurants, transit, and weather.
+- Plan each day with concrete places and weather-aware routing.
+- Assemble the full itinerary in the required daily template.
+- Save the final itinerary with write_text_file.
+- Respond with a short confirmation after the file is saved.

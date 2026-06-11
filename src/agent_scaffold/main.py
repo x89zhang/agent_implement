@@ -17,12 +17,16 @@ try:
     from .config import load_config
     from .graph import build_graph
     from .nodes import build_initial_messages, _flush_trace_snapshot
+    from .planner import initialize_plan
+    from .skills import load_enabled_skills, validate_skill_tools
     from .tools import augment_task_with_research_context, augment_task_with_trip_context, recover_written_file
 except ImportError:  # Fallback when executed as a script
     from dataclasses import asdict as _asdict
     from agent_scaffold.config import load_config
     from agent_scaffold.graph import build_graph
     from agent_scaffold.nodes import build_initial_messages, _flush_trace_snapshot
+    from agent_scaffold.planner import initialize_plan
+    from agent_scaffold.skills import load_enabled_skills, validate_skill_tools
     from agent_scaffold.tools import augment_task_with_research_context, augment_task_with_trip_context, recover_written_file
 
 def _normalize_messages(raw: Any) -> list[dict[str, str]]:
@@ -83,6 +87,9 @@ def run_once(
         [{"role": "user", "content": user_input}] if user_input else []
     )
     base_messages = build_initial_messages(cfg)
+    enabled_skills = load_enabled_skills(cfg)
+    skill_tool_warnings = validate_skill_tools(enabled_skills, {tool.name for tool in cfg.tools})
+    plan = initialize_plan(cfg, task or (user_input or ""))
     seeded_messages = list(context_messages or [])
     resumed_messages = list(resume_messages or [])
     if resumed_messages:
@@ -110,6 +117,21 @@ def run_once(
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "total_tokens": 0,
+        },
+        "plan": plan,
+        "tool_errors": [],
+        "harness": {
+            "skills": [skill.to_trace() for skill in enabled_skills],
+            "skill_warnings": skill_tool_warnings,
+            "planner": {
+                "enabled": cfg.planner.enabled,
+                "type": cfg.planner.type,
+                "max_steps": cfg.planner.max_steps,
+            },
+            "middleware": {
+                "enabled": cfg.middleware.enabled,
+                "modules": cfg.middleware.modules or ["HarnessMiddleware"] if cfg.middleware.enabled else [],
+            },
         },
         "_trace_persist": {
             "output_path": str(output_path) if output_path else "",

@@ -1,0 +1,7 @@
+enabled: true
+type: static
+max_steps: 3
+steps:
+- Understand the user request and decide whether calculator use is needed.
+- Call calculator for arithmetic or numeric verification when useful.
+- Return a concise final answer.

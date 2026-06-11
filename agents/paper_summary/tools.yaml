@@ -1,0 +1,7 @@
+tools:
+  - name: "search_papers"
+    import: "agent_scaffold.tools:search_papers"
+    description: "Search arXiv papers using the configured paper values as source of truth, returning applied query parameters and a papers list with title/authors/date/url/abstract."
+  - name: "write_text_file"
+    import: "agent_scaffold.tools:write_text_file"
+    description: "Write the final summary to a file under the current directory."

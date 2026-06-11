@@ -1,0 +1,11 @@
+name: paper_summary
+description: Summarize paper search results using only retrieved paper metadata and abstracts.
+triggers:
+  - paper
+  - arxiv
+  - summary
+requires_tools:
+  - search_papers
+  - write_text_file
+inject_mode: system_append
+priority: 40

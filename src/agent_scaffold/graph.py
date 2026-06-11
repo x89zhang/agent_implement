@@ -11,6 +11,8 @@ from langgraph.graph import END, StateGraph
 
 from .config import AppConfig
 from .llm import LLMAdapter
+from .skills import load_enabled_skills, render_skill_context, validate_skill_tools
+from .planner import render_plan_context, mark_plan_progress, complete_plan_on_final
 from .nodes import (
     agent_node,
     load_tool,
@@ -327,7 +329,15 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                         ) from exc
 
     prompt_text = cfg.graph.react_prompt.strip()
-    role_prefix = cfg.agent.system_prompt.strip()
+    role_parts = [cfg.agent.system_prompt.strip()]
+    skills = load_enabled_skills(cfg)
+    skill_context = render_skill_context(skills)
+    if skill_context:
+        role_parts.append(skill_context)
+    missing_tool_warnings = validate_skill_tools(skills, {tool.name for tool in cfg.tools})
+    if missing_tool_warnings:
+        role_parts.append("# Harness Warnings\n" + "\n".join(f"- {item}" for item in missing_tool_warnings))
+    role_prefix = "\n\n".join(part for part in role_parts if part)
     if prompt_text:
         if role_prefix:
             prompt_text = f"{role_prefix}\n\n{prompt_text}"
@@ -419,6 +429,9 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
     def _node(state: dict[str, Any]) -> dict[str, Any]:
         start = time.time()
         user_input = state["messages"][-1]["content"] if state.get("messages") else ""
+        plan_context = render_plan_context(state)
+        if plan_context:
+            user_input = f"{user_input}\n\n{plan_context}"
         if cfg.monitoring.print_trace:
             print("\n[LLM INPUT]", flush=True)
             if user_input:
@@ -439,6 +452,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             print_trace=cfg.monitoring.print_trace and bool(callbacks),
         )
         for step in steps:
+            mark_plan_progress(state, "react_tool", str(step.get("tool", "")))
             tool_input = step.get("tool_input", "")
             log_text = step.get("log", "")
             thought_text = step.get("thought")
@@ -505,6 +519,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                 print(step.get("observation", ""))
                 print(f"[TOKENS] input={tool_usage.get('input_tokens')} output={tool_usage.get('output_tokens')} total={tool_usage.get('total_tokens')} source={tool_usage.get('source')}")
 
+        complete_plan_on_final(state)
         trace = state.setdefault("trace", [])
         prompt_tokens = llm.estimate_tokens(user_input)
         completion_tokens = llm.estimate_tokens(output)

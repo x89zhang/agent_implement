@@ -1,0 +1,12 @@
+tools:
+- name: research_search
+  import: agent_scaffold.tools:research_search
+  description: Search the web for research sources. Returns applied parameters and
+    normalized result items with title, URL, and snippet.
+- name: research_read
+  import: agent_scaffold.tools:research_read
+  description: Fetch a URL and return research-friendly plain text content with title
+    and truncation metadata.
+- name: write_text_file
+  import: agent_scaffold.tools:write_text_file
+  description: Write the final research report to a file under the current directory.

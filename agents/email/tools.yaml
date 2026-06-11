@@ -1,0 +1,10 @@
+tools:
+- name: email_check_inbox
+  import: env.virtual_email_env:email_check_inbox
+  description: Check inbox messages via IMAP.
+- name: email_send
+  import: env.virtual_email_env:email_send
+  description: Send email via SMTP.
+- name: write_text_file
+  import: agent_scaffold.tools:write_text_file
+  description: Write generated summaries to a file under current directory.

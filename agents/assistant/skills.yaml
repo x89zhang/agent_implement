@@ -1,0 +1,8 @@
+enabled:
+- name: calculator_assistant
+  description: Answer simple questions and use the calculator tool for arithmetic.
+  requires_tools:
+  - calculator
+  instructions: Use the calculator tool for arithmetic or numeric verification. Keep
+    final answers concise and do not call tools when direct response is sufficient.
+  priority: 45

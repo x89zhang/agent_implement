@@ -1,0 +1,10 @@
+enabled:
+  - name: source_grounded_qa
+    description: Answer questions using tools only when they improve factual accuracy.
+    instructions: |
+      For web-backed answers, search first, read source pages before relying on details, and cite URLs in the final answer. For calculations, call the calculator tool instead of doing arithmetic mentally.
+    requires_tools:
+      - web_search
+      - research_read
+      - calculator
+    priority: 45

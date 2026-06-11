@@ -1,0 +1,10 @@
+enabled: true
+type: static
+max_steps: 6
+steps:
+- Identify the research topic and source constraints.
+- Search for relevant sources using targeted queries.
+- Read the most relevant pages before using details as evidence.
+- Synthesize findings, note uncertainty, and organize the report.
+- Save the final report with write_text_file.
+- Respond with a short confirmation after the file is saved.

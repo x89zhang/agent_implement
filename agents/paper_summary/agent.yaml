@@ -1,4 +1,5 @@
-# Paper search and summary agent configuration
+# File-based harness entrypoint for the paper summary agent.
+harness: .
 
 llm:
   provider: "vllm_openai"
@@ -9,10 +10,6 @@ llm:
 
 agent:
   name: "paper-summary-agent"
-  system_prompt: |
-    You are a research assistant. Search for papers and summarize them clearly and concisely.
-    IMPORTANT: When you call a tool, do NOT output any Final Answer.
-    Only output Final Answer in the very last step after all tool calls are done.
   task: |
     Find papers within the given time range and summarize the top results.
     Requirements:
@@ -34,33 +31,6 @@ paper:
   start_date: "2025-01-01"
   end_date: "2025-12-31"
   max_papers: 10
-
-skills:
-  enabled:
-    - paper_summary
-
-planner:
-  enabled: true
-  type: static
-  max_steps: 6
-  steps:
-    - Search papers using the configured keyword, date range, and max paper count.
-    - Verify the returned applied parameters and actual result count.
-    - Summarize each returned paper from its abstract only.
-    - Assemble the final report with title, authors, publication date, URL, and bullets.
-    - Save the report to paper_summary.txt using write_text_file.
-    - Respond with a short confirmation after the file is saved.
-
-middleware:
-  enabled: true
-
-tools:
-  - name: "search_papers"
-    import: "agent_scaffold.tools:search_papers"
-    description: "Search arXiv papers using the configured paper values as source of truth, returning applied query parameters and a papers list with title/authors/date/url/abstract."
-  - name: "write_text_file"
-    import: "agent_scaffold.tools:write_text_file"
-    description: "Write the final summary to a file under the current directory."
 
 graph:
   type: "langchain_react"

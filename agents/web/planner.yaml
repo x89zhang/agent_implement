@@ -1,0 +1,9 @@
+enabled: true
+type: static
+max_steps: 5
+steps:
+- Read repository metadata and identify the relevant issue or requested action.
+- Read issue body, comments, and repository files needed for context.
+- Decide whether a GitHub write action is required and keep it narrowly scoped.
+- Execute the write action only after enough context is gathered.
+- Verify the returned GitHub result before final confirmation.

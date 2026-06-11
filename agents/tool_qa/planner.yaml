@@ -1,0 +1,8 @@
+enabled: true
+type: static
+max_steps: 4
+steps:
+  - Decide whether the question requires tools.
+  - Gather source evidence or calculate when needed.
+  - Compare evidence and resolve conflicts.
+  - Provide a concise final answer with citations when web tools were used.

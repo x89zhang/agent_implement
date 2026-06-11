@@ -1,0 +1,9 @@
+enabled: true
+type: static
+max_steps: 5
+steps:
+- Read repository metadata and locate the README file.
+- Fetch current README content before proposing edits.
+- Prepare a minimal update that preserves unrelated content.
+- Write the updated README with github_upsert_file.
+- Verify the write response before final confirmation.

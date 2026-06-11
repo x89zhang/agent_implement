@@ -1,0 +1,32 @@
+# File-based harness entrypoint generated from assistant/assistant.yaml.
+harness: .
+llm:
+  provider: vllm_openai
+  model: qwen2.5-7b
+  temperature: 0.2
+  base_url: http://localhost:8000/v1
+  api_key: ''
+agent:
+  name: demo-agent
+  task: 'You run a small shop. In the morning you sell 48 items at $3.25 each, and
+    in the afternoon
+
+    you sell 37 items at $4.10 each. Shipping costs are $28.50 total, and a platform
+    fee takes 6%
+
+    of gross sales. Compute the net revenue. Show the calculation steps and the final
+    result.
+
+    '
+graph:
+  type: langchain_react
+  max_iters: 4
+  tool_call_format: 'TOOL_CALL: <name> <json>'
+  stop_keyword: FINAL
+  react_prompt: ''
+  react_max_iterations: 20
+  react_max_execution_time: 120
+monitoring:
+  enabled: true
+  output_path: trace.json
+  print_trace: true

@@ -1,0 +1,4 @@
+tools:
+- name: calculator
+  import: agent_scaffold.tools:calculator
+  description: 'Safe arithmetic calculator, input like: 1+2*3'

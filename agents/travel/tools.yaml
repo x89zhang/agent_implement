@@ -1,0 +1,13 @@
+tools:
+- name: web_search
+  import: agent_scaffold.tools:web_search
+  description: Search the web for flights, hotels, attractions, and transit info.
+- name: open_url
+  import: agent_scaffold.tools:open_url
+  description: Open a URL and fetch page text for details.
+- name: get_weather
+  import: agent_scaffold.tools:get_weather
+  description: Fetch daily weather for a city via Open-Meteo.
+- name: write_text_file
+  import: agent_scaffold.tools:write_text_file
+  description: Write the final plan to a file under the current directory.
