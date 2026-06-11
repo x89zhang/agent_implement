@@ -14,6 +14,7 @@ class LLMConfig:
     temperature: float = 0.2
     base_url: str = ""
     api_key: str = ""
+    request_timeout: int | None = 120
 
 
 @dataclass
@@ -37,8 +38,8 @@ class GraphConfig:
     tool_call_format: str = "TOOL_CALL: <name> <json>"
     stop_keyword: str = "FINAL"
     react_prompt: str = ""
-    react_max_iterations: int = 15
-    react_max_execution_time: int = 120
+    react_max_iterations: int | None = 15
+    react_max_execution_time: int | None = 120
 
 
 @dataclass
@@ -81,6 +82,14 @@ class AppConfig:
     trip: dict[str, Any] = field(default_factory=dict)
     research: dict[str, Any] = field(default_factory=dict)
     config_dir: str = "."
+
+
+def _optional_int(value: Any, default: int) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip().lower() in {"", "none", "null", "unlimited"}:
+        return None
+    return int(value if value is not None else default)
 
 
 def _require(d: dict[str, Any], key: str) -> Any:
@@ -229,6 +238,7 @@ def load_config(path: str | Path) -> AppConfig:
         temperature=float(llm_raw.get("temperature", 0.2)),
         base_url=str(llm_raw.get("base_url", "")),
         api_key=str(llm_raw.get("api_key", "")),
+        request_timeout=_optional_int(llm_raw.get("request_timeout", 120), 120),
     )
 
     agent = AgentConfig(
@@ -254,8 +264,8 @@ def load_config(path: str | Path) -> AppConfig:
         tool_call_format=str(graph_raw.get("tool_call_format", "TOOL_CALL: <name> <json>")),
         stop_keyword=str(graph_raw.get("stop_keyword", "FINAL")),
         react_prompt=str(graph_raw.get("react_prompt", "")),
-        react_max_iterations=int(graph_raw.get("react_max_iterations", 15)),
-        react_max_execution_time=int(graph_raw.get("react_max_execution_time", 120)),
+        react_max_iterations=_optional_int(graph_raw.get("react_max_iterations", 15), 15),
+        react_max_execution_time=_optional_int(graph_raw.get("react_max_execution_time", 120), 120),
     )
 
     monitoring_raw = raw.get("monitoring", {}) or {}

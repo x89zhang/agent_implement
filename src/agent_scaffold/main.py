@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import time
+import re
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,24 @@ except ImportError:  # Fallback when executed as a script
     from agent_scaffold.planner import initialize_plan
     from agent_scaffold.skills import load_enabled_skills, validate_skill_tools
     from agent_scaffold.tools import augment_task_with_research_context, augment_task_with_trip_context, recover_written_file
+
+
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", value.strip())
+    slug = slug.strip("._-")
+    return slug or "agent"
+
+
+def _build_job_dir(cfg_name: str, started_at: float, workspace_root: Path) -> Path:
+    timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(started_at))
+    base = workspace_root / "jobs" / f"{timestamp}_{_slugify(cfg_name)}"
+    candidate = base
+    counter = 1
+    while candidate.exists():
+        candidate = workspace_root / "jobs" / f"{timestamp}_{_slugify(cfg_name)}_{counter}"
+        counter += 1
+    candidate.mkdir(parents=True, exist_ok=False)
+    return candidate
 
 def _normalize_messages(raw: Any) -> list[dict[str, str]]:
     if not isinstance(raw, list):
@@ -76,10 +95,10 @@ def run_once(
     graph = build_graph(cfg)
 
     cfg_file = Path(cfg_path).resolve()
-    run_dir = cfg_file.parent
-    run_dir.mkdir(parents=True, exist_ok=True)
-
+    workspace_root = Path.cwd().resolve()
     run_start = time.time()
+    run_dir = _build_job_dir(cfg.agent.name or cfg_file.parent.name, run_start, workspace_root)
+
     task = augment_task_with_trip_context(cfg.agent.task.strip(), cfg.trip)
     task = augment_task_with_research_context(task, cfg.research)
     initial_messages = [{"role": "user", "content": task}] if task else []
@@ -136,6 +155,9 @@ def run_once(
         "_trace_persist": {
             "output_path": str(output_path) if output_path else "",
             "run_dir": str(run_dir),
+            "job_dir": str(run_dir),
+            "config_path": str(cfg_file),
+            "agent_name": cfg.agent.name,
             "timestamp": run_start,
             "started_at": run_start,
             "config": _asdict(cfg),
@@ -149,7 +171,7 @@ def run_once(
     try:
         # Ensure generated files (including write_text_file outputs) go into run_dir.
         os.environ["AGENT_CONFIG_PATH"] = str(cfg_file)
-        os.environ["AGENT_WORKSPACE_ROOT"] = str(prev_cwd.resolve())
+        os.environ["AGENT_WORKSPACE_ROOT"] = str(workspace_root)
         os.chdir(run_dir)
         result = graph.invoke(state)
     finally:

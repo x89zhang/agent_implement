@@ -1,10 +1,11 @@
 harness: .
 llm:
   provider: vllm_openai
-  model: qwen3.5-9b
+  model: qwen3.6-35b
   temperature: 0.2
   base_url: http://localhost:8000/v1
   api_key: ''
+  request_timeout: 120
 agent:
   name: deep-research-agent
   task: "Produce a deep research brief on the configured topic.\nRequirements:\n-\

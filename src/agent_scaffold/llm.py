@@ -35,6 +35,8 @@ class LLMAdapter:
                 kwargs["base_url"] = self.config.base_url
             if self.config.api_key:
                 kwargs["api_key"] = self.config.api_key
+            if self.config.request_timeout is not None:
+                kwargs["request_timeout"] = self.config.request_timeout
             self._client = ChatOpenAI(
                 model=self.config.model,
                 temperature=self.config.temperature,
@@ -68,6 +70,8 @@ class LLMAdapter:
             else:
                 # vLLM servers often do not require auth, but the OpenAI client enforces api_key.
                 kwargs["api_key"] = "local-vllm"
+            if self.config.request_timeout is not None:
+                kwargs["request_timeout"] = self.config.request_timeout
             self._client = ChatOpenAI(
                 model=self.config.model,
                 temperature=self.config.temperature,

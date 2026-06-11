@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import functools
 import inspect
 import json
@@ -186,6 +187,118 @@ def _expand_react_steps(
     return expanded
 
 
+
+def _literal_ast_value(node: ast.AST) -> Any:
+    try:
+        return ast.literal_eval(node)
+    except Exception:
+        if isinstance(node, ast.Name):
+            return node.id
+        return ast.unparse(node) if hasattr(ast, "unparse") else ""
+
+
+def _parse_function_style_action(action_text: str, tool_names: set[str]) -> tuple[str, dict[str, Any]] | None:
+    text = str(action_text).strip()
+    if not text:
+        return None
+    call_match = re.search(r"([a-zA-Z_]\w*)\s*\(", text)
+    if not call_match:
+        return None
+    tool_name = call_match.group(1)
+    if tool_name not in tool_names:
+        return None
+
+    start = call_match.start()
+    depth = 0
+    in_string = False
+    quote = ""
+    escape = False
+    end = None
+    for idx, ch in enumerate(text[start:], start=start):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == quote:
+                in_string = False
+            continue
+        if ch in {"'", '"'}:
+            in_string = True
+            quote = ch
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                end = idx + 1
+                break
+    if end is None:
+        return None
+
+    call_text = text[start:end]
+    try:
+        expr = ast.parse(call_text, mode="eval")
+    except SyntaxError:
+        return None
+    call = expr.body
+    if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+        return None
+    if call.func.id != tool_name:
+        return None
+
+    payload: dict[str, Any] = {}
+    for keyword in call.keywords:
+        if keyword.arg:
+            payload[keyword.arg] = _literal_ast_value(keyword.value)
+    if call.args:
+        payload["__arg"] = _literal_ast_value(call.args[0])
+    return tool_name, payload
+
+
+def _build_react_output_parser(tool_names: set[str]) -> Any | None:
+    try:
+        from langchain_core.agents import AgentAction  # type: ignore
+    except Exception:
+        try:
+            from langchain.schema import AgentAction  # type: ignore
+        except Exception:
+            return None
+
+    base_parser_cls = None
+    for module_name in (
+        "langchain.agents.output_parsers.react_single_input",
+        "langchain_classic.agents.output_parsers.react_single_input",
+    ):
+        try:
+            module = __import__(module_name, fromlist=["ReActSingleInputOutputParser"])
+            base_parser_cls = getattr(module, "ReActSingleInputOutputParser")
+            break
+        except Exception:
+            continue
+    if base_parser_cls is None:
+        return None
+
+    class _CompatReActOutputParser(base_parser_cls):  # type: ignore[misc, valid-type]
+        def parse(self, text: str) -> Any:
+            parsed = super().parse(text)
+            tool = getattr(parsed, "tool", None)
+            if isinstance(tool, str) and tool not in tool_names:
+                normalized = _parse_function_style_action(tool, tool_names)
+                if normalized is not None:
+                    tool_name, payload = normalized
+                    if "__arg" in payload and len(payload) == 1:
+                        tool_input: Any = payload["__arg"]
+                    else:
+                        payload.pop("__arg", None)
+                        tool_input = payload
+                    return AgentAction(tool=tool_name, tool_input=tool_input, log=getattr(parsed, "log", text))
+            return parsed
+
+    return _CompatReActOutputParser()
+
+
 def _build_react_callbacks(enabled: bool) -> list[Any]:
     if not enabled:
         return []
@@ -351,7 +464,9 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                 "- Do not emit multiple Action blocks in one message.\n"
                 "- Do not invent Observation lines; wait for the tool result.\n"
                 "- If you are done, output Final Answer instead of another Thought-only message.\n"
-                "- Do not output </think> or other XML-style reasoning tags.\n\n"
+                "- Do not output </think> or other XML-style reasoning tags.\n"
+                "- The Action line must contain only the tool name, for example: Action: research_search.\n"
+                "- Put all arguments only in Action Input JSON; never write Python calls like research_search(query=...).\n\n"
             )
             if role_prefix:
                 PROMPT = PromptTemplate.from_template(f"{role_prefix}\n\n{extra_rules}{PROMPT.template}")
@@ -376,7 +491,9 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                 "- Do not emit multiple Action blocks in one message.\n"
                 "- Do not invent Observation lines; wait for the tool result.\n"
                 "- If you are done, output Final Answer instead of another Thought-only message.\n"
-                "- Do not output </think> or other XML-style reasoning tags.\n\n"
+                "- Do not output </think> or other XML-style reasoning tags.\n"
+                "- The Action line must contain only the tool name, for example: Action: research_search.\n"
+                "- Put all arguments only in Action Input JSON; never write Python calls like research_search(query=...).\n\n"
                 "Question: {input}\n"
                 "{agent_scratchpad}"
             )
@@ -400,9 +517,13 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
         )
 
     callbacks = _build_react_callbacks(cfg.monitoring.print_trace)
+    output_parser = _build_react_output_parser({t.name for t in cfg.tools})
 
     if create_react_agent:
-        agent = create_react_agent(lc_model, tools, PROMPT)
+        create_kwargs: dict[str, Any] = {}
+        if output_parser is not None:
+            create_kwargs["output_parser"] = output_parser
+        agent = create_react_agent(lc_model, tools, PROMPT, **create_kwargs)
         executor = AgentExecutor(
             agent=agent,
             tools=tools,

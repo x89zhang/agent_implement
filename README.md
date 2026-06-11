@@ -124,3 +124,13 @@ skills/<name>/
 
 Keep concrete tool-use strategy in `SKILL.md`; keep task goals and acceptance criteria in `agent.yaml`.
 
+### Job Outputs
+
+Each run writes trace files and generated artifacts under a timestamped job directory:
+
+```text
+jobs/<YYYYMMDDTHHMMSSZ>_<agent-name>/
+```
+
+Relative `monitoring.output_path` values and `write_text_file` outputs are resolved inside that job directory. The trace records both the `job_dir` and the original `config_path`.
+
