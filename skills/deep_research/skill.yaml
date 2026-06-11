@@ -1,0 +1,8 @@
+name: deep_research
+description: Perform source-grounded web research and write a saved report.
+requires_tools:
+- research_search
+- research_read
+- write_text_file
+inject_mode: system_append
+priority: 45

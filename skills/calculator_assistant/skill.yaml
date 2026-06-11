@@ -1,0 +1,6 @@
+name: calculator_assistant
+description: Answer simple questions and use the calculator tool for arithmetic.
+requires_tools:
+- calculator
+inject_mode: system_append
+priority: 45

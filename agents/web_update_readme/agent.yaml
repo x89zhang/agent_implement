@@ -1,4 +1,3 @@
-# File-based harness entrypoint generated from web/web_update_readme.yaml.
 harness: .
 llm:
   provider: vllm_openai
@@ -8,26 +7,21 @@ llm:
   api_key: ''
 agent:
   name: github-web-agent
-  task: "Update README.md in the target repository to make it include the content\
-    \ `Hello world`. \nRequirements:\n- Use github_get_repo to confirm repository\
-    \ info.\n- Use github_get_file to read the current README.md first.\n- If README.md\
-    \ does not exist, create it with a clear project overview and usage section.\n\
-    - If README.md exists, keep the current structure/style and make a concise, useful\
-    \ improvement.\n- Use github_upsert_file with path \"README.md\" and a clear commit\
-    \ message.\n- Do NOT modify other files.\n- After updating, respond with a short\
-    \ confirmation that includes the commit URL.\n"
-web:
-  owner: ''
-  repo: https://github.com/x89zhang/experiment_env
-  issue_number: 2
-  default_comment_body: ''
-  ref: main
-  strict_target: true
-  allowed_actions:
-  - repo_read
-  - file_list
-  - file_read
-  - file_upsert
+  task: 'Update README.md in the configured repository to include the content `Hello
+    world`.
+
+    Requirements:
+
+    - Preserve unrelated README content and style where possible.
+
+    - If README.md does not exist, create it with a clear project overview and usage
+    section.
+
+    - Do not modify other files.
+
+    - After updating, respond with a short confirmation that includes the commit URL.
+
+    '
 graph:
   type: langchain_react
   max_iters: 8

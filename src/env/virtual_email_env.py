@@ -154,52 +154,51 @@ def virtual_email_reset() -> str:
     return json.dumps({"status": "reset", "accounts": list((state.get("accounts") or {}).keys())}, ensure_ascii=False)
 
 
-def _load_email_defaults() -> dict[str, Any]:
-    run_dir = Path.cwd().resolve()
+def _config_path() -> Path | None:
     env_cfg = str(os.environ.get("AGENT_CONFIG_PATH", "")).strip()
-    if env_cfg:
-        cfg_path = Path(env_cfg).resolve()
-    else:
-        local_cfg = run_dir / f"{run_dir.name}.yaml"
-        legacy_cfg = run_dir.parent / f"{run_dir.name}.yaml"
-        cfg_path = local_cfg if local_cfg.exists() else legacy_cfg
-    if not cfg_path.exists():
+    if not env_cfg:
+        return None
+    cfg_path = Path(env_cfg).resolve()
+    return cfg_path if cfg_path.exists() else None
+
+
+def _load_email_defaults() -> dict[str, Any]:
+    cfg_path = _config_path()
+    if cfg_path is None:
         return {}
-    raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    try:
+        from agent_scaffold.config import load_config_mapping
+    except Exception:
+        raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    else:
+        raw = load_config_mapping(cfg_path)
     if not isinstance(raw, dict):
         return {}
     email_cfg = raw.get("email") or {}
     return email_cfg if isinstance(email_cfg, dict) else {}
 
 
-def _config_path() -> Path | None:
-    run_dir = Path.cwd().resolve()
-    env_cfg = str(os.environ.get("AGENT_CONFIG_PATH", "")).strip()
-    if env_cfg:
-        cfg_path = Path(env_cfg).resolve()
-        return cfg_path if cfg_path.exists() else None
-    local_cfg = run_dir / f"{run_dir.name}.yaml"
-    legacy_cfg = run_dir.parent / f"{run_dir.name}.yaml"
-    if local_cfg.exists():
-        return local_cfg.resolve()
-    if legacy_cfg.exists():
-        return legacy_cfg.resolve()
-    return None
+def _workspace_root() -> Path:
+    env_root = str(os.environ.get("AGENT_WORKSPACE_ROOT", "")).strip()
+    if env_root:
+        return Path(env_root).resolve()
+    cfg_path = _config_path()
+    if cfg_path is not None:
+        return cfg_path.parent.resolve()
+    return Path.cwd().resolve()
 
 
 def _state_path() -> Path:
     cfg = _load_email_defaults()
-    run_dir = Path.cwd().resolve()
-    relative = str(cfg.get("virtual_mailbox_file") or "virtual_mailbox.json").strip()
-    target = (run_dir / relative).resolve()
     cfg_path = _config_path()
-    allowed_root = run_dir
-    if cfg_path is not None and cfg_path.parent == run_dir:
-        allowed_root = run_dir.parent
+    base = cfg_path.parent if cfg_path is not None else Path.cwd().resolve()
+    relative = str(cfg.get("virtual_mailbox_file") or "virtual_mailbox.json").strip()
+    target = (base / relative).resolve()
+    allowed_root = _workspace_root()
     try:
         target.relative_to(allowed_root)
     except ValueError:
-        raise ValueError("virtual_mailbox_file must be under the project directory")
+        raise ValueError("virtual_mailbox_file must be under the workspace root")
     return target
 
 

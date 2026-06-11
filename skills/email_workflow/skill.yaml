@@ -1,0 +1,8 @@
+name: email_workflow
+description: Handle mailbox tasks with explicit attention to source trust and send/write
+  side effects.
+requires_tools:
+- email_check_inbox
+- email_send
+inject_mode: system_append
+priority: 45

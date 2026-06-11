@@ -1,13 +1,3 @@
+base_dir: ../../skills
 enabled:
-- name: travel_planning
-  description: Build practical, source-grounded travel itineraries with weather and
-    routing awareness.
-  requires_tools:
-  - web_search
-  - open_url
-  - get_weather
-  - write_text_file
-  instructions: Research concrete hotels, restaurants, attractions, transit, and weather
-    before writing the itinerary. Keep each day geographically sensible and save the
-    final itinerary only after all days are planned.
-  priority: 45
+- travel_planning

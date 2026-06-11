@@ -2,6 +2,7 @@ enabled: true
 type: static
 max_steps: 3
 steps:
-- Understand the user request and decide whether calculator use is needed.
-- Call calculator for arithmetic or numeric verification when useful.
-- Return a concise final answer.
+- Understand the user request and identify any arithmetic or numeric verification
+  needed.
+- Compute or verify the numeric result accurately.
+- Return a concise final answer with calculation steps when useful.

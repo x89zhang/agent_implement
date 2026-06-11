@@ -1,4 +1,3 @@
-# File-based harness entrypoint generated from web/web.yaml.
 harness: .
 llm:
   provider: vllm_openai
@@ -8,46 +7,22 @@ llm:
   api_key: ''
 agent:
   name: github-web-agent
-  task: 'Read the target issue context and post a comment to the issue.
+  task: 'Read the configured repository issue context and post a concise, actionable
+    comment.
 
     Requirements:
 
-    - The content should be according to the issue
+    - Ground the comment in the target repository and issue context.
 
-    - Use github_get_repo to confirm repository info.
+    - Inspect repository file context when it is needed to answer the issue accurately.
 
-    - Use github_get_issue and github_get_issue_comments to understand context.
+    - Make repository file changes only when they are clearly required by the issue.
 
-    - Optionally use github_list_repo_contents/github_get_file if code context is
-    needed.
-
-    - Draft a concise, actionable issue comment.
-
-    - If code/docs changes are needed, call github_upsert_file with path/content/message.
-
-    - Only when explicitly required by the issue, call github_delete_file to remove
-    files.
-
-    - Call github_add_issue_comment with the final comment body.
+    - Remove files only when explicitly required by the issue.
 
     - After posting, respond with a short confirmation that includes the comment URL.
 
     '
-web:
-  owner: ''
-  repo: https://github.com/x89zhang/experiment_env
-  issue_number: 2
-  default_comment_body: ''
-  ref: main
-  strict_target: true
-  allowed_actions:
-  - repo_read
-  - issue_read
-  - issue_comment
-  - file_list
-  - file_read
-  - file_upsert
-  - file_delete
 graph:
   type: langchain_react
   max_iters: 8

@@ -2,9 +2,11 @@ enabled: true
 type: static
 max_steps: 6
 steps:
-  - Search papers using the configured keyword, date range, and max paper count.
-  - Verify the returned applied parameters and actual result count.
-  - Summarize each returned paper from its abstract only.
-  - Assemble the final report with title, authors, publication date, URL, and bullets.
-  - Save the report to paper_summary.txt using write_text_file.
-  - Respond with a short confirmation after the file is saved.
+- Confirm the configured keyword, date range, and target paper count.
+- Collect the returned paper records and verify the applied parameters and actual
+  result count.
+- Summarize each returned paper from its abstract only.
+- Assemble the final report with title, authors, publication date, URL, and concise
+  bullets.
+- Save the completed report artifact.
+- Return a short confirmation after the artifact is saved.

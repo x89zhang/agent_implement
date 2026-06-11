@@ -1506,89 +1506,56 @@ def _coerce_string_list(value: Any) -> list[str]:
     return [str(value).strip()] if str(value).strip() else []
 
 
-def _resolve_run_config_path(run_dir: Path) -> Path | None:
-    """
-    Resolve the per-run config path.
-    Prefer AGENT_CONFIG_PATH when provided, then "<run_dir>/<run_dir_name>.yaml",
-    then fall back to
-    "<run_dir>/../<run_dir_name>.yaml" for backward compatibility.
+def _resolve_run_config_path() -> Path | None:
+    """Resolve the active run config from AGENT_CONFIG_PATH only.
+
+    Tools should not infer configs from legacy run directory names. The runner sets
+    AGENT_CONFIG_PATH before tool execution, so file-based harnesses and any
+    explicitly provided config path work without depending on old directories.
     """
     env_cfg = str(os.environ.get("AGENT_CONFIG_PATH", "")).strip()
-    if env_cfg:
-        env_path = Path(env_cfg).resolve()
-        if env_path.exists():
-            return env_path
-    local_cfg = run_dir / f"{run_dir.name}.yaml"
-    if local_cfg.exists():
-        return local_cfg
-    legacy_cfg = run_dir.parent / f"{run_dir.name}.yaml"
-    if legacy_cfg.exists():
-        return legacy_cfg
-    return None
+    if not env_cfg:
+        return None
+    env_path = Path(env_cfg).resolve()
+    return env_path if env_path.exists() else None
+
+
+def _load_run_config() -> dict[str, Any]:
+    cfg_path = _resolve_run_config_path()
+    if not cfg_path:
+        return {}
+    try:
+        from agent_scaffold.config import load_config_mapping
+    except Exception:
+        from .config import load_config_mapping
+    raw = load_config_mapping(cfg_path)
+    return raw if isinstance(raw, dict) else {}
+
+
+def _load_config_section(section: str) -> dict[str, Any]:
+    raw = _load_run_config()
+    value = raw.get(section) or {}
+    return value if isinstance(value, dict) else {}
 
 
 def _load_trip_defaults() -> dict[str, Any]:
-    """
-    Load trip defaults from the run config yaml.
-    Expected file name is <run_dir_name>.yaml (e.g. run dir "travel" -> "travel/travel.yaml").
-    """
-    run_dir = Path.cwd().resolve()
-    cfg_path = _resolve_run_config_path(run_dir)
-    if not cfg_path:
-        return {}
-    raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        return {}
-    trip = raw.get("trip") or {}
-    return trip if isinstance(trip, dict) else {}
+    """Load trip defaults from the active run config."""
+    return _load_config_section("trip")
 
 
 def _load_paper_defaults() -> dict[str, Any]:
-    """
-    Load paper defaults from the run config yaml.
-    Expected file name is <run_dir_name>.yaml (e.g. run dir "paper_summary" -> "paper_summary/paper_summary.yaml").
-    """
-    run_dir = Path.cwd().resolve()
-    cfg_path = _resolve_run_config_path(run_dir)
-    if not cfg_path:
-        return {}
-    raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        return {}
-    paper = raw.get("paper") or {}
-    return paper if isinstance(paper, dict) else {}
+    """Load paper defaults from the active run config."""
+    return _load_config_section("paper")
 
 
 def _load_web_defaults() -> dict[str, Any]:
-    """
-    Load web defaults from the run config yaml.
-    Expected file name is <run_dir_name>.yaml (e.g. run dir "web" -> "web/web.yaml").
-    """
-    run_dir = Path.cwd().resolve()
-    cfg_path = _resolve_run_config_path(run_dir)
-    if not cfg_path:
-        return {}
-    raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        return {}
-    web_cfg = raw.get("web") or {}
-    return web_cfg if isinstance(web_cfg, dict) else {}
+    """Load web defaults from the active run config."""
+    return _load_config_section("web")
 
 
 def _load_research_defaults() -> dict[str, Any]:
-    """
-    Load deep research defaults from the run config yaml.
-    Expected file name is <run_dir_name>.yaml (e.g. run dir "deep_research" -> "deep_research/deep_research.yaml").
-    """
-    run_dir = Path.cwd().resolve()
-    cfg_path = _resolve_run_config_path(run_dir)
-    if not cfg_path:
-        return {}
-    raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        return {}
-    research_cfg = raw.get("research") or {}
-    return research_cfg if isinstance(research_cfg, dict) else {}
+    """Load deep research defaults from the active run config."""
+    return _load_config_section("research")
 
 
 def _expected_output_file(run_dir: Path, task: str) -> Path:
@@ -1651,19 +1618,8 @@ def _extract_write_payload_from_log(text: str) -> dict[str, Any] | None:
 
 
 def _load_email_defaults() -> dict[str, Any]:
-    """
-    Load email defaults from the run config yaml.
-    Expected file name is <run_dir_name>.yaml (e.g. run dir "email" -> "email/email.yaml").
-    """
-    run_dir = Path.cwd().resolve()
-    cfg_path = _resolve_run_config_path(run_dir)
-    if not cfg_path:
-        return {}
-    raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        return {}
-    email_cfg = raw.get("email") or {}
-    return email_cfg if isinstance(email_cfg, dict) else {}
+    """Load email defaults from the active run config."""
+    return _load_config_section("email")
 
 
 def _parse_tool_input(text: str) -> dict[str, Any]:

@@ -148,6 +148,15 @@ def _apply_harness_files(raw: dict[str, Any], harness_dir: Path | None) -> dict[
         agent_raw["task"] = task_path.read_text(encoding="utf-8").strip()
         merged["agent"] = agent_raw
 
+    environment_path = harness_dir / "environment.yaml"
+    if environment_path.exists():
+        environment_raw = _load_yaml_mapping(environment_path)
+        for key, value in environment_raw.items():
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                merged[key] = {**dict(merged[key]), **value}
+            else:
+                merged[key] = value
+
     tools_path = harness_dir / "tools.yaml"
     if tools_path.exists():
         merged["tools"] = _coerce_yaml_list(tools_path, "tools")
@@ -198,12 +207,17 @@ def _apply_harness_files(raw: dict[str, Any], harness_dir: Path | None) -> dict[
     return merged
 
 
-def load_config(path: str | Path) -> AppConfig:
+def load_config_mapping(path: str | Path) -> dict[str, Any]:
     config_path = Path(path).resolve()
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError("Config root must be a mapping")
-    raw = _apply_harness_files(raw, _resolve_harness_dir(config_path, raw))
+    return _apply_harness_files(raw, _resolve_harness_dir(config_path, raw))
+
+
+def load_config(path: str | Path) -> AppConfig:
+    config_path = Path(path).resolve()
+    raw = load_config_mapping(config_path)
 
     llm_raw = _require(raw, "llm")
     agent_raw = _require(raw, "agent")

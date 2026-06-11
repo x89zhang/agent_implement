@@ -1,0 +1,8 @@
+name: source_grounded_qa
+description: Answer questions using tools only when they improve factual accuracy.
+requires_tools:
+- web_search
+- research_read
+- calculator
+inject_mode: system_append
+priority: 45

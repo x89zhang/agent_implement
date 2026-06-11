@@ -1,0 +1,10 @@
+name: github_issue_workflow
+description: Use GitHub tools to inspect repository issues and perform requested repository
+  actions safely.
+requires_tools:
+- github_get_repo
+- github_get_issue
+- github_get_issue_comments
+- github_add_issue_comment
+inject_mode: system_append
+priority: 45

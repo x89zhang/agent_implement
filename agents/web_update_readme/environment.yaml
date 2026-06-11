@@ -1,0 +1,12 @@
+web:
+  owner: ''
+  repo: https://github.com/x89zhang/experiment_env
+  issue_number: 2
+  default_comment_body: ''
+  ref: main
+  strict_target: true
+  allowed_actions:
+  - repo_read
+  - file_list
+  - file_read
+  - file_upsert

@@ -1,4 +1,3 @@
-# File-based harness entrypoint generated from travel/travel.yaml.
 harness: .
 llm:
   provider: vllm_openai
@@ -8,62 +7,31 @@ llm:
   api_key: ''
 agent:
   name: quebec-trip-agent
-  task: "Create a trip plan using the resolved trip parameters provided in this prompt.\n\
-    The runtime will append the concrete destination, trip length, and trip dates\
-    \ for this run below.\nRequirements:\n- Provide a day-by-day itinerary covering\
-    \ the full configured trip length.\n- For EVERY day, use the same structured format\
-    \ and include all of the following:\n  - Hotel: which hotel the traveler stays\
-    \ at that night.\n  - Breakfast: where to eat breakfast.\n  - Lunch: where to\
-    \ eat lunch.\n  - Dinner: where to eat dinner.\n  - Morning activity: which attraction\
-    \ / area to visit.\n  - Afternoon activity: which attraction / area to visit.\n\
-    \  - Evening activity: which attraction / area to visit or what to do at night.\n\
-    \  - Transportation notes: how to move between the main places that day.\n- Prefer\
-    \ specific place names over generic descriptions like \"have dinner downtown\"\
-    \ or \"explore the city\".\n- If the same hotel is used across multiple days,\
-    \ still repeat it in each day's section.\n- If a meal is simple or optional on\
-    \ arrival/departure day, still provide a practical recommendation.\n- Plan the\
-    \ itinerary day by day, not all at once from a single generic search.\n- Before\
-    \ writing the final itinerary, gather enough information to support each day's\
-    \ hotel, meals, and activities.\n- For each day, explicitly choose that day's\
-    \ breakfast, lunch, dinner, and main activities based on retrieved places relevant\
-    \ to that day.\n- Try to avoid reusing the same restaurant across multiple days\
-    \ unless there is a clear reason, and if you reuse one, mention why briefly.\n\
-    - Do not invent restaurants, hotels, or attractions. Prefer places that were found\
-    \ via tools.\n- If you do not have enough concrete options for a day, do more\
-    \ searching before writing the final itinerary.\n- Use the weather for each specific\
-    \ trip date when planning that day. Adjust the activities if the weather is colder,\
-    \ rainier, or worse on that date.\n- On colder or wetter days, prefer more indoor\
-    \ attractions, museums, markets, cafes, or shorter outdoor walks.\n- On clearer\
-    \ or warmer days, prefer longer outdoor walks, viewpoints, parks, or open-air\
-    \ attractions.\n- Choose hotels, restaurants, and attractions so that each day's\
-    \ places are geographically sensible together.\n- Prefer breakfast, lunch, and\
-    \ dinner options that are close to that day's main attractions or along a practical\
-    \ route between them.\n- In transportation notes and daily notes, reflect the\
-    \ actual daily routing, not generic city-wide transport advice.\n- Include flight\
-    \ options to the configured destination (or nearby airports) with a brief summary.\n\
-    - Include 2-3 hotel options with price range and location notes.\n- Include weather\
-    \ outlook for the configured trip dates.\n- Include local transportation suggestions\
-    \ for the configured destination (public transit, airport transfer, walking).\n\
-    - Use a clear markdown structure so each day is easy to scan.\n- Follow this daily\
-    \ template:\n  ## Day X: <theme>\n  - Hotel:\n  - Breakfast:\n  - Morning activity:\n\
-    \  - Lunch:\n  - Afternoon activity:\n  - Dinner:\n  - Evening activity:\n  -\
-    \ Transportation notes:\n  - Notes: brief reason these places fit this day, area,\
-    \ and weather.\n- The itinerary should match the configured destination, dates,\
-    \ and number of days without repeating those fixed inputs unnecessarily throughout\
-    \ the prompt.\n- The final itinerary should feel like each day was individually\
-    \ planned, with varied meals and activities across the trip whenever practical.\n\
-    - The final itinerary should show that each day considered both that day's weather\
-    \ and the distances between the day's hotel, meals, and attractions.\n- You MUST\
-    \ call the write_text_file tool to save the final itinerary.\n- The file name\
-    \ MUST be \"travel.txt\".\n- When calling write_text_file, you MUST use JSON like:\n\
-    \  {\"path\": \"travel.txt\", \"content\": \"<full itinerary>\", \"mode\": \"\
-    w\"}\n- Do NOT call write_text_file without content.\n- The step that calls write_text_file\
-    \ must contain only the tool call, without any extra summary text or Final Answer.\n\
-    - After calling write_text_file, respond with a short confirmation message only.\n"
-trip:
-  city: Montreal, Canada
-  days: 7
-  start: next Monday
+  task: 'Create a trip plan using the configured destination, trip length, and trip
+    dates.
+
+    Requirements:
+
+    - Provide a day-by-day itinerary covering the full configured trip length.
+
+    - For every day, include hotel, breakfast, lunch, dinner, morning activity, afternoon
+    activity, evening activity, transportation notes, and brief notes.
+
+    - Prefer concrete place names over generic descriptions.
+
+    - Do not invent restaurants, hotels, attractions, flights, transit details, or
+    weather.
+
+    - Reflect each day''s weather and geography in the activity and routing choices.
+
+    - Include flight options, 2-3 hotel options, weather outlook, and local transportation
+    suggestions.
+
+    - Save the final itinerary as "travel.txt".
+
+    - After the itinerary is saved, respond with a short confirmation only.
+
+    '
 graph:
   type: langchain_react
   max_iters: 8

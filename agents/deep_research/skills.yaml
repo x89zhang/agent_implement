@@ -1,11 +1,3 @@
+base_dir: ../../skills
 enabled:
-- name: deep_research
-  description: Perform source-grounded web research and write a saved report.
-  requires_tools:
-  - research_search
-  - research_read
-  - write_text_file
-  instructions: Search targeted sources, read pages before relying on details, synthesize
-    findings across sources, and save the final report only after evidence has been
-    gathered.
-  priority: 45
+- deep_research

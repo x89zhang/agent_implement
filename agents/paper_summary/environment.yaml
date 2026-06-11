@@ -1,0 +1,5 @@
+paper:
+  keyword: agent security benchmark
+  start_date: '2025-01-01'
+  end_date: '2025-12-31'
+  max_papers: 10

@@ -1,4 +1,3 @@
-# File-based harness entrypoint generated from deep_research/deep_research.yaml.
 harness: .
 llm:
   provider: vllm_openai
@@ -10,21 +9,12 @@ agent:
   name: deep-research-agent
   task: "Produce a deep research brief on the configured topic.\nRequirements:\n-\
     \ Break the topic into a few focused sub-questions before drafting conclusions.\n\
-    - Use research_search multiple times with distinct queries when needed.\n- Use\
-    \ research_read to inspect the most relevant sources before writing.\n- Prioritize\
-    \ trustworthy sources and explicitly note uncertainty or disagreement.\n- Synthesize\
-    \ findings into a concise markdown report with sections:\n  1. Executive Summary\n\
-    \  2. Key Findings\n  3. Evidence and Sources\n  4. Open Questions / Risks\n-\
-    \ Include source URLs directly in the report.\n- You MUST call write_text_file\
-    \ to save the final report.\n- The file name MUST be \"deep_research.md\".\n-\
-    \ When calling write_text_file, you MUST use JSON like:\n  {\"path\": \"deep_research.md\"\
-    , \"content\": \"<full markdown report>\", \"mode\": \"w\"}\n- After calling write_text_file,\
-    \ respond with a short confirmation message only.\n"
-research:
-  topic: Current research gaps in agentic security
-  max_results: 8
-  max_chars_per_page: 12000
-  domains: []
+    - Prioritize trustworthy sources and explicitly note uncertainty or disagreement.\n\
+    - Synthesize findings into a concise markdown report with sections:\n  1. Executive\
+    \ Summary\n  2. Key Findings\n  3. Evidence and Sources\n  4. Open Questions /\
+    \ Risks\n- Include source URLs directly in the report.\n- Save the final report\
+    \ as \"deep_research.md\".\n- After the report is saved, respond with a short\
+    \ confirmation only.\n"
 graph:
   type: langchain_react
   max_iters: 10

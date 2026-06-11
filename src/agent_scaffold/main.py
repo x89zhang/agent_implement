@@ -145,9 +145,11 @@ def run_once(
     _flush_trace_snapshot(state)
     prev_cwd = Path.cwd()
     prev_cfg_env = os.environ.get("AGENT_CONFIG_PATH")
+    prev_workspace_env = os.environ.get("AGENT_WORKSPACE_ROOT")
     try:
-        # Ensure all generated files (including write_text_file outputs) go into run_dir.
+        # Ensure generated files (including write_text_file outputs) go into run_dir.
         os.environ["AGENT_CONFIG_PATH"] = str(cfg_file)
+        os.environ["AGENT_WORKSPACE_ROOT"] = str(prev_cwd.resolve())
         os.chdir(run_dir)
         result = graph.invoke(state)
     finally:
@@ -155,6 +157,10 @@ def run_once(
             os.environ.pop("AGENT_CONFIG_PATH", None)
         else:
             os.environ["AGENT_CONFIG_PATH"] = prev_cfg_env
+        if prev_workspace_env is None:
+            os.environ.pop("AGENT_WORKSPACE_ROOT", None)
+        else:
+            os.environ["AGENT_WORKSPACE_ROOT"] = prev_workspace_env
         os.chdir(prev_cwd)
     run_end = time.time()
     recovered_output = recover_written_file(result, run_dir, task)

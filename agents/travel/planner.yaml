@@ -2,9 +2,10 @@ enabled: true
 type: static
 max_steps: 6
 steps:
-- Resolve the destination, dates, and trip requirements.
-- Research flights, hotels, attractions, restaurants, transit, and weather.
-- Plan each day with concrete places and weather-aware routing.
-- Assemble the full itinerary in the required daily template.
-- Save the final itinerary with write_text_file.
-- Respond with a short confirmation after the file is saved.
+- Confirm the configured destination, trip dates, trip length, and itinerary requirements.
+- Gather concrete options for travel logistics, lodging, meals, attractions, transit,
+  and weather.
+- Plan each day with geographically sensible routing and weather-aware choices.
+- Assemble the full itinerary in the required daily structure.
+- Save the completed itinerary artifact.
+- Return a short confirmation after the artifact is saved.

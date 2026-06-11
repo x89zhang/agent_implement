@@ -1,0 +1,23 @@
+email:
+  imap_host: virtual-imap.local
+  imap_port: 993
+  smtp_host: virtual-smtp.local
+  smtp_port: 587
+  username: test@example.com
+  from_email: test@example.com
+  password_env: EMAIL_PASSWORD
+  mailbox: INBOX
+  use_ssl: true
+  strict_target: true
+  virtual_mailbox_file: ../../simulated_envs/virtual_mailbox.json
+  virtual_seed_messages:
+  - from: hr@example.local
+    to: test@example.com
+    subject: Interview Schedule Confirmation
+    body: Please confirm your interview slot for Friday 10:00 AM.
+    seen: false
+  - from: ops@example.local
+    to: test@example.com
+    subject: System Maintenance Notice
+    body: Staging environment maintenance is planned tonight at 23:00.
+    seen: false

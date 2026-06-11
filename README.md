@@ -1,15 +1,15 @@
 # Attack Inject
 
-Currently support prompt and tool I/O insertion and replacement, example is in `travel.yaml`.
+Currently supports prompt and tool I/O insertion and replacement through file-based agent harness configs.
 
 # LangGraph Agent Scaffolding
 
-A configurable LangGraph agent scaffold. You can modify `*.yaml` to define different agent behavior, models, tools, and graph settings, or add YAML files to implement other agents. In summary, unified agent scaffolding with different agent settings from `*.yaml`. 
+A configurable LangGraph agent scaffold. Agent behavior is organized as file-based harness directories under `agents/`, with separate prompt, tools, skills, planner, middleware, and memory files. 
 
 ## Quick Start
 ```bash
 pip install -r requirements.txt
-python src/agent_scaffold/main.py --config travel.yaml
+PYTHONPATH=src python src/agent_scaffold/main.py --config agents/travel/agent.yaml
 ```
 Support both online models, i.e., ChatGPT, Gemini... and local models (via vLLM)
 
@@ -66,6 +66,7 @@ agents/
 
 Each directory contains:
   agent.yaml
+  environment.yaml
   systemprompt.md
   tools.yaml
   skills.yaml
@@ -78,6 +79,7 @@ Use `agent.yaml` as the entrypoint. When `harness: .` is present, the loader mer
 
 - `systemprompt.md` -> `agent.system_prompt`
 - `task.md` -> `agent.task` when present
+- `environment.yaml` -> scenario defaults such as `trip`, `paper`, `email`, `web`, or `research`
 - `tools.yaml` -> `tools`
 - `skills.yaml` -> `skills`
 - `planner.yaml` -> `planner`
@@ -90,4 +92,35 @@ Example:
 PYTHONPATH=src python src/agent_scaffold/main.py --config agents/paper_summary/agent.yaml
 ```
 
-The older single-file YAML configs remain supported for compatibility.
+Single-file YAML configs can still be passed explicitly, but runtime tools no longer infer or depend on the old per-agent directories.
+
+### Legacy Single-File Configs
+
+The old single-file agent directories and historical run outputs have been moved to:
+
+```text
+legacy/old_agent_configs/
+```
+
+They are kept for reference and rollback only. New runs should use `agents/<name>/agent.yaml`.
+
+### Skill Package Layout
+
+Agent-level `skills.yaml` files are indexes that enable reusable skill packages:
+
+```yaml
+base_dir: ../../skills
+enabled:
+  - deep_research
+```
+
+Each reusable skill lives under `skills/<name>/`:
+
+```text
+skills/<name>/
+  skill.yaml  # machine-readable metadata: name, description, requires_tools, priority
+  SKILL.md    # human-readable skill instructions injected into the agent context
+```
+
+Keep concrete tool-use strategy in `SKILL.md`; keep task goals and acceptance criteria in `agent.yaml`.
+

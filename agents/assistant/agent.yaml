@@ -1,4 +1,4 @@
-# File-based harness entrypoint generated from assistant/assistant.yaml.
+# File-based harness entrypoint.
 harness: .
 llm:
   provider: vllm_openai

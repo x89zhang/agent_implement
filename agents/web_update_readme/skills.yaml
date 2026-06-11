@@ -1,13 +1,3 @@
+base_dir: ../../skills
 enabled:
-- name: github_readme_update
-  description: Update repository README files through GitHub tools using repository
-    state as source of truth.
-  requires_tools:
-  - github_get_repo
-  - github_list_repo_contents
-  - github_get_file
-  - github_upsert_file
-  instructions: Read the existing file before updating. Preserve unrelated content.
-    Use GitHub write tools only with deliberate file paths and verify the returned
-    result before final confirmation.
-  priority: 45
+- github_readme_update

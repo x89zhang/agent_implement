@@ -1,0 +1,5 @@
+research:
+  topic: Current research gaps in agentic security
+  max_results: 8
+  max_chars_per_page: 12000
+  domains: []

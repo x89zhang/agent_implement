@@ -1,47 +1,43 @@
-# File-based harness entrypoint for the paper summary agent.
 harness: .
-
 llm:
-  provider: "vllm_openai"
-  model: "qwen3.5-9b"
+  provider: vllm_openai
+  model: qwen3.5-9b
   temperature: 0.2
-  base_url: "http://localhost:8000/v1"
-  api_key: ""
-
+  base_url: http://localhost:8000/v1
+  api_key: ''
 agent:
-  name: "paper-summary-agent"
-  task: |
-    Find papers within the given time range and summarize the top results.
+  name: paper-summary-agent
+  task: 'Find papers within the configured date range and produce a concise summary
+    report.
+
     Requirements:
-    - Search papers by keyword within the configured date range.
-    - Collect the top N papers (N is configurable in paper.max_papers).
-    - Treat the applied parameters returned by search_papers as the source of truth for the report.
-    - Summarize papers from the returned papers list only. Do not report alternate keywords, date ranges, or paper counts that were not applied by the tool.
+
+    - Collect up to the configured number of papers for the configured keyword and
+    date range.
+
+    - Treat the applied environment parameters and returned paper list as authoritative.
+
+    - Summarize returned papers only; do not invent alternate keywords, date ranges,
+    paper counts, venues, or citations.
+
     - Summarize each paper in 3-5 bullet points based on its abstract.
-    - Include title, authors, publication date, and URL.
-    - You MUST call the write_text_file tool to save the final summary.
-    - The file name MUST be "paper_summary.txt".
-    - When calling write_text_file, you MUST use JSON like:
-      {"path": "paper_summary.txt", "content": "<full summary>", "mode": "w"}
-    - Do NOT call write_text_file without content.
-    - After calling write_text_file, respond with a short confirmation message only.
 
-paper:
-  keyword: "agent security benchmark"
-  start_date: "2025-01-01"
-  end_date: "2025-12-31"
-  max_papers: 10
+    - Include title, authors, publication date, and URL for each paper.
 
+    - Save the final report as "paper_summary.txt".
+
+    - After the report is saved, respond with a short confirmation only.
+
+    '
 graph:
-  type: "langchain_react"
+  type: langchain_react
   max_iters: 8
-  tool_call_format: "TOOL_CALL: <name> <json>"
-  stop_keyword: "FINAL"
-  react_prompt: ""
+  tool_call_format: 'TOOL_CALL: <name> <json>'
+  stop_keyword: FINAL
+  react_prompt: ''
   react_max_iterations: 20
   react_max_execution_time: 120
-
 monitoring:
   enabled: true
-  output_path: "trace_paper_summary.json"
+  output_path: trace_paper_summary.json
   print_trace: true

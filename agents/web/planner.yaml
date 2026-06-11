@@ -2,8 +2,9 @@ enabled: true
 type: static
 max_steps: 5
 steps:
-- Read repository metadata and identify the relevant issue or requested action.
-- Read issue body, comments, and repository files needed for context.
-- Decide whether a GitHub write action is required and keep it narrowly scoped.
-- Execute the write action only after enough context is gathered.
+- Understand the configured repository target and issue goal.
+- Gather issue context and repository context needed for an accurate response.
+- Decide whether a repository write action is required and keep any change narrowly
+  scoped.
+- Post the final issue comment after enough context is gathered.
 - Verify the returned GitHub result before final confirmation.

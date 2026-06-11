@@ -2,7 +2,7 @@ enabled: true
 type: static
 max_steps: 4
 steps:
-  - Decide whether the question requires tools.
-  - Gather source evidence or calculate when needed.
-  - Compare evidence and resolve conflicts.
-  - Provide a concise final answer with citations when web tools were used.
+- Decide whether the question requires external evidence or calculation.
+- Gather evidence or compute values when needed.
+- Compare evidence and resolve uncertainty or conflicts.
+- Provide a concise final answer with citations when external sources were used.

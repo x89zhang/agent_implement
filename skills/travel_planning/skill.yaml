@@ -1,0 +1,10 @@
+name: travel_planning
+description: Build practical, source-grounded travel itineraries with weather and
+  routing awareness.
+requires_tools:
+- web_search
+- open_url
+- get_weather
+- write_text_file
+inject_mode: system_append
+priority: 45
