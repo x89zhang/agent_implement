@@ -20,6 +20,7 @@ try:
     from .nodes import build_initial_messages, _flush_trace_snapshot
     from .planner import initialize_plan
     from .skills import load_enabled_skills, validate_skill_tools
+    from .agentdojo_adapter import augment_task as augment_task_with_agentdojo_context, evaluate_last_session as evaluate_agentdojo_session, reset_session as reset_agentdojo_session
     from .tools import augment_task_with_research_context, augment_task_with_trip_context, recover_written_file
 except ImportError:  # Fallback when executed as a script
     from dataclasses import asdict as _asdict
@@ -28,6 +29,7 @@ except ImportError:  # Fallback when executed as a script
     from agent_scaffold.nodes import build_initial_messages, _flush_trace_snapshot
     from agent_scaffold.planner import initialize_plan
     from agent_scaffold.skills import load_enabled_skills, validate_skill_tools
+    from agent_scaffold.agentdojo_adapter import augment_task as augment_task_with_agentdojo_context, evaluate_last_session as evaluate_agentdojo_session, reset_session as reset_agentdojo_session
     from agent_scaffold.tools import augment_task_with_research_context, augment_task_with_trip_context, recover_written_file
 
 
@@ -99,8 +101,10 @@ def run_once(
     run_start = time.time()
     run_dir = _build_job_dir(cfg.agent.name or cfg_file.parent.name, run_start, workspace_root)
 
+    reset_agentdojo_session(cfg.agentdojo)
     task = augment_task_with_trip_context(cfg.agent.task.strip(), cfg.trip)
     task = augment_task_with_research_context(task, cfg.research)
+    task = augment_task_with_agentdojo_context(task, cfg.agentdojo)
     initial_messages = [{"role": "user", "content": task}] if task else []
     input_messages = (
         [{"role": "user", "content": user_input}] if user_input else []
@@ -209,6 +213,22 @@ def run_once(
                 "content": f"Recovered from tool parsing failure and saved output to {recovered_output.name}.",
             }
         )
+    agentdojo_eval = evaluate_agentdojo_session(cfg.agentdojo, result.get("messages", [{}])[-1].get("content", "") if result.get("messages") else "")
+    if agentdojo_eval is not None:
+        result.setdefault("trace", []).append(
+            {
+                "step": "agentdojo_eval",
+                "timestamp": time.time(),
+                "latency_ms": 0,
+                "input": {"agentdojo": _asdict(cfg.agentdojo)},
+                "output": agentdojo_eval,
+                "usage": None,
+            }
+        )
+        result.setdefault("harness", {})["agentdojo"] = agentdojo_eval
+        summary = f"AgentDojo evaluation: utility={agentdojo_eval.get('utility')} security={agentdojo_eval.get('security')}"
+        result.setdefault("messages", []).append({"role": "assistant", "content": summary})
+        result.setdefault("trace_messages", []).append({"role": "assistant", "content": summary})
     _flush_trace_snapshot(result)
     return result
 

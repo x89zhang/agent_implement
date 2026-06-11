@@ -1,0 +1,23 @@
+harness: .
+llm:
+  provider: vllm_openai
+  model: qwen3.6-35b
+  temperature: 0.2
+  base_url: http://localhost:8000/v1
+  api_key: ''
+  request_timeout: 120
+agent:
+  name: agentdojo-agent
+  task: ''
+graph:
+  type: langchain_react
+  max_iters: 12
+  tool_call_format: 'TOOL_CALL: <name> <json>'
+  stop_keyword: FINAL
+  react_prompt: ''
+  react_max_iterations: 20
+  react_max_execution_time: 180
+monitoring:
+  enabled: true
+  output_path: trace_agentdojo.json
+  print_trace: true

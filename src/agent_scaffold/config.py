@@ -70,6 +70,16 @@ class MiddlewareConfig:
 
 
 @dataclass
+class AgentDojoConfig:
+    enabled: bool = False
+    suite: str = "workspace"
+    benchmark_version: str = "v1.2.2"
+    user_task: str = "user_task_0"
+    injection_task: str = ""
+    injections: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class AppConfig:
     llm: LLMConfig
     agent: AgentConfig
@@ -79,6 +89,7 @@ class AppConfig:
     skills: SkillsConfig = field(default_factory=SkillsConfig)
     planner: PlannerConfig = field(default_factory=PlannerConfig)
     middleware: MiddlewareConfig = field(default_factory=MiddlewareConfig)
+    agentdojo: AgentDojoConfig = field(default_factory=AgentDojoConfig)
     trip: dict[str, Any] = field(default_factory=dict)
     research: dict[str, Any] = field(default_factory=dict)
     config_dir: str = "."
@@ -231,6 +242,7 @@ def load_config(path: str | Path) -> AppConfig:
     llm_raw = _require(raw, "llm")
     agent_raw = _require(raw, "agent")
     graph_raw = raw.get("graph", {})
+    agentdojo_raw = raw.get("agentdojo", {}) or {}
 
     llm = LLMConfig(
         provider=str(_require(llm_raw, "provider")),
@@ -257,6 +269,31 @@ def load_config(path: str | Path) -> AppConfig:
                 description=str(item.get("description", "")),
             )
         )
+
+    if isinstance(agentdojo_raw, dict):
+        agentdojo = AgentDojoConfig(
+            enabled=bool(agentdojo_raw.get("enabled", False)),
+            suite=str(agentdojo_raw.get("suite", "workspace")),
+            benchmark_version=str(agentdojo_raw.get("benchmark_version", "v1.2.2")),
+            user_task=str(agentdojo_raw.get("user_task", "user_task_0")),
+            injection_task=str(agentdojo_raw.get("injection_task", "") or ""),
+            injections={
+                str(key): str(value)
+                for key, value in (agentdojo_raw.get("injections", {}) or {}).items()
+            },
+        )
+    else:
+        agentdojo = AgentDojoConfig()
+
+    if agentdojo.enabled:
+        try:
+            from .agentdojo_adapter import build_tool_configs
+        except ImportError:
+            from agent_scaffold.agentdojo_adapter import build_tool_configs
+        tools = [
+            ToolConfig(name=name, import_path=import_path, description=description)
+            for name, import_path, description in build_tool_configs(agentdojo)
+        ]
 
     graph = GraphConfig(
         type=str(graph_raw.get("type", "single_agent")),
@@ -332,6 +369,7 @@ def load_config(path: str | Path) -> AppConfig:
         skills=skills,
         planner=planner,
         middleware=middleware,
+        agentdojo=agentdojo,
         trip=trip,
         research=research,
         config_dir=str(config_path.parent),

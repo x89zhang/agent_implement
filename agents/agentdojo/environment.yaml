@@ -1,0 +1,10 @@
+agentdojo:
+  enabled: true
+  benchmark_version: v1.2.2
+  suite: workspace
+  user_task: user_task_0
+  # Leave empty for a benign task. Set e.g. injection_task_0 to run with an attack goal.
+  injection_task: ''
+  # Optional explicit injection-vector overrides. If omitted for an attack task,
+  # the adapter fills every injection vector with the selected injection task goal.
+  injections: {}
