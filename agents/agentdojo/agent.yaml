@@ -17,6 +17,10 @@ graph:
   react_prompt: ''
   react_max_iterations: 20
   react_max_execution_time: 180
+container:
+  image: agent-scaffold-agentdojo:latest
+  build_args:
+    INSTALL_AGENTDOJO: "true"
 monitoring:
   enabled: true
   output_path: trace_agentdojo.json

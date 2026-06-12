@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -80,6 +81,27 @@ class AgentDojoConfig:
 
 
 @dataclass
+class ContainerConfig:
+    enabled: bool = True
+    image: str = "agent-scaffold:latest"
+    auto_build: bool = True
+    dockerfile: str = "Dockerfile"
+    workdir: str = "/workspace"
+    network: str = "host"
+    remove: bool = True
+    build_args: dict[str, str] = field(default_factory=dict)
+    env: list[str] = field(
+        default_factory=lambda: [
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "NO_PROXY",
+        ]
+    )
+
+
+@dataclass
 class AppConfig:
     llm: LLMConfig
     agent: AgentConfig
@@ -90,9 +112,21 @@ class AppConfig:
     planner: PlannerConfig = field(default_factory=PlannerConfig)
     middleware: MiddlewareConfig = field(default_factory=MiddlewareConfig)
     agentdojo: AgentDojoConfig = field(default_factory=AgentDojoConfig)
+    container: ContainerConfig = field(default_factory=ContainerConfig)
     trip: dict[str, Any] = field(default_factory=dict)
     research: dict[str, Any] = field(default_factory=dict)
     config_dir: str = "."
+
+
+def _container_enabled_from_raw(raw: dict[str, Any]) -> bool:
+    if os.environ.get("AGENT_CONTAINERIZED") == "1":
+        return False
+    container_raw = raw.get("container", {})
+    if isinstance(container_raw, bool):
+        return container_raw
+    if isinstance(container_raw, dict):
+        return bool(container_raw.get("enabled", True))
+    return True
 
 
 def _optional_int(value: Any, default: int) -> int | None:
@@ -285,7 +319,7 @@ def load_config(path: str | Path) -> AppConfig:
     else:
         agentdojo = AgentDojoConfig()
 
-    if agentdojo.enabled:
+    if agentdojo.enabled and not _container_enabled_from_raw(raw):
         try:
             from .agentdojo_adapter import build_tool_configs
         except ImportError:
@@ -355,6 +389,33 @@ def load_config(path: str | Path) -> AppConfig:
     else:
         middleware = MiddlewareConfig()
 
+    container_raw = raw.get("container", {}) or {}
+    if isinstance(container_raw, bool):
+        container = ContainerConfig(enabled=container_raw)
+    elif isinstance(container_raw, dict):
+        env_raw = container_raw.get("env", None)
+        if env_raw is None:
+            env = ContainerConfig().env
+        elif isinstance(env_raw, str):
+            env = [env_raw]
+        elif isinstance(env_raw, list):
+            env = [str(item) for item in env_raw]
+        else:
+            env = []
+        container = ContainerConfig(
+            enabled=bool(container_raw.get("enabled", True)),
+            image=str(container_raw.get("image", "agent-scaffold:latest")),
+            auto_build=bool(container_raw.get("auto_build", True)),
+            dockerfile=str(container_raw.get("dockerfile", "Dockerfile")),
+            workdir=str(container_raw.get("workdir", "/workspace")),
+            network=str(container_raw.get("network", "host")),
+            remove=bool(container_raw.get("remove", True)),
+            build_args={str(key): str(value) for key, value in (container_raw.get("build_args", {}) or {}).items()},
+            env=env,
+        )
+    else:
+        container = ContainerConfig()
+
     trip_raw = raw.get("trip") or {}
     trip = trip_raw if isinstance(trip_raw, dict) else {}
     research_raw = raw.get("research") or {}
@@ -370,6 +431,7 @@ def load_config(path: str | Path) -> AppConfig:
         planner=planner,
         middleware=middleware,
         agentdojo=agentdojo,
+        container=container,
         trip=trip,
         research=research,
         config_dir=str(config_path.parent),

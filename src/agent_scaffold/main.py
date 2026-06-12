@@ -21,6 +21,7 @@ try:
     from .planner import initialize_plan
     from .skills import load_enabled_skills, validate_skill_tools
     from .agentdojo_adapter import augment_task as augment_task_with_agentdojo_context, evaluate_last_session as evaluate_agentdojo_session, reset_session as reset_agentdojo_session
+    from .container_runtime import run_once_in_container, should_run_in_container
     from .tools import augment_task_with_research_context, augment_task_with_trip_context, recover_written_file
 except ImportError:  # Fallback when executed as a script
     from dataclasses import asdict as _asdict
@@ -30,6 +31,7 @@ except ImportError:  # Fallback when executed as a script
     from agent_scaffold.planner import initialize_plan
     from agent_scaffold.skills import load_enabled_skills, validate_skill_tools
     from agent_scaffold.agentdojo_adapter import augment_task as augment_task_with_agentdojo_context, evaluate_last_session as evaluate_agentdojo_session, reset_session as reset_agentdojo_session
+    from agent_scaffold.container_runtime import run_once_in_container, should_run_in_container
     from agent_scaffold.tools import augment_task_with_research_context, augment_task_with_trip_context, recover_written_file
 
 
@@ -40,6 +42,14 @@ def _slugify(value: str) -> str:
 
 
 def _build_job_dir(cfg_name: str, started_at: float, workspace_root: Path) -> Path:
+    configured = os.environ.get("AGENT_JOB_DIR")
+    if configured:
+        candidate = Path(configured)
+        if not candidate.is_absolute():
+            candidate = workspace_root / candidate
+        candidate.mkdir(parents=True, exist_ok=True)
+        return candidate.resolve()
+
     timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(started_at))
     base = workspace_root / "jobs" / f"{timestamp}_{_slugify(cfg_name)}"
     candidate = base
@@ -76,6 +86,36 @@ def _load_context_messages(path: str) -> list[dict[str, str]]:
     return _normalize_messages(payload)
 
 
+def _load_run_payload(path: str) -> dict[str, Any]:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("run payload must be a JSON object")
+    context_messages = payload.get("context_messages")
+    resume_messages = payload.get("resume_messages")
+    return {
+        "user_input": payload.get("user_input"),
+        "context_messages": _normalize_messages(context_messages) if context_messages else None,
+        "resume_messages": _normalize_messages(resume_messages) if resume_messages else None,
+    }
+
+
+def _json_default(value: Any) -> Any:
+    if hasattr(value, "model_dump"):
+        return value.model_dump()
+    if hasattr(value, "dict"):
+        return value.dict()
+    return str(value)
+
+
+def _write_result_if_requested(result: dict[str, Any]) -> None:
+    result_path = os.environ.get("AGENT_RESULT_PATH")
+    if not result_path:
+        return
+    path = Path(result_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
+
+
 def _split_system_messages(messages: list[dict[str, str]]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     system_messages: list[dict[str, str]] = []
     other_messages: list[dict[str, str]] = []
@@ -94,12 +134,24 @@ def run_once(
     resume_messages: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     cfg = load_config(cfg_path)
-    graph = build_graph(cfg)
 
     cfg_file = Path(cfg_path).resolve()
-    workspace_root = Path.cwd().resolve()
+    workspace_root = Path(os.environ.get("AGENT_WORKSPACE_ROOT") or Path.cwd()).resolve()
     run_start = time.time()
     run_dir = _build_job_dir(cfg.agent.name or cfg_file.parent.name, run_start, workspace_root)
+
+    if should_run_in_container(cfg):
+        return run_once_in_container(
+            cfg=cfg,
+            cfg_path=str(cfg_file),
+            user_input=user_input,
+            context_messages=context_messages,
+            resume_messages=resume_messages,
+            workspace_root=workspace_root,
+            run_dir=run_dir,
+        )
+
+    graph = build_graph(cfg)
 
     reset_agentdojo_session(cfg.agentdojo)
     task = augment_task_with_trip_context(cfg.agent.task.strip(), cfg.trip)
@@ -239,6 +291,7 @@ def main() -> None:
     parser.add_argument("--input", help="single input to run once")
     parser.add_argument("--context-file", help="JSON file containing context messages or an object with a messages field")
     parser.add_argument("--resume-from", help="JSON trace/context file to resume from; uses its messages field as prior conversation")
+    parser.add_argument("--run-payload", help="internal JSON payload used when the harness is launched in a container")
     args = parser.parse_args()
 
     try:
@@ -251,11 +304,26 @@ def main() -> None:
     except Exception as exc:
         print(f"[INFECTION] disabled due to error: {exc}")
 
+    if args.run_payload:
+        payload = _load_run_payload(args.run_payload)
+        result = run_once(
+            args.config,
+            payload["user_input"],
+            context_messages=payload["context_messages"],
+            resume_messages=payload["resume_messages"],
+        )
+        _write_result_if_requested(result)
+        messages = result.get("messages", [])
+        if messages:
+            print(messages[-1]["content"])
+        return
+
     context_messages = _load_context_messages(args.context_file) if args.context_file else None
     resume_messages = _load_context_messages(args.resume_from) if args.resume_from else None
 
     if args.input is not None:
         result = run_once(args.config, args.input, context_messages=context_messages, resume_messages=resume_messages)
+        _write_result_if_requested(result)
         messages = result.get("messages", [])
         if messages:
             print(messages[-1]["content"])
@@ -264,6 +332,7 @@ def main() -> None:
     cfg = load_config(args.config)
     if cfg.agent.task.strip():
         result = run_once(args.config, None, context_messages=context_messages, resume_messages=resume_messages)
+        _write_result_if_requested(result)
         messages = result.get("messages", [])
         if messages:
             print(messages[-1]["content"])
@@ -278,6 +347,7 @@ def main() -> None:
         if not user_input:
             continue
         result = run_once(args.config, user_input, context_messages=context_messages, resume_messages=resume_messages)
+        _write_result_if_requested(result)
         messages = result.get("messages", [])
         if messages:
             print(f"agent> {messages[-1]['content']}")

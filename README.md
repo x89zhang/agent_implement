@@ -124,6 +124,49 @@ skills/<name>/
 
 Keep concrete tool-use strategy in `SKILL.md`; keep task goals and acceptance criteria in `agent.yaml`.
 
+
+### Containerized Task Environments
+
+Agent runs are containerized by default. The outer harness creates the timestamped job directory, then launches the same agent runtime inside Docker with the workspace mounted at `/workspace`. This makes task scenarios such as Deep Research, Travel, Email, and AgentDojo execute inside the container while still writing traces and artifacts back to `jobs/<timestamp>_<agent-name>/` on the host.
+
+Default container settings are equivalent to:
+
+```yaml
+container:
+  enabled: true
+  image: agent-scaffold:latest
+  auto_build: true
+  dockerfile: Dockerfile
+  build_args: {}
+  workdir: /workspace
+  network: host
+```
+
+`network: host` keeps local vLLM endpoints such as `http://localhost:8000/v1` reachable from the container on Linux. If you want the previous in-process behavior for a harness, set:
+
+```yaml
+container:
+  enabled: false
+```
+
+You can also disable containerization for a single shell command by exporting `AGENT_CONTAINERIZED=1`, which tells the runner it is already inside the execution environment.
+
+For AgentDojo, the container image must include the `agentdojo` Python package. You can either point that harness at a custom image:
+
+```yaml
+container:
+  image: agent-scaffold-agentdojo:latest
+```
+
+or build this Dockerfile with the optional package install when your package index provides it:
+
+```yaml
+container:
+  image: agent-scaffold-agentdojo:latest
+  build_args:
+    INSTALL_AGENTDOJO: "true"
+```
+
 ### Job Outputs
 
 Each run writes trace files and generated artifacts under a timestamped job directory:
