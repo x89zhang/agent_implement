@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -320,13 +321,11 @@ def load_config(path: str | Path) -> AppConfig:
         agentdojo = AgentDojoConfig()
 
     if agentdojo.enabled and not _container_enabled_from_raw(raw):
-        try:
-            from .agentdojo_adapter import build_tool_configs
-        except ImportError:
-            from agent_scaffold.agentdojo_adapter import build_tool_configs
+        module_name = f"{__package__}.agentdojo_adapter" if __package__ else "agent_scaffold.agentdojo_adapter"
+        adapter = importlib.import_module(module_name)
         tools = [
             ToolConfig(name=name, import_path=import_path, description=description)
-            for name, import_path, description in build_tool_configs(agentdojo)
+            for name, import_path, description in adapter.build_tool_configs(agentdojo)
         ]
 
     graph = GraphConfig(

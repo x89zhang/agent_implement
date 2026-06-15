@@ -361,6 +361,7 @@ def _build_traced_react_tool(name: str, fn: Any, enabled: bool) -> Any:
 
     try:
         _wrapped.__signature__ = inspect.signature(fn)  # type: ignore[attr-defined]
+        _wrapped.__annotations__ = dict(getattr(fn, "__annotations__", {}) or {})
     except Exception:
         pass
     return _wrapped
@@ -513,6 +514,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                 name=t.name,
                 description=t.description or "",
                 handle_tool_error=True,
+                handle_validation_error=True,
             )
         )
 

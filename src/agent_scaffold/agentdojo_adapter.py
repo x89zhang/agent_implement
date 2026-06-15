@@ -235,8 +235,12 @@ def _coerce_positional_input(value: Any, fn: Any) -> dict[str, Any]:
     return {"input": value}
 
 
+def _parameter_fields(fn: Any) -> dict[str, Any]:
+    return getattr(fn.parameters, "model_fields", None) or getattr(fn.parameters, "__fields__", {})
+
+
 def _build_signature(fn: Any) -> inspect.Signature:
-    fields = getattr(fn.parameters, "model_fields", None) or getattr(fn.parameters, "__fields__", {})
+    fields = _parameter_fields(fn)
     parameters = []
     for name, field in fields.items():
         annotation = getattr(field, "annotation", Any) or Any
@@ -251,6 +255,15 @@ def _build_signature(fn: Any) -> inspect.Signature:
             )
         )
     return inspect.Signature(parameters=parameters, return_annotation=str)
+
+
+def _build_annotations(fn: Any) -> dict[str, Any]:
+    annotations = {
+        name: (getattr(field, "annotation", Any) or Any)
+        for name, field in _parameter_fields(fn).items()
+    }
+    annotations["return"] = str
+    return annotations
 
 
 def _make_tool_wrapper(name: str) -> Any:
@@ -282,6 +295,7 @@ def _make_tool_wrapper(name: str) -> Any:
     _wrapped.__doc__ = fn.description or f"AgentDojo tool {name}."
     try:
         _wrapped.__signature__ = _build_signature(fn)  # type: ignore[attr-defined]
+        _wrapped.__annotations__ = _build_annotations(fn)
     except Exception:
         pass
     return _wrapped
