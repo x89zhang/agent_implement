@@ -330,7 +330,7 @@ def main() -> None:
         return
 
     cfg = load_config(args.config)
-    if cfg.agent.task.strip():
+    if cfg.agent.task.strip() or cfg.agentdojo.enabled:
         result = run_once(args.config, None, context_messages=context_messages, resume_messages=resume_messages)
         _write_result_if_requested(result)
         messages = result.get("messages", [])

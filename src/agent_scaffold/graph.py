@@ -24,6 +24,20 @@ from .nodes import (
 )
 
 
+def _build_react_user_input(state: dict[str, Any]) -> str:
+    messages = state.get("messages") or []
+    user_parts = [
+        str(message.get("content", "")).strip()
+        for message in messages
+        if isinstance(message, dict) and message.get("role") == "user" and str(message.get("content", "")).strip()
+    ]
+    if user_parts:
+        return "\n\n".join(user_parts)
+    if messages and isinstance(messages[-1], dict):
+        return str(messages[-1].get("content", ""))
+    return ""
+
+
 def _extract_react_actions(log_text: str) -> list[dict[str, Any]]:
     actions: list[dict[str, Any]] = []
     if not log_text:
@@ -257,6 +271,57 @@ def _parse_function_style_action(action_text: str, tool_names: set[str]) -> tupl
     return tool_name, payload
 
 
+
+def _extract_first_json_value(value: str) -> Any | None:
+    text = str(value).strip()
+    if not text or text[0] not in "{[":
+        return None
+    opener = text[0]
+    closer = "}" if opener == "{" else "]"
+    depth = 0
+    in_string = False
+    escape = False
+    for idx, ch in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == opener:
+            depth += 1
+        elif ch == closer:
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[: idx + 1])
+                except Exception:
+                    return None
+    return None
+
+
+def _normalize_react_tool_name(tool: Any, tool_names: set[str]) -> str:
+    text = str(tool).strip().strip("` ,.:;\n\t")
+    if text in tool_names:
+        return text
+    for name in sorted(tool_names, key=len, reverse=True):
+        if text == name or text.startswith(name + " ") or text.startswith(name + "`") or text.startswith(name + ","):
+            return name
+    return text
+
+
+def _normalize_react_tool_input(tool_input: Any) -> Any:
+    if isinstance(tool_input, str):
+        parsed = _extract_first_json_value(tool_input)
+        if parsed is not None:
+            return parsed
+    return tool_input
+
 def _build_react_output_parser(tool_names: set[str]) -> Any | None:
     try:
         from langchain_core.agents import AgentAction  # type: ignore
@@ -284,12 +349,16 @@ def _build_react_output_parser(tool_names: set[str]) -> Any | None:
         def parse(self, text: str) -> Any:
             parsed = super().parse(text)
             tool = getattr(parsed, "tool", None)
-            if isinstance(tool, str) and tool not in tool_names:
+            tool_input = _normalize_react_tool_input(getattr(parsed, "tool_input", ""))
+            if isinstance(tool, str):
+                normalized_name = _normalize_react_tool_name(tool, tool_names)
+                if normalized_name in tool_names:
+                    return AgentAction(tool=normalized_name, tool_input=tool_input, log=getattr(parsed, "log", text))
                 normalized = _parse_function_style_action(tool, tool_names)
                 if normalized is not None:
                     tool_name, payload = normalized
                     if "__arg" in payload and len(payload) == 1:
-                        tool_input: Any = payload["__arg"]
+                        tool_input = payload["__arg"]
                     else:
                         payload.pop("__arg", None)
                         tool_input = payload
@@ -551,7 +620,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
 
     def _node(state: dict[str, Any]) -> dict[str, Any]:
         start = time.time()
-        user_input = state["messages"][-1]["content"] if state.get("messages") else ""
+        user_input = _build_react_user_input(state)
         plan_context = render_plan_context(state)
         if plan_context:
             user_input = f"{user_input}\n\n{plan_context}"
