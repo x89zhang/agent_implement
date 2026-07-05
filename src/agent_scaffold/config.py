@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -72,12 +73,29 @@ class MiddlewareConfig:
 
 
 @dataclass
+class SecurityConfig:
+    trusted_tool_output_prompt: bool = True
+
+
+@dataclass
+class AegisConfig:
+    enabled: bool = False
+    mode: str = "block"
+    risk_threshold: str = "HIGH"
+    fail_closed: bool = True
+    allow_tools: list[str] = field(default_factory=list)
+    block_tools: list[str] = field(default_factory=list)
+
+
+@dataclass
 class AgentDojoConfig:
     enabled: bool = False
     suite: str = "workspace"
     benchmark_version: str = "v1.2.2"
+    case: str = ""
     user_task: str = "user_task_0"
     injection_task: str = ""
+    trusted_tool_output_prompt: bool = True
     injections: dict[str, str] = field(default_factory=dict)
 
 
@@ -112,6 +130,8 @@ class AppConfig:
     skills: SkillsConfig = field(default_factory=SkillsConfig)
     planner: PlannerConfig = field(default_factory=PlannerConfig)
     middleware: MiddlewareConfig = field(default_factory=MiddlewareConfig)
+    security: SecurityConfig = field(default_factory=SecurityConfig)
+    aegis: AegisConfig = field(default_factory=AegisConfig)
     agentdojo: AgentDojoConfig = field(default_factory=AgentDojoConfig)
     container: ContainerConfig = field(default_factory=ContainerConfig)
     trip: dict[str, Any] = field(default_factory=dict)
@@ -142,6 +162,23 @@ def _require(d: dict[str, Any], key: str) -> Any:
     if key not in d:
         raise ValueError(f"Missing required key: {key}")
     return d[key]
+
+
+_AGENTDOJO_CASE_RE = re.compile(r"^(user_task_\d+)(?:_(injection(?:_task)?_\d+))?$")
+
+
+def _parse_agentdojo_case(case_id: str) -> tuple[str, str]:
+    match = _AGENTDOJO_CASE_RE.fullmatch(case_id.strip())
+    if not match:
+        raise ValueError(
+            "AgentDojo case must look like 'user_task_3' for benign runs or "
+            "'user_task_3_injection_2' / 'user_task_3_injection_task_2' for attack runs."
+        )
+    user_task = match.group(1)
+    injection_task = match.group(2) or ""
+    if injection_task.startswith("injection_") and not injection_task.startswith("injection_task_"):
+        injection_task = injection_task.replace("injection_", "injection_task_", 1)
+    return user_task, injection_task
 
 
 def _load_yaml_mapping(path: Path) -> dict[str, Any]:
@@ -306,15 +343,44 @@ def load_config(path: str | Path) -> AppConfig:
         )
 
     if isinstance(agentdojo_raw, dict):
+        case_id = str(agentdojo_raw.get("case", "") or "")
+        raw_user_task = str(agentdojo_raw.get("user_task", "user_task_0"))
+        raw_injection_task = str(agentdojo_raw.get("injection_task", "") or "")
+        if case_id:
+            case_user_task, case_injection_task = _parse_agentdojo_case(case_id)
+            if "user_task" in agentdojo_raw and raw_user_task != case_user_task:
+                raise ValueError(
+                    f"AgentDojo case '{case_id}' selects user_task '{case_user_task}', "
+                    f"but user_task is also set to '{raw_user_task}'. Use only case, or make them match."
+                )
+            if "injection_task" in agentdojo_raw and raw_injection_task != case_injection_task:
+                raise ValueError(
+                    f"AgentDojo case '{case_id}' selects injection_task '{case_injection_task or '<none>'}', "
+                    f"but injection_task is also set to '{raw_injection_task or '<none>'}'. Use only case, or make them match."
+                )
+            raw_user_task = case_user_task
+            raw_injection_task = case_injection_task
+        elif raw_injection_task:
+            raise ValueError(
+                "AgentDojo attack runs must use a combined case id such as "
+                "'user_task_3_injection_2' instead of setting injection_task separately."
+            )
+
         agentdojo = AgentDojoConfig(
             enabled=bool(agentdojo_raw.get("enabled", False)),
             suite=str(agentdojo_raw.get("suite", "workspace")),
             benchmark_version=str(agentdojo_raw.get("benchmark_version", "v1.2.2")),
-            user_task=str(agentdojo_raw.get("user_task", "user_task_0")),
-            injection_task=str(agentdojo_raw.get("injection_task", "") or ""),
+            case=case_id,
+            user_task=raw_user_task,
+            injection_task=raw_injection_task,
+            trusted_tool_output_prompt=bool(agentdojo_raw.get("trusted_tool_output_prompt", True)),
             injections={
                 str(key): str(value)
-                for key, value in (agentdojo_raw.get("injections", {}) or {}).items()
+                for key, value in (
+                    agentdojo_raw.get("custom_injections")
+                    if agentdojo_raw.get("custom_injections") is not None
+                    else agentdojo_raw.get("injections", {})
+                or {}).items()
             },
         )
     else:
@@ -388,6 +454,36 @@ def load_config(path: str | Path) -> AppConfig:
     else:
         middleware = MiddlewareConfig()
 
+    security_raw = raw.get("security", {}) or {}
+    legacy_tool_prompt = None
+    if isinstance(agentdojo_raw, dict) and "trusted_tool_output_prompt" in agentdojo_raw:
+        legacy_tool_prompt = bool(agentdojo_raw.get("trusted_tool_output_prompt", True))
+    if isinstance(security_raw, bool):
+        security = SecurityConfig(trusted_tool_output_prompt=security_raw)
+    elif isinstance(security_raw, dict):
+        security = SecurityConfig(
+            trusted_tool_output_prompt=bool(security_raw.get("trusted_tool_output_prompt", legacy_tool_prompt if legacy_tool_prompt is not None else True)),
+        )
+    else:
+        security = SecurityConfig(
+            trusted_tool_output_prompt=legacy_tool_prompt if legacy_tool_prompt is not None else True,
+        )
+
+    aegis_raw = raw.get("aegis", {}) or {}
+    if isinstance(aegis_raw, bool):
+        aegis = AegisConfig(enabled=aegis_raw)
+    elif isinstance(aegis_raw, dict):
+        aegis = AegisConfig(
+            enabled=bool(aegis_raw.get("enabled", False)),
+            mode=str(aegis_raw.get("mode", "block")),
+            risk_threshold=str(aegis_raw.get("risk_threshold", "HIGH")).upper(),
+            fail_closed=bool(aegis_raw.get("fail_closed", True)),
+            allow_tools=[str(item) for item in (aegis_raw.get("allow_tools", []) or [])],
+            block_tools=[str(item) for item in (aegis_raw.get("block_tools", []) or [])],
+        )
+    else:
+        aegis = AegisConfig()
+
     container_raw = raw.get("container", {}) or {}
     if isinstance(container_raw, bool):
         container = ContainerConfig(enabled=container_raw)
@@ -429,6 +525,8 @@ def load_config(path: str | Path) -> AppConfig:
         skills=skills,
         planner=planner,
         middleware=middleware,
+        security=security,
+        aegis=aegis,
         agentdojo=agentdojo,
         container=container,
         trip=trip,

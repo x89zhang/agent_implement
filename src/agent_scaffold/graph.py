@@ -14,6 +14,7 @@ from .config import AppConfig
 from .llm import LLMAdapter
 from .skills import load_enabled_skills, render_skill_context, validate_skill_tools
 from .planner import render_plan_context, mark_plan_progress, complete_plan_on_final
+from .middleware import build_middleware_manager
 from .nodes import (
     agent_node,
     load_tool,
@@ -21,6 +22,7 @@ from .nodes import (
     _append_trace_message,
     _flush_trace_snapshot,
     _update_usage_totals,
+    render_tool_output_security_prompt,
 )
 
 
@@ -409,23 +411,80 @@ def _build_react_callbacks(enabled: bool) -> list[Any]:
     return [_RealtimeReactCallback()]
 
 
-def _build_traced_react_tool(name: str, fn: Any, enabled: bool) -> Any:
-    if not enabled:
-        return fn
+def _react_payload(args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
+    if kwargs:
+        return dict(kwargs)
+    if len(args) == 1 and isinstance(args[0], dict):
+        return dict(args[0])
+    if len(args) == 1:
+        return {"__arg": args[0]}
+    return {"args": list(args)}
 
+
+def _render_react_payload(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+    if kwargs:
+        return kwargs
+    if len(args) == 1:
+        return args[0]
+    return list(args)
+
+
+def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any, get_state: Any) -> Any:
     @functools.wraps(fn)
     def _wrapped(*args: Any, **kwargs: Any) -> Any:
-        if kwargs:
-            rendered_input = kwargs
-        elif len(args) == 1:
-            rendered_input = args[0]
-        else:
-            rendered_input = list(args)
-        print("\n[TOOL INPUT]", flush=True)
-        print(f"{name} {rendered_input}", flush=True)
-        result = fn(*args, **kwargs)
-        print("[TOOL OUTPUT]", flush=True)
-        print(result, flush=True)
+        rendered_input = _render_react_payload(args, kwargs)
+        payload = _react_payload(args, kwargs)
+        state = get_state()
+        if isinstance(state, dict):
+            state.pop("_last_aegis_decision", None)
+        decision = middleware.before_tool(state if isinstance(state, dict) else {}, name, payload)
+        aegis_decision = None
+        if isinstance(state, dict):
+            aegis_decision = state.pop("_last_aegis_decision", None)
+
+        if cfg.monitoring.print_trace:
+            print("\n[TOOL INPUT]", flush=True)
+            print(f"{name} {rendered_input}", flush=True)
+
+        if not decision.allowed:
+            result = f"Tool execution blocked by middleware: {decision.reason}"
+            middleware.after_tool(state if isinstance(state, dict) else {}, name, payload, result, True)
+            if isinstance(state, dict):
+                state.setdefault("_react_guard_events", []).append({
+                    "tool": name,
+                    "tool_input": rendered_input,
+                    "aegis": aegis_decision,
+                    "blocked": True,
+                })
+            if cfg.monitoring.print_trace:
+                print("[TOOL OUTPUT]", flush=True)
+                print(result, flush=True)
+            return result
+
+        try:
+            result = fn(*args, **kwargs)
+        except Exception as exc:
+            middleware.after_tool(state if isinstance(state, dict) else {}, name, payload, f"Tool execution failed: {exc}", True)
+            if isinstance(state, dict):
+                state.setdefault("_react_guard_events", []).append({
+                    "tool": name,
+                    "tool_input": rendered_input,
+                    "aegis": aegis_decision,
+                    "blocked": False,
+                })
+            raise
+
+        middleware.after_tool(state if isinstance(state, dict) else {}, name, payload, str(result), False)
+        if isinstance(state, dict):
+            state.setdefault("_react_guard_events", []).append({
+                "tool": name,
+                "tool_input": rendered_input,
+                "aegis": aegis_decision,
+                "blocked": False,
+            })
+        if cfg.monitoring.print_trace:
+            print("[TOOL OUTPUT]", flush=True)
+            print(result, flush=True)
         return result
 
     try:
@@ -517,6 +576,9 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
     skill_context = render_skill_context(skills)
     if skill_context:
         role_parts.append(skill_context)
+    security_prompt = render_tool_output_security_prompt(cfg)
+    if security_prompt:
+        role_parts.append(security_prompt)
     missing_tool_warnings = validate_skill_tools(skills, {tool.name for tool in cfg.tools})
     if missing_tool_warnings:
         role_parts.append("# Harness Warnings\n" + "\n".join(f"- {item}" for item in missing_tool_warnings))
@@ -573,10 +635,16 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
 
     raw_tools: dict[str, Any] = {}
     tools = []
+    middleware = build_middleware_manager(cfg)
+    active_state: dict[str, Any] | None = None
+
+    def _get_active_state() -> dict[str, Any]:
+        return active_state if active_state is not None else {}
+
     for t in cfg.tools:
         fn = load_tool(t)
-        raw_tools[t.name] = fn
-        lc_fn = _build_traced_react_tool(t.name, fn, cfg.monitoring.print_trace)
+        lc_fn = _build_traced_react_tool(t.name, fn, cfg, middleware, _get_active_state)
+        raw_tools[t.name] = lc_fn
         tools.append(
             StructuredTool.from_function(
                 lc_fn,
@@ -619,7 +687,9 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
         )
 
     def _node(state: dict[str, Any]) -> dict[str, Any]:
+        nonlocal active_state
         start = time.time()
+        active_state = state
         user_input = _build_react_user_input(state)
         plan_context = render_plan_context(state)
         if plan_context:
@@ -633,7 +703,11 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
         invoke_kwargs: dict[str, Any] = {}
         if callbacks:
             invoke_kwargs["callbacks"] = callbacks
-        result = executor.invoke({"input": user_input}, **invoke_kwargs)
+        try:
+            result = executor.invoke({"input": user_input}, **invoke_kwargs)
+        except Exception:
+            active_state = None
+            raise
         output = result.get("output", "")
         state["messages"].append({"role": "assistant", "content": output})
 
@@ -643,12 +717,20 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             estimate_tokens=llm.estimate_tokens,
             print_trace=cfg.monitoring.print_trace and bool(callbacks),
         )
+        guard_events = state.pop("_react_guard_events", [])
+        for idx, step in enumerate(steps):
+            if idx < len(guard_events):
+                step["aegis"] = guard_events[idx].get("aegis")
+                step["blocked"] = bool(guard_events[idx].get("blocked"))
+        active_state = None
         for step in steps:
             mark_plan_progress(state, "react_tool", str(step.get("tool", "")))
             tool_input = step.get("tool_input", "")
             log_text = step.get("log", "")
             thought_text = step.get("thought")
             tool_usage = step.get("usage", {})
+            aegis_decision = step.get("aegis")
+            blocked = bool(step.get("blocked"))
             _append_trace_message(
                 state,
                 {
@@ -680,6 +762,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                             }
                         ],
                         "usage": tool_usage,
+                        "aegis": aegis_decision,
                     },
                 },
             )
@@ -692,10 +775,11 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                         "tool": step.get("tool", ""),
                         "tool_input": tool_input,
                         "raw_output": str(step.get("observation", "")),
-                        "returncode": 0,
-                        "exception_info": "",
+                        "returncode": 1 if blocked else 0,
+                        "exception_info": str(step.get("observation", "")) if blocked else "",
                         "timestamp": time.time(),
                         "usage": tool_usage,
+                        "aegis": aegis_decision,
                     },
                 },
             )

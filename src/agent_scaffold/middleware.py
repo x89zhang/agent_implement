@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .config import AppConfig
+from .guard import check_tool_call
 from .planner import render_plan_context, mark_plan_progress, complete_plan_on_final
 
 
@@ -25,6 +26,18 @@ class Middleware:
 
     def after_tool(self, state: dict[str, Any], name: str, payload: dict[str, Any], result: str, failed: bool) -> None:
         return None
+
+
+class AegisGuardMiddleware(Middleware):
+    def __init__(self, cfg: AppConfig) -> None:
+        self.cfg = cfg
+
+    def before_tool(self, state: dict[str, Any], name: str, payload: dict[str, Any]) -> ToolDecision:
+        decision = check_tool_call(self.cfg, state, name, payload)
+        state["_last_aegis_decision"] = decision.to_dict()
+        if not decision.allowed:
+            return ToolDecision(False, decision.reason or "blocked by Aegis guard")
+        return ToolDecision(True, "")
 
 
 class HarnessMiddleware(Middleware):
@@ -94,6 +107,9 @@ class MiddlewareManager:
 
 
 def build_middleware_manager(cfg: AppConfig) -> MiddlewareManager:
-    if not cfg.middleware.enabled:
-        return MiddlewareManager([])
-    return MiddlewareManager([HarnessMiddleware(cfg)])
+    middlewares: list[Middleware] = []
+    if cfg.aegis.enabled:
+        middlewares.append(AegisGuardMiddleware(cfg))
+    if cfg.middleware.enabled:
+        middlewares.append(HarnessMiddleware(cfg))
+    return MiddlewareManager(middlewares)

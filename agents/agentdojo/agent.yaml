@@ -25,3 +25,7 @@ monitoring:
   enabled: true
   output_path: trace_agentdojo.json
   print_trace: true
+aegis:
+  enabled: true
+  mode: monitor
+  risk_threshold: HIGH

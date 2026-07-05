@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import sys
@@ -59,6 +61,40 @@ def _build_job_dir(cfg_name: str, started_at: float, workspace_root: Path) -> Pa
         counter += 1
     candidate.mkdir(parents=True, exist_ok=False)
     return candidate
+
+
+def _build_batch_dir(cfg_name: str, started_at: float, workspace_root: Path, configured: str | None = None) -> Path:
+    if configured:
+        candidate = Path(configured)
+        if not candidate.is_absolute():
+            candidate = workspace_root / candidate
+        candidate.mkdir(parents=True, exist_ok=True)
+        return candidate.resolve()
+
+    timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(started_at))
+    base = workspace_root / "jobs" / f"{timestamp}_{_slugify(cfg_name)}_batch"
+    candidate = base
+    counter = 1
+    while candidate.exists():
+        candidate = workspace_root / "jobs" / f"{timestamp}_{_slugify(cfg_name)}_batch_{counter}"
+        counter += 1
+    candidate.mkdir(parents=True, exist_ok=False)
+    return candidate
+
+
+class _Tee(io.TextIOBase):
+    def __init__(self, *streams: Any) -> None:
+        self.streams = streams
+
+    def write(self, text: str) -> int:
+        for stream in self.streams:
+            stream.write(text)
+            stream.flush()
+        return len(text)
+
+    def flush(self) -> None:
+        for stream in self.streams:
+            stream.flush()
 
 def _normalize_messages(raw: Any) -> list[dict[str, str]]:
     if not isinstance(raw, list):
@@ -278,11 +314,114 @@ def run_once(
             }
         )
         result.setdefault("harness", {})["agentdojo"] = agentdojo_eval
-        summary = f"AgentDojo evaluation: utility={agentdojo_eval.get('utility')} security={agentdojo_eval.get('security')}"
+        summary = (
+            f"AgentDojo evaluation: utility={agentdojo_eval.get('utility')} "
+            f"security={agentdojo_eval.get('security')} "
+            f"attack_success={agentdojo_eval.get('attack_success')}"
+        )
         result.setdefault("messages", []).append({"role": "assistant", "content": summary})
         result.setdefault("trace_messages", []).append({"role": "assistant", "content": summary})
     _flush_trace_snapshot(result)
     return result
+
+
+def _result_run_dir(result: dict[str, Any], fallback: Path) -> Path:
+    candidates: list[Path] = []
+    persist = result.get("_trace_persist")
+    if isinstance(persist, dict) and persist.get("run_dir"):
+        candidates.append(Path(str(persist["run_dir"])))
+    run_dir = result.get("run_dir")
+    if run_dir:
+        candidates.append(Path(str(run_dir)))
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return fallback
+
+
+def _final_message(result: dict[str, Any]) -> str:
+    messages = result.get("messages", [])
+    if messages and isinstance(messages[-1], dict):
+        return str(messages[-1].get("content", ""))
+    return ""
+
+
+def _run_repeated(
+    *,
+    cfg_path: str,
+    runs: int,
+    runs_dir: str | None,
+    user_input: str | None,
+    context_messages: list[dict[str, str]] | None,
+    resume_messages: list[dict[str, str]] | None,
+) -> None:
+    cfg = load_config(cfg_path)
+    workspace_root = Path(os.environ.get("AGENT_WORKSPACE_ROOT") or Path.cwd()).resolve()
+    batch_start = time.time()
+    batch_dir = _build_batch_dir(cfg.agent.name or Path(cfg_path).resolve().parent.name, batch_start, workspace_root, runs_dir)
+    previous_job_dir = os.environ.get("AGENT_JOB_DIR")
+    summary: dict[str, Any] = {
+        "config": str(Path(cfg_path).resolve()),
+        "runs": runs,
+        "batch_dir": str(batch_dir),
+        "started_at": batch_start,
+        "items": [],
+    }
+
+    try:
+        for index in range(1, runs + 1):
+            run_dir = batch_dir / f"run_{index:03d}"
+            os.environ["AGENT_JOB_DIR"] = str(run_dir)
+            stdout_buffer = io.StringIO()
+            stderr_buffer = io.StringIO()
+            print(f"=== run {index}/{runs}: {run_dir} ===")
+            item: dict[str, Any] = {"index": index, "run_dir": str(run_dir), "ok": False}
+            try:
+                with contextlib.redirect_stdout(_Tee(sys.stdout, stdout_buffer)), contextlib.redirect_stderr(_Tee(sys.stderr, stderr_buffer)):
+                    result = run_once(
+                        cfg_path,
+                        user_input,
+                        context_messages=context_messages,
+                        resume_messages=resume_messages,
+                    )
+                actual_run_dir = _result_run_dir(result, run_dir)
+                actual_run_dir.mkdir(parents=True, exist_ok=True)
+                result_path = actual_run_dir / "result.json"
+                result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
+                item.update({
+                    "ok": True,
+                    "run_dir": str(actual_run_dir),
+                    "result_path": str(result_path),
+                    "final": _final_message(result),
+                    "agentdojo": result.get("harness", {}).get("agentdojo") if isinstance(result.get("harness"), dict) else None,
+                })
+                messages = result.get("messages", [])
+                if messages:
+                    final_text = str(messages[-1]["content"])
+                    stdout_buffer.write(final_text + "\n")
+                    print(final_text)
+            except Exception as exc:
+                run_dir.mkdir(parents=True, exist_ok=True)
+                error_path = run_dir / "error.json"
+                error = {"error": str(exc), "type": type(exc).__name__}
+                error_path.write_text(json.dumps(error, ensure_ascii=False, indent=2), encoding="utf-8")
+                item.update({"error": str(exc), "error_path": str(error_path)})
+                stderr_buffer.write(f"Run {index} failed: {exc}\n")
+                print(f"Run {index} failed: {exc}", file=sys.stderr)
+            finally:
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "stdout.log").write_text(stdout_buffer.getvalue(), encoding="utf-8")
+                (run_dir / "stderr.log").write_text(stderr_buffer.getvalue(), encoding="utf-8")
+                summary["items"].append(item)
+                summary["completed_at"] = time.time()
+                (batch_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
+    finally:
+        if previous_job_dir is None:
+            os.environ.pop("AGENT_JOB_DIR", None)
+        else:
+            os.environ["AGENT_JOB_DIR"] = previous_job_dir
+
+    print(f"Batch summary: {batch_dir / 'summary.json'}")
 
 
 def main() -> None:
@@ -292,6 +431,8 @@ def main() -> None:
     parser.add_argument("--context-file", help="JSON file containing context messages or an object with a messages field")
     parser.add_argument("--resume-from", help="JSON trace/context file to resume from; uses its messages field as prior conversation")
     parser.add_argument("--run-payload", help="internal JSON payload used when the harness is launched in a container")
+    parser.add_argument("--runs", type=int, default=1, help="number of times to run the same config/input non-interactively")
+    parser.add_argument("--runs-dir", help="directory for a multi-run batch; defaults to jobs/<timestamp>_<agent>_batch")
     args = parser.parse_args()
 
     try:
@@ -320,6 +461,19 @@ def main() -> None:
 
     context_messages = _load_context_messages(args.context_file) if args.context_file else None
     resume_messages = _load_context_messages(args.resume_from) if args.resume_from else None
+
+    if args.runs < 1:
+        raise ValueError("--runs must be >= 1")
+    if args.runs > 1:
+        _run_repeated(
+            cfg_path=args.config,
+            runs=args.runs,
+            runs_dir=args.runs_dir,
+            user_input=args.input,
+            context_messages=context_messages,
+            resume_messages=resume_messages,
+        )
+        return
 
     if args.input is not None:
         result = run_once(args.config, args.input, context_messages=context_messages, resume_messages=resume_messages)
