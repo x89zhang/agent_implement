@@ -286,8 +286,10 @@ def tool_node(
         start = time.time()
         name, payload = call
         state.pop("_last_aegis_decision", None)
+        state.pop("_last_pro2guard_decision", None)
         decision = middleware.before_tool(state, name, payload)
         aegis_decision = state.pop("_last_aegis_decision", None)
+        pro2guard_decision = state.pop("_last_pro2guard_decision", None)
         if not decision.allowed:
             result = f"Tool execution blocked by middleware: {decision.reason}"
         elif name not in tools:
@@ -321,6 +323,7 @@ def tool_node(
                 "output": {"result": result},
                 "usage": usage,
                 "aegis": aegis_decision,
+                "pro2guard": pro2guard_decision,
             }
         )
         tool_message = {
@@ -335,6 +338,7 @@ def tool_node(
                 "timestamp": end,
                 "usage": usage,
                 "aegis": aegis_decision,
+                "pro2guard": pro2guard_decision,
             },
         }
         _append_trace_message(state, tool_message)

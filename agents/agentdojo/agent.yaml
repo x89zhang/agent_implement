@@ -26,6 +26,13 @@ monitoring:
   output_path: trace_agentdojo.json
   print_trace: true
 aegis:
-  enabled: true
+  enabled: false
   mode: monitor
   risk_threshold: HIGH
+pro2guard:
+  enabled: false
+  mode: block
+  model_path: models/pro2guard/dtmc.json
+  threshold: 0.1
+  unsafe_states:
+    - unsafe

@@ -437,10 +437,13 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
         state = get_state()
         if isinstance(state, dict):
             state.pop("_last_aegis_decision", None)
+            state.pop("_last_pro2guard_decision", None)
         decision = middleware.before_tool(state if isinstance(state, dict) else {}, name, payload)
         aegis_decision = None
+        pro2guard_decision = None
         if isinstance(state, dict):
             aegis_decision = state.pop("_last_aegis_decision", None)
+            pro2guard_decision = state.pop("_last_pro2guard_decision", None)
 
         if cfg.monitoring.print_trace:
             print("\n[TOOL INPUT]", flush=True)
@@ -454,6 +457,7 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
                     "tool": name,
                     "tool_input": rendered_input,
                     "aegis": aegis_decision,
+                    "pro2guard": pro2guard_decision,
                     "blocked": True,
                 })
             if cfg.monitoring.print_trace:
@@ -470,6 +474,7 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
                     "tool": name,
                     "tool_input": rendered_input,
                     "aegis": aegis_decision,
+                    "pro2guard": pro2guard_decision,
                     "blocked": False,
                 })
             raise
@@ -480,6 +485,7 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
                 "tool": name,
                 "tool_input": rendered_input,
                 "aegis": aegis_decision,
+                "pro2guard": pro2guard_decision,
                 "blocked": False,
             })
         if cfg.monitoring.print_trace:
@@ -721,6 +727,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
         for idx, step in enumerate(steps):
             if idx < len(guard_events):
                 step["aegis"] = guard_events[idx].get("aegis")
+                step["pro2guard"] = guard_events[idx].get("pro2guard")
                 step["blocked"] = bool(guard_events[idx].get("blocked"))
         active_state = None
         for step in steps:
@@ -730,6 +737,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             thought_text = step.get("thought")
             tool_usage = step.get("usage", {})
             aegis_decision = step.get("aegis")
+            pro2guard_decision = step.get("pro2guard")
             blocked = bool(step.get("blocked"))
             _append_trace_message(
                 state,
@@ -763,6 +771,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                         ],
                         "usage": tool_usage,
                         "aegis": aegis_decision,
+                        "pro2guard": pro2guard_decision,
                     },
                 },
             )
@@ -780,6 +789,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                         "timestamp": time.time(),
                         "usage": tool_usage,
                         "aegis": aegis_decision,
+                        "pro2guard": pro2guard_decision,
                     },
                 },
             )

@@ -6,10 +6,12 @@ agentdojo:
   # Benign-only example: case: user_task_3
   # Attack example: case: user_task_3_injection_3
   case: user_task_15_injection_5
-  # By default, the selected injection task uses AgentDojo's built-in injection vectors.
-  # To override the injected text manually, add custom_injections here, for example:
+  # By default, the selected injection task goal is placed into every built-in injection vector.
+  # To keep those positions but override only the injected text, set:
+  # custom_injection_text: "Custom attack text"
+  # For per-vector overrides, use custom_injections:
   # custom_injections:
-  #   injection_web_0: "Custom attack text"
+  #   injection_web_0: "Custom web-only attack text"
 
 security:
   # Set false to remove the project-level warning about untrusted tool outputs.

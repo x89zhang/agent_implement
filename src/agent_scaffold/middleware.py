@@ -112,4 +112,8 @@ def build_middleware_manager(cfg: AppConfig) -> MiddlewareManager:
         middlewares.append(AegisGuardMiddleware(cfg))
     if cfg.middleware.enabled:
         middlewares.append(HarnessMiddleware(cfg))
+    if cfg.pro2guard.enabled:
+        from .pro2guard import Pro2GuardMiddleware
+
+        middlewares.append(Pro2GuardMiddleware(cfg))
     return MiddlewareManager(middlewares)

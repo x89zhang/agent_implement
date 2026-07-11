@@ -88,6 +88,21 @@ class AegisConfig:
 
 
 @dataclass
+class Pro2GuardConfig:
+    enabled: bool = False
+    mode: str = "block"
+    threshold: float = 0.1
+    model_path: str = ""
+    dtmc_path: str = ""
+    prism_bin: str = "prism"
+    abstraction: str = ""
+    unsafe_states: list[str] = field(default_factory=list)
+    horizon: int = 20
+    timeout_seconds: int = 10
+    fail_closed: bool = False
+
+
+@dataclass
 class AgentDojoConfig:
     enabled: bool = False
     suite: str = "workspace"
@@ -96,6 +111,7 @@ class AgentDojoConfig:
     user_task: str = "user_task_0"
     injection_task: str = ""
     trusted_tool_output_prompt: bool = True
+    custom_injection_text: str = ""
     injections: dict[str, str] = field(default_factory=dict)
 
 
@@ -132,6 +148,7 @@ class AppConfig:
     middleware: MiddlewareConfig = field(default_factory=MiddlewareConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     aegis: AegisConfig = field(default_factory=AegisConfig)
+    pro2guard: Pro2GuardConfig = field(default_factory=Pro2GuardConfig)
     agentdojo: AgentDojoConfig = field(default_factory=AgentDojoConfig)
     container: ContainerConfig = field(default_factory=ContainerConfig)
     trip: dict[str, Any] = field(default_factory=dict)
@@ -374,6 +391,7 @@ def load_config(path: str | Path) -> AppConfig:
             user_task=raw_user_task,
             injection_task=raw_injection_task,
             trusted_tool_output_prompt=bool(agentdojo_raw.get("trusted_tool_output_prompt", True)),
+            custom_injection_text=str(agentdojo_raw.get("custom_injection_text", "") or ""),
             injections={
                 str(key): str(value)
                 for key, value in (
@@ -484,6 +502,28 @@ def load_config(path: str | Path) -> AppConfig:
     else:
         aegis = AegisConfig()
 
+    pro2guard_raw = raw.get("pro2guard", {}) or {}
+    if isinstance(pro2guard_raw, bool):
+        pro2guard = Pro2GuardConfig(enabled=pro2guard_raw)
+    elif isinstance(pro2guard_raw, dict):
+        pro2guard = Pro2GuardConfig(
+            enabled=bool(pro2guard_raw.get("enabled", False)),
+            mode=str(pro2guard_raw.get("mode", "block")).lower(),
+            threshold=float(pro2guard_raw.get("threshold", 0.1)),
+            model_path=str(pro2guard_raw.get("model_path", "")),
+            dtmc_path=str(pro2guard_raw.get("dtmc_path", "")),
+            prism_bin=str(pro2guard_raw.get("prism_bin", "prism")),
+            abstraction=str(pro2guard_raw.get("abstraction", "")),
+            unsafe_states=[str(item) for item in (pro2guard_raw.get("unsafe_states", []) or [])],
+            horizon=int(pro2guard_raw.get("horizon", 20)),
+            timeout_seconds=int(pro2guard_raw.get("timeout_seconds", 10)),
+            fail_closed=bool(pro2guard_raw.get("fail_closed", False)),
+        )
+        if pro2guard.mode not in {"block", "warn", "monitor"}:
+            raise ValueError("pro2guard.mode must be one of: block, warn, monitor")
+    else:
+        pro2guard = Pro2GuardConfig()
+
     container_raw = raw.get("container", {}) or {}
     if isinstance(container_raw, bool):
         container = ContainerConfig(enabled=container_raw)
@@ -527,6 +567,7 @@ def load_config(path: str | Path) -> AppConfig:
         middleware=middleware,
         security=security,
         aegis=aegis,
+        pro2guard=pro2guard,
         agentdojo=agentdojo,
         container=container,
         trip=trip,

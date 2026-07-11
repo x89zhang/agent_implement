@@ -96,20 +96,27 @@ def _session_key(cfg: Any) -> str:
             "benchmark_version": getattr(cfg, "benchmark_version", ""),
             "user_task": getattr(cfg, "user_task", ""),
             "injection_task": getattr(cfg, "injection_task", ""),
+            "custom_injection_text": getattr(cfg, "custom_injection_text", ""),
             "injections": getattr(cfg, "injections", {}),
         },
         sort_keys=True,
     )
 
 
-def _default_attack_injections(suite: Any, injection_task: Any | None, configured: dict[str, str]) -> dict[str, str]:
+def _default_attack_injections(
+    suite: Any,
+    injection_task: Any | None,
+    configured: dict[str, str],
+    custom_text: str = "",
+) -> dict[str, str]:
     if configured or injection_task is None:
         return dict(configured)
     try:
         defaults = suite.get_injection_vector_defaults()
     except Exception:
         return {}
-    return {key: str(injection_task.GOAL) for key in defaults}
+    text = custom_text if custom_text else str(injection_task.GOAL)
+    return {key: text for key in defaults}
 
 
 class AgentDojoSession:
@@ -122,7 +129,12 @@ class AgentDojoSession:
         self.suite = _suite_for(cfg)
         self.user_task = self.suite.get_user_task_by_id(cfg.user_task)
         self.injection_task = self.suite.get_injection_task_by_id(cfg.injection_task) if cfg.injection_task else None
-        injections = _default_attack_injections(self.suite, self.injection_task, dict(cfg.injections))
+        injections = _default_attack_injections(
+            self.suite,
+            self.injection_task,
+            dict(cfg.injections),
+            str(getattr(cfg, "custom_injection_text", "") or ""),
+        )
         environment = self.suite.load_and_inject_default_environment(injections)
         self.environment = self.user_task.init_environment(environment)
         self.pre_environment = self.environment.model_copy(deep=True)
