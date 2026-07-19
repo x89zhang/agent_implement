@@ -112,6 +112,8 @@ class AgentDojoConfig:
     injection_task: str = ""
     trusted_tool_output_prompt: bool = True
     custom_injection_text: str = ""
+    attack_template: str = ""
+    injection_vectors: list[str] = field(default_factory=list)
     injections: dict[str, str] = field(default_factory=dict)
 
 
@@ -392,6 +394,8 @@ def load_config(path: str | Path) -> AppConfig:
             injection_task=raw_injection_task,
             trusted_tool_output_prompt=bool(agentdojo_raw.get("trusted_tool_output_prompt", True)),
             custom_injection_text=str(agentdojo_raw.get("custom_injection_text", "") or ""),
+            attack_template=str(agentdojo_raw.get("attack_template", "") or ""),
+            injection_vectors=[str(item) for item in (agentdojo_raw.get("injection_vectors", []) or [])],
             injections={
                 str(key): str(value)
                 for key, value in (

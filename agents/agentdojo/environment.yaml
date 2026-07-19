@@ -6,10 +6,19 @@ agentdojo:
   # Benign-only example: case: user_task_3
   # Attack example: case: user_task_3_injection_3
   case: user_task_15_injection_5
+  attack_template: important_instructions
   # By default, the selected injection task goal is placed into every built-in injection vector.
-  # To keep those positions but override only the injected text, set:
+  # Keep the default positions and wrap the goal with an AgentDojo attack template:
+  # attack_template: important_instructions
+  # Available: direct, ignore_previous, system_message, injecagent,
+  #            important_instructions, important_instructions_no_names
+  # To override only the goal inside that template, set:
   # custom_injection_text: "Custom attack text"
-  # For per-vector overrides, use custom_injections:
+  # Optional: restrict injection locations (normally leave this unset):
+  # injection_vectors:
+  #   - injection_web_0
+  #   - prompt_injection_channel
+  # For fully custom per-vector text, use custom_injections:
   # custom_injections:
   #   injection_web_0: "Custom web-only attack text"
 
