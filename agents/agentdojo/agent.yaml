@@ -30,9 +30,9 @@ aegis:
   mode: monitor
   risk_threshold: HIGH
 pro2guard:
-  enabled: false
+  enabled: true
   mode: block
   model_path: models/pro2guard/dtmc.json
   threshold: 0.1
   unsafe_states:
-    - unsafe
+    - ATTACK_SUCCESS

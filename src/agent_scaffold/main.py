@@ -18,6 +18,7 @@ if __package__ is None or __package__ == "":
 try:
     from dataclasses import asdict as _asdict
     from .config import load_config
+    from .agentsight import AgentSightObserver
     from .graph import build_graph
     from .nodes import build_initial_messages, _flush_trace_snapshot
     from .planner import initialize_plan
@@ -28,6 +29,7 @@ try:
 except ImportError:  # Fallback when executed as a script
     from dataclasses import asdict as _asdict
     from agent_scaffold.config import load_config
+    from agent_scaffold.agentsight import AgentSightObserver
     from agent_scaffold.graph import build_graph
     from agent_scaffold.nodes import build_initial_messages, _flush_trace_snapshot
     from agent_scaffold.planner import initialize_plan
@@ -232,6 +234,10 @@ def run_once(
         "plan": plan,
         "tool_errors": [],
         "harness": {
+            "agentsight": {
+                "enabled": bool(cfg.agentsight.enabled),
+                "status": "managed_by_host" if os.environ.get("AGENTSIGHT_MANAGED") == "1" else "disabled",
+            },
             "skills": [skill.to_trace() for skill in enabled_skills],
             "skill_warnings": skill_tool_warnings,
             "planner": {
@@ -256,6 +262,14 @@ def run_once(
             "input": user_input,
         },
     }
+    observer = None
+    if cfg.agentsight.enabled and os.environ.get("AGENTSIGHT_MANAGED") != "1":
+        observer = AgentSightObserver(
+            cfg.agentsight,
+            run_dir,
+            target_pid=os.getpid(),
+        )
+        state["harness"]["agentsight"] = observer.start()
     _flush_trace_snapshot(state)
     prev_cwd = Path.cwd()
     prev_cfg_env = os.environ.get("AGENT_CONFIG_PATH")
@@ -276,6 +290,9 @@ def run_once(
         else:
             os.environ["AGENT_WORKSPACE_ROOT"] = prev_workspace_env
         os.chdir(prev_cwd)
+        if observer is not None:
+            state["harness"]["agentsight"] = observer.stop()
+    result.setdefault("harness", {})["agentsight"] = state["harness"]["agentsight"]
     run_end = time.time()
     recovered_output = recover_written_file(result, run_dir, task)
     if recovered_output is not None:
@@ -434,6 +451,14 @@ def main() -> None:
     parser.add_argument("--runs", type=int, default=1, help="number of times to run the same config/input non-interactively")
     parser.add_argument("--runs-dir", help="directory for a multi-run batch; defaults to jobs/<timestamp>_<agent>_batch")
     args = parser.parse_args()
+
+    start_file = os.environ.get("AGENTSIGHT_START_FILE")
+    if start_file:
+        deadline = time.monotonic() + float(os.environ.get("AGENTSIGHT_START_TIMEOUT", "60"))
+        while not Path(start_file).exists():
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"Timed out waiting for AgentSight start gate: {start_file}")
+            time.sleep(0.05)
 
     try:
         src_path = str(Path(__file__).resolve().parent.parent)

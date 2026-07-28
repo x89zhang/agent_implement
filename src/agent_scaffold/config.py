@@ -103,6 +103,23 @@ class Pro2GuardConfig:
 
 
 @dataclass
+class AgentSightConfig:
+    enabled: bool = False
+    binary: str = "agentsight"
+    capture: str = "full"
+    db_path: str = "agentsight.db"
+    snapshot_path: str = "agentsight_snapshot.json"
+    log_path: str = "agentsight.log"
+    required: bool = False
+    privilege: str = "auto"
+    web_server: bool = False
+    server_port: int = 7395
+    startup_timeout_seconds: float = 10.0
+    warmup_seconds: float = 1.0
+    shutdown_timeout_seconds: float = 10.0
+
+
+@dataclass
 class AgentDojoConfig:
     enabled: bool = False
     suite: str = "workspace"
@@ -151,6 +168,7 @@ class AppConfig:
     security: SecurityConfig = field(default_factory=SecurityConfig)
     aegis: AegisConfig = field(default_factory=AegisConfig)
     pro2guard: Pro2GuardConfig = field(default_factory=Pro2GuardConfig)
+    agentsight: AgentSightConfig = field(default_factory=AgentSightConfig)
     agentdojo: AgentDojoConfig = field(default_factory=AgentDojoConfig)
     container: ContainerConfig = field(default_factory=ContainerConfig)
     trip: dict[str, Any] = field(default_factory=dict)
@@ -528,6 +546,50 @@ def load_config(path: str | Path) -> AppConfig:
     else:
         pro2guard = Pro2GuardConfig()
 
+    agentsight_raw = raw.get("agentsight", {}) or {}
+    if isinstance(agentsight_raw, bool):
+        agentsight = AgentSightConfig(enabled=agentsight_raw)
+    elif isinstance(agentsight_raw, dict):
+        agentsight = AgentSightConfig(
+            enabled=bool(agentsight_raw.get("enabled", False)),
+            binary=str(agentsight_raw.get("binary", "agentsight")),
+            capture=str(agentsight_raw.get("capture", "full")).lower(),
+            db_path=str(agentsight_raw.get("db_path", "agentsight.db")),
+            snapshot_path=str(agentsight_raw.get("snapshot_path", "agentsight_snapshot.json")),
+            log_path=str(agentsight_raw.get("log_path", "agentsight.log")),
+            required=bool(agentsight_raw.get("required", False)),
+            privilege=str(agentsight_raw.get("privilege", "auto")).lower(),
+            web_server=bool(agentsight_raw.get("web_server", False)),
+            server_port=int(agentsight_raw.get("server_port", 7395)),
+            startup_timeout_seconds=float(agentsight_raw.get("startup_timeout_seconds", 10.0)),
+            warmup_seconds=float(agentsight_raw.get("warmup_seconds", 1.0)),
+            shutdown_timeout_seconds=float(agentsight_raw.get("shutdown_timeout_seconds", 10.0)),
+        )
+        if agentsight.capture not in {"system", "full"}:
+            raise ValueError("agentsight.capture must be one of: system, full")
+        if agentsight.privilege not in {"auto", "sudo", "none"}:
+            raise ValueError("agentsight.privilege must be one of: auto, sudo, none")
+        if agentsight.server_port < 1 or agentsight.server_port > 65535:
+            raise ValueError("agentsight.server_port must be between 1 and 65535")
+        if agentsight.startup_timeout_seconds <= 0:
+            raise ValueError("agentsight.startup_timeout_seconds must be greater than zero")
+        if agentsight.warmup_seconds < 0:
+            raise ValueError("agentsight.warmup_seconds must be non-negative")
+        if agentsight.warmup_seconds > agentsight.startup_timeout_seconds:
+            raise ValueError("agentsight.warmup_seconds must not exceed startup_timeout_seconds")
+        if agentsight.shutdown_timeout_seconds <= 0:
+            raise ValueError("agentsight.shutdown_timeout_seconds must be greater than zero")
+        for field_name in ("db_path", "snapshot_path", "log_path"):
+            value = str(getattr(agentsight, field_name)).strip()
+            if not value:
+                raise ValueError(f"agentsight.{field_name} must not be empty")
+            if Path(value).is_absolute():
+                raise ValueError(f"agentsight.{field_name} must be relative to the job directory")
+            if ".." in Path(value).parts:
+                raise ValueError(f"agentsight.{field_name} must stay inside the job directory")
+    else:
+        agentsight = AgentSightConfig()
+
     container_raw = raw.get("container", {}) or {}
     if isinstance(container_raw, bool):
         container = ContainerConfig(enabled=container_raw)
@@ -572,6 +634,7 @@ def load_config(path: str | Path) -> AppConfig:
         security=security,
         aegis=aegis,
         pro2guard=pro2guard,
+        agentsight=agentsight,
         agentdojo=agentdojo,
         container=container,
         trip=trip,

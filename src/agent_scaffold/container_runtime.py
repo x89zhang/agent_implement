@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
+
+from .agentsight import AgentSightObserver
 
 
 def should_run_in_container(cfg: Any) -> bool:
@@ -64,6 +67,54 @@ def _ensure_image(cfg: Any, workspace_root: Path) -> None:
         )
 
 
+def _container_name(run_dir: Path) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9_.-]+", "-", run_dir.name).strip("-._").lower()
+    slug = slug or "run"
+    return f"agent-scaffold-{slug}-{os.getpid()}"[:63].rstrip("-._")
+
+
+def _container_pid(name: str, workspace_root: Path) -> int:
+    inspected = _run_checked(
+        ["docker", "inspect", "--format", "{{.State.Pid}}", name],
+        workspace_root,
+    )
+    if inspected.returncode != 0:
+        raise RuntimeError(f"Failed to inspect Agent container {name}: {inspected.stderr.strip()}")
+    try:
+        pid = int(inspected.stdout.strip())
+    except ValueError as exc:
+        raise RuntimeError(f"Docker returned an invalid PID for {name}: {inspected.stdout!r}") from exc
+    if pid <= 0:
+        raise RuntimeError(f"Agent container {name} is not running")
+    return pid
+
+
+def _update_container_trace_agentsight(
+    result: dict[str, Any],
+    agentsight_result: dict[str, Any],
+    workspace_root: Path,
+    container_workdir: str,
+) -> None:
+    persist = result.get("_trace_persist")
+    if not isinstance(persist, dict) or not persist.get("output_path"):
+        return
+    container_path = Path(str(persist["output_path"]))
+    try:
+        relative = container_path.relative_to(Path(container_workdir))
+    except ValueError:
+        return
+    host_path = workspace_root.resolve() / relative
+    if not host_path.exists():
+        return
+    payload = json.loads(host_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        return
+    payload.setdefault("harness", {})["agentsight"] = agentsight_result
+    temporary = host_path.with_name(f"{host_path.name}.tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.replace(host_path)
+
+
 def run_once_in_container(
     cfg: Any,
     cfg_path: str,
@@ -83,6 +134,8 @@ def run_once_in_container(
     result_path = run_dir / "_container_result.json"
     stdout_path = run_dir / "container_stdout.log"
     stderr_path = run_dir / "container_stderr.log"
+    gate_path = run_dir / "_agentsight_start"
+    gate_in_container = f"{run_dir_in_container}/_agentsight_start"
     payload_path.write_text(
         json.dumps(
             {
@@ -97,9 +150,8 @@ def run_once_in_container(
         encoding="utf-8",
     )
 
-    cmd = ["docker", "run"]
-    if bool(cfg.container.remove):
-        cmd.append("--rm")
+    name = _container_name(run_dir)
+    cmd = ["docker", "run", "-d", "--name", name]
     network = str(cfg.container.network or "").strip()
     if network:
         cmd.extend(["--network", network])
@@ -107,10 +159,15 @@ def run_once_in_container(
     cmd.extend(["-e", "PYTHONPATH=src", "-e", "AGENT_CONTAINERIZED=1"])
     cmd.extend(["-e", f"AGENT_JOB_DIR={run_dir_in_container}"])
     cmd.extend(["-e", f"AGENT_RESULT_PATH={run_dir_in_container}/_container_result.json"])
-    for name in getattr(cfg.container, "env", []) or []:
-        value = os.environ.get(str(name))
+    if cfg.agentsight.enabled:
+        cmd.extend(["-e", "AGENTSIGHT_MANAGED=1"])
+        cmd.extend(["-e", f"AGENTSIGHT_START_FILE={gate_in_container}"])
+        gate_timeout = cfg.agentsight.startup_timeout_seconds + cfg.agentsight.warmup_seconds + 30.0
+        cmd.extend(["-e", f"AGENTSIGHT_START_TIMEOUT={gate_timeout}"])
+    for env_name in getattr(cfg.container, "env", []) or []:
+        value = os.environ.get(str(env_name))
         if value is not None:
-            cmd.extend(["-e", f"{name}={value}"])
+            cmd.extend(["-e", f"{env_name}={value}"])
     cmd.append(str(cfg.container.image))
     cmd.extend(
         [
@@ -123,26 +180,87 @@ def run_once_in_container(
         ]
     )
 
-    completed = _run_checked(cmd, workspace_root)
-    stdout_path.write_text(completed.stdout, encoding="utf-8")
-    stderr_path.write_text(completed.stderr, encoding="utf-8")
+    observer: AgentSightObserver | None = None
+    observer_stopped = False
+    container_started = False
+    container_completed = False
+    try:
+        started = _run_checked(cmd, workspace_root)
+        if started.returncode != 0:
+            raise RuntimeError(
+                f"Failed to start agent container {name}.\n"
+                f"Command: {' '.join(cmd)}\nSTDOUT:\n{started.stdout}\nSTDERR:\n{started.stderr}"
+            )
+        container_started = True
 
-    if completed.returncode != 0:
-        error = {
-            "error": "container_run_failed",
-            "returncode": completed.returncode,
-            "command": cmd,
-            "stdout_path": str(stdout_path),
-            "stderr_path": str(stderr_path),
-            "stdout_tail": completed.stdout[-4000:],
-            "stderr_tail": completed.stderr[-4000:],
-        }
-        (run_dir / "container_error.json").write_text(json.dumps(error, ensure_ascii=False, indent=2), encoding="utf-8")
-        raise RuntimeError(
-            f"Container run failed with exit code {completed.returncode}. "
-            f"See {stderr_path} and {stdout_path}."
-        )
+        if cfg.agentsight.enabled:
+            observer = AgentSightObserver(
+                cfg.agentsight,
+                run_dir,
+                target_pid=_container_pid(name, workspace_root),
+                binary_path=f"docker://{name}",
+            )
+            observer.start()
+            gate_path.touch()
 
-    if not result_path.exists():
-        raise RuntimeError(f"Container completed but did not write result file: {result_path}")
-    return json.loads(result_path.read_text(encoding="utf-8"))
+        waited = _run_checked(["docker", "wait", name], workspace_root)
+        logs = _run_checked(["docker", "logs", name], workspace_root)
+        stdout_path.write_text(logs.stdout, encoding="utf-8")
+        stderr_path.write_text(logs.stderr, encoding="utf-8")
+
+        agentsight_result: dict[str, Any] | None = None
+        if observer is not None:
+            try:
+                agentsight_result = observer.stop()
+            finally:
+                observer_stopped = True
+
+        try:
+            container_returncode = int(waited.stdout.strip()) if waited.returncode == 0 else 1
+        except ValueError:
+            container_returncode = 1
+        if waited.returncode != 0 or container_returncode != 0:
+            error = {
+                "error": "container_run_failed",
+                "returncode": container_returncode,
+                "command": cmd,
+                "container_name": name,
+                "stdout_path": str(stdout_path),
+                "stderr_path": str(stderr_path),
+                "stdout_tail": logs.stdout[-4000:],
+                "stderr_tail": logs.stderr[-4000:],
+                "agentsight": agentsight_result,
+            }
+            (run_dir / "container_error.json").write_text(
+                json.dumps(error, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            raise RuntimeError(
+                f"Container failed with exit code {container_returncode}. "
+                f"See {stderr_path} and {stdout_path}."
+            )
+
+        if not result_path.exists():
+            raise RuntimeError(f"Container completed but did not write result file: {result_path}")
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        if agentsight_result is not None:
+            result.setdefault("harness", {})["agentsight"] = agentsight_result
+            _update_container_trace_agentsight(
+                result, agentsight_result, workspace_root, container_workdir
+            )
+            result_path.write_text(
+                json.dumps(result, ensure_ascii=False, indent=2, default=_json_default),
+                encoding="utf-8",
+            )
+        container_completed = True
+        return result
+    finally:
+        if cfg.agentsight.enabled and not gate_path.exists():
+            gate_path.touch()
+        if observer is not None and not observer_stopped:
+            try:
+                observer.stop()
+            except Exception:
+                if cfg.agentsight.required:
+                    raise
+        if container_started and (bool(cfg.container.remove) or not container_completed):
+            _run_checked(["docker", "rm", "-f", name], workspace_root)

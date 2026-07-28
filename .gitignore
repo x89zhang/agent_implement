@@ -4,6 +4,7 @@
 *.txt
 *.md
 !README.md
+!docs/agentsight.md
 paper/*
 legacy/*
 jobs/*

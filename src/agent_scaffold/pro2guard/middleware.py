@@ -17,9 +17,13 @@ class Pro2GuardMiddleware(Middleware):
         self.pg = cfg.pro2guard
         self.abstraction = _load_abstraction(self.pg.abstraction)
         self._json_model: JsonDTMC | None = None
+        self._init_error = ""
         model_path = _resolve_config_path(cfg, self.pg.model_path or self.pg.dtmc_path)
         if model_path and Path(model_path).suffix.lower() == ".json":
-            self._json_model = JsonDTMC(model_path)
+            if Path(model_path).exists():
+                self._json_model = JsonDTMC(model_path)
+            else:
+                self._init_error = f"model file not found: {model_path}"
         self._dtmc_path = _resolve_config_path(cfg, self.pg.dtmc_path)
 
     def before_model(self, state: dict[str, Any]) -> list[str]:
@@ -80,6 +84,8 @@ class Pro2GuardMiddleware(Middleware):
         )
 
     def _probability(self, encoded_state: str) -> tuple[float, str, str]:
+        if self._init_error:
+            raise RuntimeError(self._init_error)
         if self._json_model is not None:
             probability, matched_state = self._json_model.probability_to_unsafe(
                 encoded_state,
@@ -107,7 +113,13 @@ def _resolve_config_path(cfg: AppConfig, value: str) -> str:
     path = Path(value)
     if path.is_absolute():
         return str(path)
-    return str((Path(cfg.config_dir) / path).resolve())
+    config_relative = (Path(cfg.config_dir) / path).resolve()
+    if config_relative.exists():
+        return str(config_relative)
+    cwd_relative = (Path.cwd() / path).resolve()
+    if cwd_relative.exists():
+        return str(cwd_relative)
+    return str(config_relative)
 
 
 def _load_abstraction(import_path: str) -> Any:
