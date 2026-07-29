@@ -5,9 +5,9 @@ import contextlib
 import io
 import json
 import os
+import re
 import sys
 import time
-import re
 from pathlib import Path
 from typing import Any
 
@@ -17,26 +17,53 @@ if __package__ is None or __package__ == "":
 
 try:
     from dataclasses import asdict as _asdict
+
+    from .agentdojo_adapter import augment_task as augment_task_with_agentdojo_context
+    from .agentdojo_adapter import evaluate_last_session as evaluate_agentdojo_session
+    from .agentdojo_adapter import reset_session as reset_agentdojo_session
+    from .agentguard import close_agentguard_session
+    from .agentguard.scenario import compile_agentguard_scenario
+    from .agentsight import AgentSightObserver, wait_for_start_gate
     from .config import load_config
-    from .agentsight import AgentSightObserver
+    from .container_runtime import run_once_in_container, should_run_in_container
     from .graph import build_graph
-    from .nodes import build_initial_messages, _flush_trace_snapshot
+    from .nodes import _flush_trace_snapshot, build_initial_messages
     from .planner import initialize_plan
     from .skills import load_enabled_skills, validate_skill_tools
-    from .agentdojo_adapter import augment_task as augment_task_with_agentdojo_context, evaluate_last_session as evaluate_agentdojo_session, reset_session as reset_agentdojo_session
-    from .container_runtime import run_once_in_container, should_run_in_container
-    from .tools import augment_task_with_research_context, augment_task_with_trip_context, recover_written_file
+    from .tools import (
+        augment_task_with_research_context,
+        augment_task_with_trip_context,
+        recover_written_file,
+    )
 except ImportError:  # Fallback when executed as a script
     from dataclasses import asdict as _asdict
+
+    from agent_scaffold.agentdojo_adapter import (
+        augment_task as augment_task_with_agentdojo_context,
+    )
+    from agent_scaffold.agentdojo_adapter import (
+        evaluate_last_session as evaluate_agentdojo_session,
+    )
+    from agent_scaffold.agentdojo_adapter import (
+        reset_session as reset_agentdojo_session,
+    )
+    from agent_scaffold.agentguard import close_agentguard_session
+    from agent_scaffold.agentguard.scenario import compile_agentguard_scenario
+    from agent_scaffold.agentsight import AgentSightObserver, wait_for_start_gate
     from agent_scaffold.config import load_config
-    from agent_scaffold.agentsight import AgentSightObserver
+    from agent_scaffold.container_runtime import (
+        run_once_in_container,
+        should_run_in_container,
+    )
     from agent_scaffold.graph import build_graph
-    from agent_scaffold.nodes import build_initial_messages, _flush_trace_snapshot
+    from agent_scaffold.nodes import _flush_trace_snapshot, build_initial_messages
     from agent_scaffold.planner import initialize_plan
     from agent_scaffold.skills import load_enabled_skills, validate_skill_tools
-    from agent_scaffold.agentdojo_adapter import augment_task as augment_task_with_agentdojo_context, evaluate_last_session as evaluate_agentdojo_session, reset_session as reset_agentdojo_session
-    from agent_scaffold.container_runtime import run_once_in_container, should_run_in_container
-    from agent_scaffold.tools import augment_task_with_research_context, augment_task_with_trip_context, recover_written_file
+    from agent_scaffold.tools import (
+        augment_task_with_research_context,
+        augment_task_with_trip_context,
+        recover_written_file,
+    )
 
 
 def _slugify(value: str) -> str:
@@ -189,12 +216,17 @@ def run_once(
             run_dir=run_dir,
         )
 
-    graph = build_graph(cfg)
-
     reset_agentdojo_session(cfg.agentdojo)
     task = augment_task_with_trip_context(cfg.agent.task.strip(), cfg.trip)
     task = augment_task_with_research_context(task, cfg.research)
     task = augment_task_with_agentdojo_context(task, cfg.agentdojo)
+    agentguard_scenario = compile_agentguard_scenario(
+        cfg,
+        task,
+        run_dir,
+        user_input=user_input or "",
+    )
+    graph = build_graph(cfg)
     initial_messages = [{"role": "user", "content": task}] if task else []
     input_messages = (
         [{"role": "user", "content": user_input}] if user_input else []
@@ -223,13 +255,32 @@ def run_once(
         "messages": state_messages,
         "tool_call": None,
         "iterations": 0,
-        "trace": [],
+        "trace": (
+            [
+                {
+                    "step": "agentguard_scenario_compile",
+                    "timestamp": time.time(),
+                    "latency_ms": agentguard_scenario.duration_ms,
+                    "input": {"task": task, "tool_count": len(cfg.tools)},
+                    "output": agentguard_scenario.to_trace(),
+                    "usage": dict(agentguard_scenario.usage or {}),
+                }
+            ]
+            if agentguard_scenario.enabled
+            else []
+        ),
         "trace_messages": [dict(message) for message in state_messages],
         "trace_stats": {
-            "api_calls": 0,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
+            "api_calls": agentguard_scenario.attempts,
+            "prompt_tokens": int(
+                (agentguard_scenario.usage or {}).get("prompt_tokens", 0)
+            ),
+            "completion_tokens": int(
+                (agentguard_scenario.usage or {}).get("completion_tokens", 0)
+            ),
+            "total_tokens": int(
+                (agentguard_scenario.usage or {}).get("total_tokens", 0)
+            ),
         },
         "plan": plan,
         "tool_errors": [],
@@ -237,6 +288,14 @@ def run_once(
             "agentsight": {
                 "enabled": bool(cfg.agentsight.enabled),
                 "status": "managed_by_host" if os.environ.get("AGENTSIGHT_MANAGED") == "1" else "disabled",
+            },
+            "agentguard": {
+                "enabled": bool(cfg.agentguard.enabled),
+                "mode": cfg.agentguard.mode,
+                "status": "pending" if cfg.agentguard.enabled else "disabled",
+                "server_url": cfg.agentguard.server_url,
+                "policy": cfg.agentguard.policy,
+                "scenario_compiler": agentguard_scenario.to_trace(),
             },
             "skills": [skill.to_trace() for skill in enabled_skills],
             "skill_warnings": skill_tool_warnings,
@@ -274,6 +333,7 @@ def run_once(
     prev_cwd = Path.cwd()
     prev_cfg_env = os.environ.get("AGENT_CONFIG_PATH")
     prev_workspace_env = os.environ.get("AGENT_WORKSPACE_ROOT")
+    result: dict[str, Any] | None = None
     try:
         # Ensure generated files (including write_text_file outputs) go into run_dir.
         os.environ["AGENT_CONFIG_PATH"] = str(cfg_file)
@@ -281,6 +341,13 @@ def run_once(
         os.chdir(run_dir)
         result = graph.invoke(state)
     finally:
+        session_state = result if isinstance(result, dict) else state
+        agentguard_status = close_agentguard_session(session_state)
+        if session_state is not state:
+            state.pop("_agentguard_session", None)
+        if agentguard_status is not None:
+            session_state.setdefault("harness", {})["agentguard"] = agentguard_status
+            state.setdefault("harness", {})["agentguard"] = agentguard_status
         if prev_cfg_env is None:
             os.environ.pop("AGENT_CONFIG_PATH", None)
         else:
@@ -292,6 +359,8 @@ def run_once(
         os.chdir(prev_cwd)
         if observer is not None:
             state["harness"]["agentsight"] = observer.stop()
+    if result is None:
+        raise RuntimeError("agent graph returned no result")
     result.setdefault("harness", {})["agentsight"] = state["harness"]["agentsight"]
     run_end = time.time()
     recovered_output = recover_written_file(result, run_dir, task)
@@ -452,13 +521,7 @@ def main() -> None:
     parser.add_argument("--runs-dir", help="directory for a multi-run batch; defaults to jobs/<timestamp>_<agent>_batch")
     args = parser.parse_args()
 
-    start_file = os.environ.get("AGENTSIGHT_START_FILE")
-    if start_file:
-        deadline = time.monotonic() + float(os.environ.get("AGENTSIGHT_START_TIMEOUT", "60"))
-        while not Path(start_file).exists():
-            if time.monotonic() >= deadline:
-                raise TimeoutError(f"Timed out waiting for AgentSight start gate: {start_file}")
-            time.sleep(0.05)
+    wait_for_start_gate()
 
     try:
         src_path = str(Path(__file__).resolve().parent.parent)

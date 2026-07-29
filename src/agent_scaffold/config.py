@@ -25,6 +25,8 @@ class ToolConfig:
     name: str
     import_path: str
     description: str
+    capabilities: list[str] = field(default_factory=list)
+    labels: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -103,6 +105,45 @@ class Pro2GuardConfig:
 
 
 @dataclass
+class AgentGuardScenarioCompilerConfig:
+    enabled: bool = True
+    context_mode: str = "full"
+    max_attempts: int = 2
+    provider: str = ""
+    model: str = ""
+    temperature: float | None = None
+    base_url: str = ""
+    api_key: str = ""
+    request_timeout: int | None = None
+
+
+@dataclass
+class AgentGuardConfig:
+    enabled: bool = False
+    mode: str = "block"
+    policy: str = ""
+    server_url: str = ""
+    api_key: str = ""
+    plugin_config: str = ""
+    environment: str = ""
+    user_id: str = ""
+    role: str = "default"
+    trust_level: int = 1
+    sandbox: str = "local"
+    sandbox_profile: dict[str, Any] | None = None
+    audit_path: str = ""
+    max_steps: int = 12
+    max_tool_calls: int = 24
+    window_size: int = 8
+    remote_timeout_seconds: float = 5.0
+    remote_retries: int = 2
+    fail_closed: bool = True
+    scenario_compiler: AgentGuardScenarioCompilerConfig = field(
+        default_factory=AgentGuardScenarioCompilerConfig
+    )
+
+
+@dataclass
 class AgentSightConfig:
     enabled: bool = False
     binary: str = "agentsight"
@@ -148,6 +189,8 @@ class ContainerConfig:
         default_factory=lambda: [
             "OPENAI_API_KEY",
             "ANTHROPIC_API_KEY",
+            "AGENTGUARD_API_KEY",
+            "AGENTGUARD_SERVER_URL",
             "HTTP_PROXY",
             "HTTPS_PROXY",
             "NO_PROXY",
@@ -168,6 +211,7 @@ class AppConfig:
     security: SecurityConfig = field(default_factory=SecurityConfig)
     aegis: AegisConfig = field(default_factory=AegisConfig)
     pro2guard: Pro2GuardConfig = field(default_factory=Pro2GuardConfig)
+    agentguard: AgentGuardConfig = field(default_factory=AgentGuardConfig)
     agentsight: AgentSightConfig = field(default_factory=AgentSightConfig)
     agentdojo: AgentDojoConfig = field(default_factory=AgentDojoConfig)
     container: ContainerConfig = field(default_factory=ContainerConfig)
@@ -376,6 +420,8 @@ def load_config(path: str | Path) -> AppConfig:
                 name=str(_require(item, "name")),
                 import_path=str(_require(item, "import")),
                 description=str(item.get("description", "")),
+                capabilities=[str(value) for value in (item.get("capabilities", []) or [])],
+                labels={str(key): value for key, value in (item.get("labels", {}) or {}).items()},
             )
         )
 
@@ -546,6 +592,86 @@ def load_config(path: str | Path) -> AppConfig:
     else:
         pro2guard = Pro2GuardConfig()
 
+    agentguard_raw = raw.get("agentguard", {}) or {}
+    if isinstance(agentguard_raw, bool):
+        agentguard = AgentGuardConfig(enabled=agentguard_raw)
+    elif isinstance(agentguard_raw, dict):
+        sandbox_profile_raw = agentguard_raw.get("sandbox_profile")
+        if sandbox_profile_raw is not None and not isinstance(sandbox_profile_raw, dict):
+            raise ValueError("agentguard.sandbox_profile must be a mapping or null")
+        scenario_raw = agentguard_raw.get("scenario_compiler", True)
+        if isinstance(scenario_raw, bool):
+            scenario_compiler = AgentGuardScenarioCompilerConfig(enabled=scenario_raw)
+        elif isinstance(scenario_raw, dict):
+            scenario_llm_raw = scenario_raw.get("llm", {}) or {}
+            if not isinstance(scenario_llm_raw, dict):
+                raise TypeError("agentguard.scenario_compiler.llm must be a mapping")
+            request_timeout_raw = scenario_llm_raw.get("request_timeout")
+            scenario_compiler = AgentGuardScenarioCompilerConfig(
+                enabled=bool(scenario_raw.get("enabled", True)),
+                context_mode=str(
+                    scenario_raw.get("context_mode", "full")
+                ).lower(),
+                max_attempts=int(scenario_raw.get("max_attempts", 2)),
+                provider=str(scenario_llm_raw.get("provider", "")),
+                model=str(scenario_llm_raw.get("model", "")),
+                temperature=(
+                    float(scenario_llm_raw["temperature"])
+                    if scenario_llm_raw.get("temperature") is not None
+                    else None
+                ),
+                base_url=str(scenario_llm_raw.get("base_url", "")),
+                api_key=str(scenario_llm_raw.get("api_key", "")),
+                request_timeout=(
+                    int(request_timeout_raw)
+                    if request_timeout_raw is not None
+                    else None
+                ),
+            )
+        else:
+            raise TypeError(
+                "agentguard.scenario_compiler must be a boolean or mapping"
+            )
+        if scenario_compiler.max_attempts < 1:
+            raise ValueError(
+                "agentguard.scenario_compiler.max_attempts must be positive"
+            )
+        if scenario_compiler.context_mode not in {"full", "benign_only"}:
+            raise ValueError(
+                "agentguard.scenario_compiler.context_mode must be one of: "
+                "full, benign_only"
+            )
+        agentguard = AgentGuardConfig(
+            enabled=bool(agentguard_raw.get("enabled", False)),
+            mode=str(agentguard_raw.get("mode", "block")).lower(),
+            policy=str(agentguard_raw.get("policy", "")),
+            server_url=str(agentguard_raw.get("server_url", agentguard_raw.get("remote_url", os.environ.get("AGENTGUARD_SERVER_URL", "")))),
+            api_key=str(agentguard_raw.get("api_key", os.environ.get("AGENTGUARD_API_KEY", ""))),
+            plugin_config=str(agentguard_raw.get("plugin_config", "")),
+            environment=str(agentguard_raw.get("environment", "")),
+            user_id=str(agentguard_raw.get("user_id", "")),
+            role=str(agentguard_raw.get("role", "default")),
+            trust_level=int(agentguard_raw.get("trust_level", 1)),
+            sandbox=str(agentguard_raw.get("sandbox", "local")),
+            sandbox_profile=dict(sandbox_profile_raw) if isinstance(sandbox_profile_raw, dict) else None,
+            audit_path=str(agentguard_raw.get("audit_path", "")),
+            max_steps=int(agentguard_raw.get("max_steps", 12)),
+            max_tool_calls=int(agentguard_raw.get("max_tool_calls", 24)),
+            window_size=int(agentguard_raw.get("window_size", 8)),
+            remote_timeout_seconds=float(agentguard_raw.get("remote_timeout_seconds", 5.0)),
+            remote_retries=int(agentguard_raw.get("remote_retries", 2)),
+            fail_closed=bool(agentguard_raw.get("fail_closed", True)),
+            scenario_compiler=scenario_compiler,
+        )
+        if agentguard.mode not in {"block", "warn", "monitor"}:
+            raise ValueError("agentguard.mode must be one of: block, warn, monitor")
+        if agentguard.max_steps < 1 or agentguard.max_tool_calls < 1 or agentguard.window_size < 1:
+            raise ValueError("agentguard max_steps, max_tool_calls, and window_size must be positive")
+        if agentguard.remote_timeout_seconds <= 0 or agentguard.remote_retries < 0:
+            raise ValueError("agentguard remote timeout and retries values are invalid")
+    else:
+        agentguard = AgentGuardConfig()
+
     agentsight_raw = raw.get("agentsight", {}) or {}
     if isinstance(agentsight_raw, bool):
         agentsight = AgentSightConfig(enabled=agentsight_raw)
@@ -634,6 +760,7 @@ def load_config(path: str | Path) -> AppConfig:
         security=security,
         aegis=aegis,
         pro2guard=pro2guard,
+        agentguard=agentguard,
         agentsight=agentsight,
         agentdojo=agentdojo,
         container=container,

@@ -1,0 +1,15 @@
+Bundled AgentGuard runtime
+==========================
+
+This directory contains the AgentGuard Python client, shared rule runtime, and
+local skill modules, vendored from the AgentGuard research implementation.
+Only runtime Python sources are included; servers, examples, tests, generated
+files, and caches are intentionally excluded.
+
+The bundled copy includes a local-enforcement integration change: explicit
+policy snapshot rules are evaluated before remote fallback so standalone mode
+can enforce configured DSL policies.
+
+AgentGuard is licensed under GNU GPL version 3. See AGENTGUARD_LICENSE in this
+directory. This notice records that the bundled copy has been modified for the
+agent scaffold integration on 2026-07-28.

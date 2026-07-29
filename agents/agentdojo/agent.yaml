@@ -30,9 +30,44 @@ aegis:
   mode: monitor
   risk_threshold: HIGH
 pro2guard:
-  enabled: true
+  enabled: false
   mode: block
   model_path: models/pro2guard/dtmc.json
   threshold: 0.1
   unsafe_states:
     - ATTACK_SUCCESS
+agentsight:
+  enabled: false
+  binary: runtime/bin/agentsight
+  capture: full
+  privilege: auto
+  required: true
+agentguard:
+  enabled: true
+  mode: block
+  policy: rules/agentguard/agentdojo_policy.rules
+  plugin_config: ""
+
+  scenario_compiler:
+    enabled: true
+    context_mode: benign_only
+    max_attempts: 2
+
+  server_url: ""
+  api_key: ""
+
+  environment: benchmark
+  user_id: ""
+  role: default
+  trust_level: 1
+
+  sandbox: local
+  audit_path: agentguard_audit.jsonl
+
+  max_steps: 12
+  max_tool_calls: 24
+  window_size: 8
+
+  remote_timeout_seconds: 5
+  remote_retries: 2
+  fail_closed: true

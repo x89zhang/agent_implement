@@ -429,7 +429,7 @@ def _render_react_payload(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
     return list(args)
 
 
-def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any, get_state: Any) -> Any:
+def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any, get_state: Any, tool_lookup: dict[str, Any]) -> Any:
     @functools.wraps(fn)
     def _wrapped(*args: Any, **kwargs: Any) -> Any:
         rendered_input = _render_react_payload(args, kwargs)
@@ -438,26 +438,33 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
         if isinstance(state, dict):
             state.pop("_last_aegis_decision", None)
             state.pop("_last_pro2guard_decision", None)
+            state.pop("_last_agentguard_decision", None)
         decision = middleware.before_tool(state if isinstance(state, dict) else {}, name, payload)
         aegis_decision = None
         pro2guard_decision = None
+        agentguard_decision = None
         if isinstance(state, dict):
             aegis_decision = state.pop("_last_aegis_decision", None)
             pro2guard_decision = state.pop("_last_pro2guard_decision", None)
+            agentguard_decision = state.get("_last_agentguard_decision")
+        effective_name = decision.tool_name or name
+        effective_payload = decision.arguments if decision.arguments is not None else payload
 
         if cfg.monitoring.print_trace:
             print("\n[TOOL INPUT]", flush=True)
             print(f"{name} {rendered_input}", flush=True)
 
         if not decision.allowed:
-            result = f"Tool execution blocked by middleware: {decision.reason}"
-            middleware.after_tool(state if isinstance(state, dict) else {}, name, payload, result, True)
+            result = decision.replacement_result or f"Tool execution blocked by middleware: {decision.reason}"
+            result_decision = middleware.after_tool(state if isinstance(state, dict) else {}, effective_name, effective_payload, result, True)
+            result = str(result_decision.result)
             if isinstance(state, dict):
                 state.setdefault("_react_guard_events", []).append({
                     "tool": name,
                     "tool_input": rendered_input,
                     "aegis": aegis_decision,
                     "pro2guard": pro2guard_decision,
+                    "agentguard": {"before": agentguard_decision, "after": (state.get("_last_agentguard_decision") if isinstance(state, dict) else None)},
                     "blocked": True,
                 })
             if cfg.monitoring.print_trace:
@@ -466,26 +473,38 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
             return result
 
         try:
-            result = fn(*args, **kwargs)
+            target = tool_lookup.get(effective_name)
+            if target is None:
+                raise ValueError(f"Tool not found: {effective_name}")
+            if decision.tool_name is not None or decision.arguments is not None:
+                if "__arg" in effective_payload and len(effective_payload) == 1:
+                    result = target(effective_payload["__arg"])
+                else:
+                    result = target(**effective_payload)
+            else:
+                result = fn(*args, **kwargs)
         except Exception as exc:
-            middleware.after_tool(state if isinstance(state, dict) else {}, name, payload, f"Tool execution failed: {exc}", True)
+            middleware.after_tool(state if isinstance(state, dict) else {}, effective_name, effective_payload, f"Tool execution failed: {exc}", True)
             if isinstance(state, dict):
                 state.setdefault("_react_guard_events", []).append({
                     "tool": name,
                     "tool_input": rendered_input,
                     "aegis": aegis_decision,
                     "pro2guard": pro2guard_decision,
+                    "agentguard": {"before": agentguard_decision, "after": (state.get("_last_agentguard_decision") if isinstance(state, dict) else None)},
                     "blocked": False,
                 })
             raise
 
-        middleware.after_tool(state if isinstance(state, dict) else {}, name, payload, str(result), False)
+        result_decision = middleware.after_tool(state if isinstance(state, dict) else {}, effective_name, effective_payload, str(result), False)
+        result = result_decision.result
         if isinstance(state, dict):
             state.setdefault("_react_guard_events", []).append({
                 "tool": name,
                 "tool_input": rendered_input,
                 "aegis": aegis_decision,
                 "pro2guard": pro2guard_decision,
+                "agentguard": {"before": agentguard_decision, "after": state.get("_last_agentguard_decision")},
                 "blocked": False,
             })
         if cfg.monitoring.print_trace:
@@ -640,6 +659,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             PROMPT = PromptTemplate.from_template(prompt_text)
 
     raw_tools: dict[str, Any] = {}
+    tool_functions = {tool.name: load_tool(tool) for tool in cfg.tools}
     tools = []
     middleware = build_middleware_manager(cfg)
     active_state: dict[str, Any] | None = None
@@ -648,8 +668,8 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
         return active_state if active_state is not None else {}
 
     for t in cfg.tools:
-        fn = load_tool(t)
-        lc_fn = _build_traced_react_tool(t.name, fn, cfg, middleware, _get_active_state)
+        fn = tool_functions[t.name]
+        lc_fn = _build_traced_react_tool(t.name, fn, cfg, middleware, _get_active_state, tool_functions)
         raw_tools[t.name] = lc_fn
         tools.append(
             StructuredTool.from_function(
@@ -709,13 +729,53 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
         invoke_kwargs: dict[str, Any] = {}
         if callbacks:
             invoke_kwargs["callbacks"] = callbacks
-        try:
-            result = executor.invoke({"input": user_input}, **invoke_kwargs)
-        except Exception:
-            active_state = None
-            raise
-        output = result.get("output", "")
+        input_guard = middleware.guard_model_input(
+            state, [{"role": "user", "content": user_input}]
+        )
+        if input_guard.messages:
+            user_input = "\n\n".join(
+                str(message.get("content", ""))
+                for message in input_guard.messages
+                if message.get("role") != "system"
+            )
+        if not input_guard.allowed:
+            result = {
+                "output": input_guard.content
+                or json.dumps(
+                    {"agentguard": "blocked", "phase": "llm_before", "reason": input_guard.reason},
+                    ensure_ascii=False,
+                ),
+                "intermediate_steps": [],
+            }
+            output = str(result["output"])
+        else:
+            attempts = 0
+            while True:
+                try:
+                    result = executor.invoke({"input": user_input}, **invoke_kwargs)
+                except Exception:
+                    active_state = None
+                    raise
+                raw_output = str(result.get("output", ""))
+                output_guard = middleware.guard_model_output(state, raw_output, None)
+                output = output_guard.content if output_guard.content is not None else raw_output
+                if not output_guard.retry:
+                    break
+                if result.get("intermediate_steps") or attempts >= max(0, cfg.agentguard.max_steps - 1):
+                    output = json.dumps(
+                        {
+                            "agentguard": "blocked",
+                            "phase": "llm_after",
+                            "decision": "loop_back_to_llm",
+                            "reason": output_guard.reason,
+                        },
+                        ensure_ascii=False,
+                    )
+                    break
+                attempts += 1
+                user_input += f"\n\nAgentGuard requested a safe revision: {output_guard.feedback}"
         state["messages"].append({"role": "assistant", "content": output})
+        middleware.after_model(state, output, None)
 
         steps = _expand_react_steps(
             result.get("intermediate_steps", []),
@@ -728,6 +788,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             if idx < len(guard_events):
                 step["aegis"] = guard_events[idx].get("aegis")
                 step["pro2guard"] = guard_events[idx].get("pro2guard")
+                step["agentguard"] = guard_events[idx].get("agentguard")
                 step["blocked"] = bool(guard_events[idx].get("blocked"))
         active_state = None
         for step in steps:
@@ -738,6 +799,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             tool_usage = step.get("usage", {})
             aegis_decision = step.get("aegis")
             pro2guard_decision = step.get("pro2guard")
+            agentguard_decision = step.get("agentguard")
             blocked = bool(step.get("blocked"))
             _append_trace_message(
                 state,
@@ -772,6 +834,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                         "usage": tool_usage,
                         "aegis": aegis_decision,
                         "pro2guard": pro2guard_decision,
+                        "agentguard": agentguard_decision,
                     },
                 },
             )
@@ -790,6 +853,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                         "usage": tool_usage,
                         "aegis": aegis_decision,
                         "pro2guard": pro2guard_decision,
+                        "agentguard": agentguard_decision,
                     },
                 },
             )

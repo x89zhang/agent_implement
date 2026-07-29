@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import AppConfig
-from ..middleware import Middleware, ToolDecision
+from ..middleware import Middleware, ResultDecision, ToolDecision
 from .abstraction import ToolTraceAbstraction
 from .model import JsonDTMC, Pro2GuardResult
 from .prism import query_prism_probability
@@ -45,10 +45,11 @@ class Pro2GuardMiddleware(Middleware):
             return ToolDecision(True, "")
         return ToolDecision(False, result.reason)
 
-    def after_tool(self, state: dict[str, Any], name: str, payload: dict[str, Any], result: str, failed: bool) -> None:
+    def after_tool(self, state: dict[str, Any], name: str, payload: dict[str, Any], result: str, failed: bool) -> ResultDecision:
         encoded = self.abstraction.encode_tool_result(name, payload, result, failed)
         state["_pro2guard_last_state"] = encoded
         state["_pro2guard_last_outcome"] = "failed" if failed else "ok"
+        return ResultDecision(result=result)
 
     def _evaluate(self, encoded_state: str) -> Pro2GuardResult:
         try:

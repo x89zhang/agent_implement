@@ -181,6 +181,8 @@ def agent_node(cfg: AppConfig, llm: LLMAdapter) -> Callable[[dict[str, Any]], di
             reminder = {"role": "system", "content": "\n\n".join(middleware_chunks)}
             insert_at = 1 if runtime_messages and runtime_messages[0].get("role") == "system" else 0
             runtime_messages.insert(insert_at, reminder)
+        input_guard = middleware.guard_model_input(state, runtime_messages)
+        runtime_messages = input_guard.messages or runtime_messages
         input_messages = [dict(m) for m in runtime_messages]
         if cfg.monitoring.print_trace:
             last_user = ""
@@ -189,20 +191,41 @@ def agent_node(cfg: AppConfig, llm: LLMAdapter) -> Callable[[dict[str, Any]], di
                     last_user = msg.get("content", "")
                     break
             print("\n[LLM INPUT]")
-            if last_user:
-                print(last_user)
-            else:
-                print("(no user input)")
-        response = llm.chat(runtime_messages)
-        messages.append({"role": "assistant", "content": response.content})
-        call = parse_tool_call(response.content)
+            print(last_user or "(no user input)")
+
+        response_usage = None
+        if not input_guard.allowed:
+            response_content = input_guard.content or json.dumps(
+                {"agentguard": "blocked", "phase": "llm_before", "reason": input_guard.reason},
+                ensure_ascii=False,
+            )
+            call = None
+        else:
+            attempts = 0
+            while True:
+                response = llm.chat(runtime_messages)
+                response_usage = response.usage
+                raw_call = parse_tool_call(response.content)
+                output_guard = middleware.guard_model_output(state, response.content, raw_call)
+                response_content = output_guard.content if output_guard.content is not None else response.content
+                call = output_guard.tool_call
+                if not output_guard.retry or attempts >= max(0, cfg.agentguard.max_steps - 1):
+                    break
+                attempts += 1
+                runtime_messages.append({
+                    "role": "system",
+                    "content": f"AgentGuard requested a safe revision: {output_guard.feedback}",
+                })
+                input_messages = [dict(m) for m in runtime_messages]
+
+        messages.append({"role": "assistant", "content": response_content})
         state["tool_call"] = call
-        middleware.after_model(state, response.content, call)
+        middleware.after_model(state, response_content, call)
         end = time.time()
-        usage = response.usage
+        usage = response_usage
         if not usage:
             prompt_tokens = sum(llm.estimate_tokens(m.get("content", "")) for m in input_messages)
-            completion_tokens = llm.estimate_tokens(response.content)
+            completion_tokens = llm.estimate_tokens(response_content)
             usage = {
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
@@ -216,14 +239,14 @@ def agent_node(cfg: AppConfig, llm: LLMAdapter) -> Callable[[dict[str, Any]], di
                 "timestamp": start,
                 "latency_ms": int((end - start) * 1000),
                 "input": {"messages": input_messages},
-                "output": {"content": response.content, "tool_call": call},
+                "output": {"content": response_content, "tool_call": call},
                 "usage": usage,
             }
         )
         _update_usage_totals(state, usage)
         assistant_message = {
             "role": "assistant",
-            "content": response.content,
+            "content": response_content,
             "tool_calls": (
                 [
                     {
@@ -264,7 +287,7 @@ def agent_node(cfg: AppConfig, llm: LLMAdapter) -> Callable[[dict[str, Any]], di
         _flush_trace_snapshot(state)
         if cfg.monitoring.print_trace:
             print("[LLM OUTPUT]")
-            print(response.content)
+            print(response_content)
             if usage:
                 print(f"[TOKENS] prompt={usage.get('prompt_tokens')} completion={usage.get('completion_tokens')} total={usage.get('total_tokens')} source={usage.get('source')}")
             if call:
@@ -284,14 +307,18 @@ def tool_node(
         if not call:
             return state
         start = time.time()
-        name, payload = call
+        requested_name, requested_payload = call
         state.pop("_last_aegis_decision", None)
         state.pop("_last_pro2guard_decision", None)
-        decision = middleware.before_tool(state, name, payload)
+        state.pop("_last_agentguard_decision", None)
+        decision = middleware.before_tool(state, requested_name, requested_payload)
         aegis_decision = state.pop("_last_aegis_decision", None)
         pro2guard_decision = state.pop("_last_pro2guard_decision", None)
+        agentguard_decision = state.get("_last_agentguard_decision")
+        name = decision.tool_name or requested_name
+        payload = decision.arguments if decision.arguments is not None else requested_payload
         if not decision.allowed:
-            result = f"Tool execution blocked by middleware: {decision.reason}"
+            result = decision.replacement_result or f"Tool execution blocked by middleware: {decision.reason}"
         elif name not in tools:
             result = f"Tool not found: {name}"
         else:
@@ -300,7 +327,12 @@ def tool_node(
             except Exception as exc:
                 result = f"Tool execution failed: {exc}"
         failed = (not decision.allowed) or str(result).startswith("Tool execution failed:") or str(result).startswith("Tool not found:")
-        middleware.after_tool(state, name, payload, result, failed)
+        result_decision = middleware.after_tool(state, name, payload, result, failed)
+        result = str(result_decision.result)
+        if not result_decision.allowed:
+            failed = True
+        agentguard_after = state.get("_last_agentguard_decision")
+        agentguard_decision = {"before": agentguard_decision, "after": agentguard_after}
         state["messages"].append({"role": "assistant", "content": f"TOOL_RESULT: {result}"})
         state["tool_call"] = None
         state["iterations"] = int(state.get("iterations", 0)) + 1
@@ -324,6 +356,7 @@ def tool_node(
                 "usage": usage,
                 "aegis": aegis_decision,
                 "pro2guard": pro2guard_decision,
+                "agentguard": agentguard_decision,
             }
         )
         tool_message = {
@@ -339,6 +372,7 @@ def tool_node(
                 "usage": usage,
                 "aegis": aegis_decision,
                 "pro2guard": pro2guard_decision,
+                "agentguard": agentguard_decision,
             },
         }
         _append_trace_message(state, tool_message)

@@ -13,7 +13,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from agent_scaffold.agentsight import AgentSightObserver
+from agent_scaffold.agentsight import AgentSightObserver, wait_for_start_gate
 from agent_scaffold.config import AgentSightConfig, load_config
 from agent_scaffold import container_runtime
 
@@ -59,6 +59,26 @@ class AgentSightConfigTests(unittest.TestCase):
             path = self._config(Path(tmp), "  enabled: true\n  capture: unknown\n")
             with self.assertRaisesRegex(ValueError, "capture"):
                 load_config(path)
+
+
+class AgentSightGateTests(unittest.TestCase):
+    def test_gate_preloads_ssl_and_returns_when_released(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            gate = Path(tmp) / "start"
+            gate.touch()
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "AGENTSIGHT_START_FILE": str(gate),
+                    "AGENTSIGHT_READY_FILE": str(Path(tmp) / "ready"),
+                    "AGENTSIGHT_START_TIMEOUT": "1",
+                },
+            ):
+                wait_for_start_gate()
+            import ssl
+
+            self.assertTrue(ssl.OPENSSL_VERSION.startswith("OpenSSL"))
+            self.assertTrue((Path(tmp) / "ready").exists())
 
 
 class AgentSightObserverTests(unittest.TestCase):
@@ -114,6 +134,29 @@ class AgentSightObserverTests(unittest.TestCase):
             self.assertIn('"record"', log)
             self.assertIn('"-p"', log)
 
+    def test_relative_binary_is_resolved_before_job_cwd_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            binary = self._fake_agentsight(root)
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                cfg = AgentSightConfig(
+                    enabled=True,
+                    binary="./agentsight",
+                    capture="full",
+                    privilege="none",
+                    warmup_seconds=0.05,
+                    startup_timeout_seconds=1,
+                    shutdown_timeout_seconds=1,
+                )
+                observer = AgentSightObserver(cfg, root / "job", target_pid=os.getpid())
+                self.assertEqual(observer.start()["status"], "running")
+                self.assertTrue(Path(cfg.binary).is_absolute())
+                self.assertEqual(observer.stop()["status"], "completed")
+            finally:
+                os.chdir(previous)
+
     def test_system_capture_disables_ssl(self) -> None:
         cfg = AgentSightConfig(enabled=True, capture="system", privilege="none")
         with tempfile.TemporaryDirectory() as tmp:
@@ -144,6 +187,8 @@ class AgentSightObserverTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(RuntimeError, "Required AgentSight"):
                 required.start()
+            self.assertEqual(required.stop()["status"], "failed")
+            self.assertIn("executable not found", required.stop()["error"])
 
 
 class ContainerAgentSightTests(unittest.TestCase):
@@ -174,6 +219,7 @@ class ContainerAgentSightTests(unittest.TestCase):
                 if command[:3] == ["docker", "image", "inspect"]:
                     return _completed(command)
                 if command[:2] == ["docker", "run"]:
+                    (run_dir / "_agentsight_ready").touch()
                     return _completed(command, stdout="container-id\n")
                 if command[:3] == ["docker", "inspect", "--format"]:
                     return _completed(command, stdout="4242\n")
@@ -185,6 +231,7 @@ class ContainerAgentSightTests(unittest.TestCase):
                             "_trace_persist": {"output_path": "/workspace/jobs/run/trace.json"},
                         }), encoding="utf-8"
                     )
+                    (run_dir / "_container_result.json").chmod(0o444)
                     (run_dir / "trace.json").write_text(
                         json.dumps({"harness": {"agentsight": {"status": "managed_by_host"}}}),
                         encoding="utf-8",
@@ -225,6 +272,7 @@ class ContainerAgentSightTests(unittest.TestCase):
             self.assertIn("-d", docker_run)
             self.assertIn("--name", docker_run)
             self.assertIn("AGENTSIGHT_MANAGED=1", docker_run)
+            self.assertTrue(any(str(item).startswith("AGENTSIGHT_READY_FILE=") for item in docker_run))
             self.assertFalse("--privileged" in docker_run)
             self.assertEqual(observer_calls[0][0], 4242)
             self.assertTrue(observer_calls[0][1].startswith("docker://agent-scaffold-"))

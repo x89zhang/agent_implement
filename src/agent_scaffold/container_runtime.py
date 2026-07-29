@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
@@ -136,6 +137,8 @@ def run_once_in_container(
     stderr_path = run_dir / "container_stderr.log"
     gate_path = run_dir / "_agentsight_start"
     gate_in_container = f"{run_dir_in_container}/_agentsight_start"
+    ready_path = run_dir / "_agentsight_ready"
+    ready_in_container = f"{run_dir_in_container}/_agentsight_ready"
     payload_path.write_text(
         json.dumps(
             {
@@ -162,6 +165,7 @@ def run_once_in_container(
     if cfg.agentsight.enabled:
         cmd.extend(["-e", "AGENTSIGHT_MANAGED=1"])
         cmd.extend(["-e", f"AGENTSIGHT_START_FILE={gate_in_container}"])
+        cmd.extend(["-e", f"AGENTSIGHT_READY_FILE={ready_in_container}"])
         gate_timeout = cfg.agentsight.startup_timeout_seconds + cfg.agentsight.warmup_seconds + 30.0
         cmd.extend(["-e", f"AGENTSIGHT_START_TIMEOUT={gate_timeout}"])
     for env_name in getattr(cfg.container, "env", []) or []:
@@ -194,6 +198,14 @@ def run_once_in_container(
         container_started = True
 
         if cfg.agentsight.enabled:
+            ready_deadline = time.monotonic() + cfg.agentsight.startup_timeout_seconds
+            while not ready_path.exists():
+                if time.monotonic() >= ready_deadline:
+                    raise RuntimeError(
+                        f"Agent container {name} did not reach the AgentSight ready gate "
+                        f"within {cfg.agentsight.startup_timeout_seconds}s"
+                    )
+                time.sleep(0.05)
             observer = AgentSightObserver(
                 cfg.agentsight,
                 run_dir,
@@ -247,10 +259,12 @@ def run_once_in_container(
             _update_container_trace_agentsight(
                 result, agentsight_result, workspace_root, container_workdir
             )
-            result_path.write_text(
+            result_temporary = result_path.with_name(f"{result_path.name}.tmp")
+            result_temporary.write_text(
                 json.dumps(result, ensure_ascii=False, indent=2, default=_json_default),
                 encoding="utf-8",
             )
+            result_temporary.replace(result_path)
         container_completed = True
         return result
     finally:

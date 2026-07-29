@@ -8,3 +8,5 @@
 paper/*
 legacy/*
 jobs/*
+tests/
+logs_other_proj/

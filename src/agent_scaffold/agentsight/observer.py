@@ -66,7 +66,7 @@ class AgentSightObserver:
 
     def _resolve_prefix(self) -> list[str]:
         binary = self.config.binary
-        expanded = str(Path(binary).expanduser()) if os.sep in binary else binary
+        expanded = str(Path(binary).expanduser().resolve()) if os.sep in binary else binary
         if os.sep not in binary and shutil.which(binary) is None:
             raise RuntimeError(f"AgentSight executable not found: {binary}")
         if os.sep in binary and not Path(expanded).exists():
@@ -256,7 +256,7 @@ class AgentSightObserver:
             self._log.write(f"ownership_warning={completed.stderr.strip()}\n")
 
     def stop(self) -> dict[str, Any]:
-        if self._status["status"] == "failed" and self._process is None:
+        if self._status["status"] == "failed":
             return self.result()
         error = ""
         try:

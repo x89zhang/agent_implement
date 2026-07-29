@@ -5,34 +5,82 @@ from typing import Any
 
 from .config import AppConfig
 from .guard import check_tool_call
-from .planner import render_plan_context, mark_plan_progress, complete_plan_on_final
+from .planner import complete_plan_on_final, mark_plan_progress, render_plan_context
 
 
 @dataclass
 class ToolDecision:
     allowed: bool = True
     reason: str = ""
+    tool_name: str | None = None
+    arguments: dict[str, Any] | None = None
+    replacement_result: str | None = None
+    decision_type: str = ""
+
+
+_UNCHANGED = object()
+
+
+@dataclass
+class ModelDecision:
+    allowed: bool = True
+    reason: str = ""
+    messages: list[dict[str, Any]] | None = None
+    content: str | None = None
+    tool_call: Any = _UNCHANGED
+    retry: bool = False
+    feedback: str = ""
+    decision_type: str = ""
+
+
+@dataclass
+class ResultDecision:
+    allowed: bool = True
+    reason: str = ""
+    result: Any = _UNCHANGED
+    decision_type: str = ""
 
 
 class Middleware:
+    def guard_model_input(
+        self, state: dict[str, Any], messages: list[dict[str, Any]]
+    ) -> ModelDecision:
+        return ModelDecision()
+
+    def guard_model_output(
+        self, state: dict[str, Any], content: str, tool_call: Any
+    ) -> ModelDecision:
+        return ModelDecision(content=content, tool_call=tool_call)
+
     def before_model(self, state: dict[str, Any]) -> list[str]:
         return []
 
     def after_model(self, state: dict[str, Any], content: str, tool_call: Any) -> None:
         return None
 
-    def before_tool(self, state: dict[str, Any], name: str, payload: dict[str, Any]) -> ToolDecision:
+    def before_tool(
+        self, state: dict[str, Any], name: str, payload: dict[str, Any]
+    ) -> ToolDecision:
         return ToolDecision()
 
-    def after_tool(self, state: dict[str, Any], name: str, payload: dict[str, Any], result: str, failed: bool) -> None:
-        return None
+    def after_tool(
+        self,
+        state: dict[str, Any],
+        name: str,
+        payload: dict[str, Any],
+        result: str,
+        failed: bool,
+    ) -> ResultDecision:
+        return ResultDecision(result=result)
 
 
 class AegisGuardMiddleware(Middleware):
     def __init__(self, cfg: AppConfig) -> None:
         self.cfg = cfg
 
-    def before_tool(self, state: dict[str, Any], name: str, payload: dict[str, Any]) -> ToolDecision:
+    def before_tool(
+        self, state: dict[str, Any], name: str, payload: dict[str, Any]
+    ) -> ToolDecision:
         decision = check_tool_call(self.cfg, state, name, payload)
         state["_last_aegis_decision"] = decision.to_dict()
         if not decision.allowed:
@@ -52,7 +100,9 @@ class HarnessMiddleware(Middleware):
         recent_errors = state.get("tool_errors") or []
         if recent_errors:
             rendered = "\n".join(f"- {item}" for item in recent_errors[-3:])
-            chunks.append(f"# Recent Tool Issues\nAvoid repeating these failed calls unless you have changed the arguments.\n{rendered}")
+            chunks.append(
+                f"# Recent Tool Issues\nAvoid repeating these failed calls unless you have changed the arguments.\n{rendered}"
+            )
         return chunks
 
     def after_model(self, state: dict[str, Any], content: str, tool_call: Any) -> None:
@@ -63,21 +113,33 @@ class HarnessMiddleware(Middleware):
         if content.strip():
             complete_plan_on_final(state)
 
-    def before_tool(self, state: dict[str, Any], name: str, payload: dict[str, Any]) -> ToolDecision:
+    def before_tool(
+        self, state: dict[str, Any], name: str, payload: dict[str, Any]
+    ) -> ToolDecision:
         if name == "write_text_file":
             path = str(payload.get("path") or "")
             if ".." in path.replace("\\", "/").split("/"):
-                return ToolDecision(False, "write_text_file path must stay under the run directory")
+                return ToolDecision(
+                    False, "write_text_file path must stay under the run directory"
+                )
             if not str(payload.get("content") or "").strip():
                 return ToolDecision(False, "write_text_file requires non-empty content")
         return ToolDecision(True, "")
 
-    def after_tool(self, state: dict[str, Any], name: str, payload: dict[str, Any], result: str, failed: bool) -> None:
+    def after_tool(
+        self,
+        state: dict[str, Any],
+        name: str,
+        payload: dict[str, Any],
+        result: str,
+        failed: bool,
+    ) -> ResultDecision:
         detail = f"{name} returned {'failure' if failed else 'success'}"
         mark_plan_progress(state, "tool_result", detail)
         if failed:
             errors = state.setdefault("tool_errors", [])
             errors.append(f"{name}({payload}) -> {result[:300]}")
+        return ResultDecision(result=result)
 
 
 class MiddlewareManager:
@@ -90,20 +152,117 @@ class MiddlewareManager:
             chunks.extend(middleware.before_model(state))
         return [chunk for chunk in chunks if chunk.strip()]
 
+    def guard_model_input(
+        self, state: dict[str, Any], messages: list[dict[str, Any]]
+    ) -> ModelDecision:
+        current = [dict(message) for message in messages]
+        blocked: list[str] = []
+        for middleware in self.middlewares:
+            decision = middleware.guard_model_input(state, current)
+            if decision.messages is not None:
+                current = [dict(message) for message in decision.messages]
+            if not decision.allowed:
+                blocked.append(decision.reason)
+        return ModelDecision(
+            allowed=not blocked,
+            reason="; ".join(reason for reason in blocked if reason),
+            messages=current,
+        )
+
+    def guard_model_output(
+        self, state: dict[str, Any], content: str, tool_call: Any
+    ) -> ModelDecision:
+        current_content = content
+        current_call = tool_call
+        blocked: list[str] = []
+        retry = False
+        feedback: list[str] = []
+        decision_type = ""
+        for middleware in self.middlewares:
+            decision = middleware.guard_model_output(
+                state, current_content, current_call
+            )
+            if decision.content is not None:
+                current_content = decision.content
+            if decision.tool_call is not _UNCHANGED:
+                current_call = decision.tool_call
+            if not decision.allowed:
+                blocked.append(decision.reason)
+            if decision.retry:
+                retry = True
+                if decision.feedback:
+                    feedback.append(decision.feedback)
+            decision_type = decision.decision_type or decision_type
+        return ModelDecision(
+            allowed=not blocked,
+            reason="; ".join(reason for reason in blocked if reason),
+            content=current_content,
+            tool_call=current_call,
+            retry=retry,
+            feedback="; ".join(feedback),
+            decision_type=decision_type,
+        )
+
     def after_model(self, state: dict[str, Any], content: str, tool_call: Any) -> None:
         for middleware in self.middlewares:
             middleware.after_model(state, content, tool_call)
 
-    def before_tool(self, state: dict[str, Any], name: str, payload: dict[str, Any]) -> ToolDecision:
+    def before_tool(
+        self, state: dict[str, Any], name: str, payload: dict[str, Any]
+    ) -> ToolDecision:
+        allowed = True
+        reasons: list[str] = []
+        tool_name = name
+        arguments = dict(payload)
+        replacement_result: str | None = None
+        decision_type = ""
         for middleware in self.middlewares:
-            decision = middleware.before_tool(state, name, payload)
-            if not decision.allowed:
-                return decision
-        return ToolDecision()
+            decision = middleware.before_tool(state, name, dict(payload))
+            allowed = allowed and decision.allowed
+            if decision.reason and not decision.allowed:
+                reasons.append(decision.reason)
+            if decision.tool_name is not None:
+                tool_name = decision.tool_name
+            if decision.arguments is not None:
+                arguments = dict(decision.arguments)
+            if decision.replacement_result is not None:
+                replacement_result = decision.replacement_result
+            decision_type = decision.decision_type or decision_type
+        return ToolDecision(
+            allowed=allowed,
+            reason="; ".join(reasons),
+            tool_name=tool_name,
+            arguments=arguments,
+            replacement_result=replacement_result,
+            decision_type=decision_type,
+        )
 
-    def after_tool(self, state: dict[str, Any], name: str, payload: dict[str, Any], result: str, failed: bool) -> None:
+    def after_tool(
+        self,
+        state: dict[str, Any],
+        name: str,
+        payload: dict[str, Any],
+        result: str,
+        failed: bool,
+    ) -> ResultDecision:
+        current: Any = result
+        allowed = True
+        reasons: list[str] = []
+        decision_type = ""
         for middleware in self.middlewares:
-            middleware.after_tool(state, name, payload, result, failed)
+            decision = middleware.after_tool(state, name, payload, result, failed)
+            allowed = allowed and decision.allowed
+            if decision.reason and not decision.allowed:
+                reasons.append(decision.reason)
+            if decision.result is not _UNCHANGED:
+                current = decision.result
+            decision_type = decision.decision_type or decision_type
+        return ResultDecision(
+            allowed=allowed,
+            reason="; ".join(reasons),
+            result=current,
+            decision_type=decision_type,
+        )
 
 
 def build_middleware_manager(cfg: AppConfig) -> MiddlewareManager:
@@ -116,4 +275,8 @@ def build_middleware_manager(cfg: AppConfig) -> MiddlewareManager:
         from .pro2guard import Pro2GuardMiddleware
 
         middlewares.append(Pro2GuardMiddleware(cfg))
+    if cfg.agentguard.enabled:
+        from .agentguard import AgentGuardMiddleware
+
+        middlewares.append(AgentGuardMiddleware(cfg))
     return MiddlewareManager(middlewares)
