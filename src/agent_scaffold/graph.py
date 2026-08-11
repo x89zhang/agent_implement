@@ -14,7 +14,7 @@ from .config import AppConfig
 from .llm import LLMAdapter
 from .skills import load_enabled_skills, render_skill_context, validate_skill_tools
 from .planner import render_plan_context, mark_plan_progress, complete_plan_on_final
-from .middleware import build_middleware_manager
+from .middleware import ToolExecutionTerminated, build_middleware_manager
 from .nodes import (
     agent_node,
     load_tool,
@@ -429,6 +429,28 @@ def _render_react_payload(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
     return list(args)
 
 
+def _record_react_runtime_step(state: dict[str, Any], result: str) -> None:
+    events = state.get("_react_guard_events", [])
+    if not events:
+        return
+    event = events[-1]
+    state.setdefault("_react_runtime_steps", []).append(
+        {
+            "tool": event.get("tool", ""),
+            "tool_input": event.get("tool_input", ""),
+            "observation": result,
+            "log": "",
+            "thought": None,
+            "usage": {},
+            "aegis": event.get("aegis"),
+            "pro2guard": event.get("pro2guard"),
+            "toolsafe": event.get("toolsafe"),
+            "agentguard": event.get("agentguard"),
+            "blocked": bool(event.get("blocked")),
+        }
+    )
+
+
 def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any, get_state: Any, tool_lookup: dict[str, Any]) -> Any:
     @functools.wraps(fn)
     def _wrapped(*args: Any, **kwargs: Any) -> Any:
@@ -438,14 +460,17 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
         if isinstance(state, dict):
             state.pop("_last_aegis_decision", None)
             state.pop("_last_pro2guard_decision", None)
+            state.pop("_last_toolsafe_decision", None)
             state.pop("_last_agentguard_decision", None)
         decision = middleware.before_tool(state if isinstance(state, dict) else {}, name, payload)
         aegis_decision = None
         pro2guard_decision = None
+        toolsafe_decision = None
         agentguard_decision = None
         if isinstance(state, dict):
             aegis_decision = state.pop("_last_aegis_decision", None)
             pro2guard_decision = state.pop("_last_pro2guard_decision", None)
+            toolsafe_decision = state.pop("_last_toolsafe_decision", None)
             agentguard_decision = state.get("_last_agentguard_decision")
         effective_name = decision.tool_name or name
         effective_payload = decision.arguments if decision.arguments is not None else payload
@@ -464,12 +489,18 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
                     "tool_input": rendered_input,
                     "aegis": aegis_decision,
                     "pro2guard": pro2guard_decision,
+                    "toolsafe": toolsafe_decision,
                     "agentguard": {"before": agentguard_decision, "after": (state.get("_last_agentguard_decision") if isinstance(state, dict) else None)},
                     "blocked": True,
                 })
+                _record_react_runtime_step(state, result)
             if cfg.monitoring.print_trace:
                 print("[TOOL OUTPUT]", flush=True)
                 print(result, flush=True)
+            if decision.terminate:
+                raise ToolExecutionTerminated(
+                    result, effective_name, effective_payload
+                )
             return result
 
         try:
@@ -491,6 +522,7 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
                     "tool_input": rendered_input,
                     "aegis": aegis_decision,
                     "pro2guard": pro2guard_decision,
+                    "toolsafe": toolsafe_decision,
                     "agentguard": {"before": agentguard_decision, "after": (state.get("_last_agentguard_decision") if isinstance(state, dict) else None)},
                     "blocked": False,
                 })
@@ -504,9 +536,11 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
                 "tool_input": rendered_input,
                 "aegis": aegis_decision,
                 "pro2guard": pro2guard_decision,
+                "toolsafe": toolsafe_decision,
                 "agentguard": {"before": agentguard_decision, "after": state.get("_last_agentguard_decision")},
                 "blocked": False,
             })
+            _record_react_runtime_step(state, str(result))
         if cfg.monitoring.print_trace:
             print("[TOOL OUTPUT]", flush=True)
             print(result, flush=True)
@@ -540,7 +574,13 @@ def build_graph(cfg: AppConfig) -> Any:
 
     builder.set_entry_point("agent")
     builder.add_conditional_edges("agent", _route)
-    builder.add_edge("tool", "agent")
+
+    def _after_tool_route(state: dict[str, Any]) -> str:
+        if state.get("_terminate_after_tool"):
+            return END
+        return "agent"
+
+    builder.add_conditional_edges("tool", _after_tool_route)
     return builder.compile()
 
 
@@ -716,6 +756,8 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
         nonlocal active_state
         start = time.time()
         active_state = state
+        state.pop("_react_runtime_steps", None)
+        runtime_steps: list[dict[str, Any]] = []
         user_input = _build_react_user_input(state)
         plan_context = render_plan_context(state)
         if plan_context:
@@ -753,6 +795,16 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             while True:
                 try:
                     result = executor.invoke({"input": user_input}, **invoke_kwargs)
+                except ToolExecutionTerminated as exc:
+                    runtime_steps = list(
+                        state.pop("_react_runtime_steps", []) or []
+                    )
+                    result = {
+                        "output": exc.result,
+                        "intermediate_steps": [],
+                    }
+                    output = exc.result
+                    break
                 except Exception:
                     active_state = None
                     raise
@@ -774,10 +826,12 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                     break
                 attempts += 1
                 user_input += f"\n\nAgentGuard requested a safe revision: {output_guard.feedback}"
+        if not runtime_steps:
+            state.pop("_react_runtime_steps", None)
         state["messages"].append({"role": "assistant", "content": output})
         middleware.after_model(state, output, None)
 
-        steps = _expand_react_steps(
+        steps = runtime_steps or _expand_react_steps(
             result.get("intermediate_steps", []),
             raw_tools=raw_tools,
             estimate_tokens=llm.estimate_tokens,
@@ -788,6 +842,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             if idx < len(guard_events):
                 step["aegis"] = guard_events[idx].get("aegis")
                 step["pro2guard"] = guard_events[idx].get("pro2guard")
+                step["toolsafe"] = guard_events[idx].get("toolsafe")
                 step["agentguard"] = guard_events[idx].get("agentguard")
                 step["blocked"] = bool(guard_events[idx].get("blocked"))
         active_state = None
@@ -799,6 +854,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             tool_usage = step.get("usage", {})
             aegis_decision = step.get("aegis")
             pro2guard_decision = step.get("pro2guard")
+            toolsafe_decision = step.get("toolsafe")
             agentguard_decision = step.get("agentguard")
             blocked = bool(step.get("blocked"))
             _append_trace_message(
@@ -834,6 +890,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                         "usage": tool_usage,
                         "aegis": aegis_decision,
                         "pro2guard": pro2guard_decision,
+                        "toolsafe": toolsafe_decision,
                         "agentguard": agentguard_decision,
                     },
                 },
@@ -853,6 +910,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                         "usage": tool_usage,
                         "aegis": aegis_decision,
                         "pro2guard": pro2guard_decision,
+                        "toolsafe": toolsafe_decision,
                         "agentguard": agentguard_decision,
                     },
                 },

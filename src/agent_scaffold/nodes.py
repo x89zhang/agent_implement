@@ -310,10 +310,14 @@ def tool_node(
         requested_name, requested_payload = call
         state.pop("_last_aegis_decision", None)
         state.pop("_last_pro2guard_decision", None)
+        state.pop("_last_toolsafe_decision", None)
         state.pop("_last_agentguard_decision", None)
         decision = middleware.before_tool(state, requested_name, requested_payload)
+        if decision.terminate:
+            state["_terminate_after_tool"] = True
         aegis_decision = state.pop("_last_aegis_decision", None)
         pro2guard_decision = state.pop("_last_pro2guard_decision", None)
+        toolsafe_decision = state.pop("_last_toolsafe_decision", None)
         agentguard_decision = state.get("_last_agentguard_decision")
         name = decision.tool_name or requested_name
         payload = decision.arguments if decision.arguments is not None else requested_payload
@@ -356,6 +360,7 @@ def tool_node(
                 "usage": usage,
                 "aegis": aegis_decision,
                 "pro2guard": pro2guard_decision,
+                "toolsafe": toolsafe_decision,
                 "agentguard": agentguard_decision,
             }
         )
@@ -372,6 +377,7 @@ def tool_node(
                 "usage": usage,
                 "aegis": aegis_decision,
                 "pro2guard": pro2guard_decision,
+                "toolsafe": toolsafe_decision,
                 "agentguard": agentguard_decision,
             },
         }

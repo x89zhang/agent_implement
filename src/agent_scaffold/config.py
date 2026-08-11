@@ -105,6 +105,22 @@ class Pro2GuardConfig:
 
 
 @dataclass
+class ToolSafeConfig:
+    enabled: bool = False
+    mode: str = "replan"
+    threshold: float = 0.5
+    provider: str = "openai_compatible"
+    model: str = "TS-Guard"
+    base_url: str = ""
+    api_key: str = ""
+    api_key_env: str = "TOOLSAFE_API_KEY"
+    timeout_seconds: float = 30.0
+    max_history_steps: int = 20
+    max_replans: int = 3
+    fail_closed: bool = False
+
+
+@dataclass
 class AgentGuardScenarioCompilerConfig:
     enabled: bool = True
     context_mode: str = "full"
@@ -191,6 +207,7 @@ class ContainerConfig:
             "ANTHROPIC_API_KEY",
             "AGENTGUARD_API_KEY",
             "AGENTGUARD_SERVER_URL",
+            "TOOLSAFE_API_KEY",
             "HTTP_PROXY",
             "HTTPS_PROXY",
             "NO_PROXY",
@@ -211,6 +228,7 @@ class AppConfig:
     security: SecurityConfig = field(default_factory=SecurityConfig)
     aegis: AegisConfig = field(default_factory=AegisConfig)
     pro2guard: Pro2GuardConfig = field(default_factory=Pro2GuardConfig)
+    toolsafe: ToolSafeConfig = field(default_factory=ToolSafeConfig)
     agentguard: AgentGuardConfig = field(default_factory=AgentGuardConfig)
     agentsight: AgentSightConfig = field(default_factory=AgentSightConfig)
     agentdojo: AgentDojoConfig = field(default_factory=AgentDojoConfig)
@@ -592,6 +610,39 @@ def load_config(path: str | Path) -> AppConfig:
     else:
         pro2guard = Pro2GuardConfig()
 
+    toolsafe_raw = raw.get("toolsafe", {}) or {}
+    if isinstance(toolsafe_raw, bool):
+        toolsafe = ToolSafeConfig(enabled=toolsafe_raw)
+    elif isinstance(toolsafe_raw, dict):
+        toolsafe = ToolSafeConfig(
+            enabled=bool(toolsafe_raw.get("enabled", False)),
+            mode=str(toolsafe_raw.get("mode", "replan")).lower(),
+            threshold=float(toolsafe_raw.get("threshold", 0.5)),
+            provider=str(toolsafe_raw.get("provider", "openai_compatible")).lower(),
+            model=str(toolsafe_raw.get("model", "TS-Guard")),
+            base_url=str(toolsafe_raw.get("base_url", "")),
+            api_key=str(toolsafe_raw.get("api_key", "")),
+            api_key_env=str(toolsafe_raw.get("api_key_env", "TOOLSAFE_API_KEY")),
+            timeout_seconds=float(toolsafe_raw.get("timeout_seconds", 30.0)),
+            max_history_steps=int(toolsafe_raw.get("max_history_steps", 20)),
+            max_replans=int(toolsafe_raw.get("max_replans", 3)),
+            fail_closed=bool(toolsafe_raw.get("fail_closed", False)),
+        )
+        if toolsafe.mode not in {"replan", "block", "warn", "monitor"}:
+            raise ValueError("toolsafe.mode must be one of: replan, block, warn, monitor")
+        if not 0.0 <= toolsafe.threshold <= 1.0:
+            raise ValueError("toolsafe.threshold must be between 0 and 1")
+        if toolsafe.provider != "openai_compatible":
+            raise ValueError("toolsafe.provider currently supports only: openai_compatible")
+        if toolsafe.timeout_seconds <= 0:
+            raise ValueError("toolsafe.timeout_seconds must be greater than zero")
+        if toolsafe.max_history_steps < 0:
+            raise ValueError("toolsafe.max_history_steps must be non-negative")
+        if toolsafe.max_replans < 0:
+            raise ValueError("toolsafe.max_replans must be non-negative")
+    else:
+        toolsafe = ToolSafeConfig()
+
     agentguard_raw = raw.get("agentguard", {}) or {}
     if isinstance(agentguard_raw, bool):
         agentguard = AgentGuardConfig(enabled=agentguard_raw)
@@ -760,6 +811,7 @@ def load_config(path: str | Path) -> AppConfig:
         security=security,
         aegis=aegis,
         pro2guard=pro2guard,
+        toolsafe=toolsafe,
         agentguard=agentguard,
         agentsight=agentsight,
         agentdojo=agentdojo,

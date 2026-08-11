@@ -3,10 +3,14 @@
 *.pyc
 *.txt
 *.md
+!docs/toolsafe.md
 !README.md
 !docs/agentsight.md
 paper/*
 legacy/*
 jobs/*
 tests/
+!tests/
+tests/*
+!tests/test_toolsafe.py
 logs_other_proj/

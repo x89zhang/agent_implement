@@ -16,6 +16,17 @@ class ToolDecision:
     arguments: dict[str, Any] | None = None
     replacement_result: str | None = None
     decision_type: str = ""
+    terminate: bool = False
+
+
+class ToolExecutionTerminated(RuntimeError):
+    def __init__(
+        self, result: str, tool_name: str, payload: dict[str, Any]
+    ) -> None:
+        super().__init__(result)
+        self.result = result
+        self.tool_name = tool_name
+        self.payload = payload
 
 
 _UNCHANGED = object()
@@ -216,6 +227,7 @@ class MiddlewareManager:
         arguments = dict(payload)
         replacement_result: str | None = None
         decision_type = ""
+        terminate = False
         for middleware in self.middlewares:
             decision = middleware.before_tool(state, name, dict(payload))
             allowed = allowed and decision.allowed
@@ -228,6 +240,7 @@ class MiddlewareManager:
             if decision.replacement_result is not None:
                 replacement_result = decision.replacement_result
             decision_type = decision.decision_type or decision_type
+            terminate = terminate or decision.terminate
         return ToolDecision(
             allowed=allowed,
             reason="; ".join(reasons),
@@ -235,6 +248,7 @@ class MiddlewareManager:
             arguments=arguments,
             replacement_result=replacement_result,
             decision_type=decision_type,
+            terminate=terminate,
         )
 
     def after_tool(
@@ -275,6 +289,10 @@ def build_middleware_manager(cfg: AppConfig) -> MiddlewareManager:
         from .pro2guard import Pro2GuardMiddleware
 
         middlewares.append(Pro2GuardMiddleware(cfg))
+    if cfg.toolsafe.enabled:
+        from .toolsafe import ToolSafeMiddleware
+
+        middlewares.append(ToolSafeMiddleware(cfg))
     if cfg.agentguard.enabled:
         from .agentguard import AgentGuardMiddleware
 

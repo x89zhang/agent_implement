@@ -253,6 +253,9 @@ def run_once(
             output_path = run_dir / f"trace_{Path(cfg_path).stem}.json"
     state = {
         "messages": state_messages,
+        "_toolsafe_user_request": "\n\n".join(
+            part for part in (task, user_input or "") if part
+        ),
         "tool_call": None,
         "iterations": 0,
         "trace": (
@@ -288,6 +291,12 @@ def run_once(
             "agentsight": {
                 "enabled": bool(cfg.agentsight.enabled),
                 "status": "managed_by_host" if os.environ.get("AGENTSIGHT_MANAGED") == "1" else "disabled",
+            },
+            "toolsafe": {
+                "enabled": bool(cfg.toolsafe.enabled),
+                "mode": cfg.toolsafe.mode,
+                "model": cfg.toolsafe.model,
+                "status": "pending" if cfg.toolsafe.enabled else "disabled",
             },
             "agentguard": {
                 "enabled": bool(cfg.agentguard.enabled),
