@@ -42,6 +42,7 @@ class ModelDecision:
     retry: bool = False
     feedback: str = ""
     decision_type: str = ""
+    terminate: bool = False
 
 
 @dataclass
@@ -187,6 +188,7 @@ class MiddlewareManager:
         current_call = tool_call
         blocked: list[str] = []
         retry = False
+        terminate = False
         feedback: list[str] = []
         decision_type = ""
         for middleware in self.middlewares:
@@ -203,15 +205,17 @@ class MiddlewareManager:
                 retry = True
                 if decision.feedback:
                     feedback.append(decision.feedback)
+            terminate = terminate or decision.terminate
             decision_type = decision.decision_type or decision_type
         return ModelDecision(
             allowed=not blocked,
             reason="; ".join(reason for reason in blocked if reason),
             content=current_content,
             tool_call=current_call,
-            retry=retry,
+            retry=retry and not terminate,
             feedback="; ".join(feedback),
             decision_type=decision_type,
+            terminate=terminate,
         )
 
     def after_model(self, state: dict[str, Any], content: str, tool_call: Any) -> None:
@@ -293,8 +297,23 @@ def build_middleware_manager(cfg: AppConfig) -> MiddlewareManager:
         from .toolsafe import ToolSafeMiddleware
 
         middlewares.append(ToolSafeMiddleware(cfg))
+    if cfg.agentdog.enabled:
+        from .agentdog import AgentDoGMiddleware
+
+        # AgentDoG diagnoses the effective accumulated trajectory. It runs after
+        # tool-scoped guards and immediately before AgentGuard's output policy.
+        middlewares.append(AgentDoGMiddleware(cfg))
     if cfg.agentguard.enabled:
         from .agentguard import AgentGuardMiddleware
 
         middlewares.append(AgentGuardMiddleware(cfg))
     return MiddlewareManager(middlewares)
+
+
+def output_revision_limit(cfg: AppConfig) -> int:
+    limits = [0]
+    if cfg.agentguard.enabled:
+        limits.append(max(0, cfg.agentguard.max_steps - 1))
+    if cfg.agentdog.enabled and cfg.agentdog.mode == "revise":
+        limits.append(cfg.agentdog.max_revisions)
+    return max(limits)

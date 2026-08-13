@@ -121,6 +121,31 @@ class ToolSafeConfig:
 
 
 @dataclass
+class AgentDoGConfig:
+    enabled: bool = False
+    mode: str = "diagnose"
+    task: str = "unified"
+    checkpoints: list[str] = field(default_factory=lambda: ["pre_reply"])
+    provider: str = "openai_compatible"
+    model: str = "AgentDoG1.5-Unified-Qwen3.5-4B"
+    base_url: str = ""
+    base_url_env: str = "AGENTDOG_BASE_URL"
+    api_key: str = ""
+    api_key_env: str = "AGENTDOG_API_KEY"
+    timeout_seconds: float = 60.0
+    temperature: float = 0.0
+    max_tokens: int = 1024
+    max_trajectory_chars: int = 0
+    max_revisions: int = 2
+    fail_closed: bool = False
+    include_raw_response: bool = True
+    replacement_message: str = (
+        "The response was withheld because AgentDoG diagnosed unsafe behavior "
+        "in the accumulated agent trajectory."
+    )
+
+
+@dataclass
 class AgentGuardScenarioCompilerConfig:
     enabled: bool = True
     context_mode: str = "full"
@@ -208,6 +233,8 @@ class ContainerConfig:
             "AGENTGUARD_API_KEY",
             "AGENTGUARD_SERVER_URL",
             "TOOLSAFE_API_KEY",
+            "AGENTDOG_API_KEY",
+            "AGENTDOG_BASE_URL",
             "HTTP_PROXY",
             "HTTPS_PROXY",
             "NO_PROXY",
@@ -229,6 +256,7 @@ class AppConfig:
     aegis: AegisConfig = field(default_factory=AegisConfig)
     pro2guard: Pro2GuardConfig = field(default_factory=Pro2GuardConfig)
     toolsafe: ToolSafeConfig = field(default_factory=ToolSafeConfig)
+    agentdog: AgentDoGConfig = field(default_factory=AgentDoGConfig)
     agentguard: AgentGuardConfig = field(default_factory=AgentGuardConfig)
     agentsight: AgentSightConfig = field(default_factory=AgentSightConfig)
     agentdojo: AgentDojoConfig = field(default_factory=AgentDojoConfig)
@@ -643,6 +671,95 @@ def load_config(path: str | Path) -> AppConfig:
     else:
         toolsafe = ToolSafeConfig()
 
+    agentdog_raw = raw.get("agentdog", {}) or {}
+    if isinstance(agentdog_raw, bool):
+        agentdog = AgentDoGConfig(enabled=agentdog_raw)
+    elif isinstance(agentdog_raw, dict):
+        agentdog_task = str(agentdog_raw.get("task", "unified")).lower()
+        default_agentdog_model = (
+            "AgentDoG1.5-Qwen3.5-4B"
+            if agentdog_task == "coarse"
+            else "AgentDoG1.5-Unified-Qwen3.5-4B"
+        )
+        checkpoints_raw = agentdog_raw.get("checkpoints", ["pre_reply"])
+        if isinstance(checkpoints_raw, str):
+            checkpoints = [checkpoints_raw]
+        elif isinstance(checkpoints_raw, list):
+            checkpoints = [str(item) for item in checkpoints_raw]
+        else:
+            raise TypeError("agentdog.checkpoints must be a string or list")
+        agentdog = AgentDoGConfig(
+            enabled=bool(agentdog_raw.get("enabled", False)),
+            mode=str(agentdog_raw.get("mode", "diagnose")).lower(),
+            task=agentdog_task,
+            checkpoints=[item.lower() for item in checkpoints],
+            provider=str(
+                agentdog_raw.get("provider", "openai_compatible")
+            ).lower(),
+            model=str(agentdog_raw.get("model", default_agentdog_model)),
+            base_url=str(agentdog_raw.get("base_url", "")),
+            base_url_env=str(
+                agentdog_raw.get("base_url_env", "AGENTDOG_BASE_URL")
+            ),
+            api_key=str(agentdog_raw.get("api_key", "")),
+            api_key_env=str(agentdog_raw.get("api_key_env", "AGENTDOG_API_KEY")),
+            timeout_seconds=float(agentdog_raw.get("timeout_seconds", 60.0)),
+            temperature=float(agentdog_raw.get("temperature", 0.0)),
+            max_tokens=int(agentdog_raw.get("max_tokens", 1024)),
+            max_trajectory_chars=int(
+                agentdog_raw.get("max_trajectory_chars", 0)
+            ),
+            max_revisions=int(agentdog_raw.get("max_revisions", 2)),
+            fail_closed=bool(agentdog_raw.get("fail_closed", False)),
+            include_raw_response=bool(
+                agentdog_raw.get("include_raw_response", True)
+            ),
+            replacement_message=str(
+                agentdog_raw.get(
+                    "replacement_message",
+                    AgentDoGConfig().replacement_message,
+                )
+            ),
+        )
+        if agentdog.mode not in {"diagnose", "revise", "gate"}:
+            raise ValueError(
+                "agentdog.mode must be one of: diagnose, revise, gate"
+            )
+        if agentdog.task not in {"unified", "coarse"}:
+            raise ValueError("agentdog.task must be one of: unified, coarse")
+        if agentdog.provider != "openai_compatible":
+            raise ValueError(
+                "agentdog.provider currently supports only: openai_compatible"
+            )
+        if not agentdog.checkpoints:
+            raise ValueError("agentdog.checkpoints must not be empty")
+        invalid_checkpoints = set(agentdog.checkpoints) - {
+            "pre_action",
+            "pre_reply",
+        }
+        if invalid_checkpoints:
+            raise ValueError(
+                "agentdog.checkpoints supports only: pre_action, pre_reply"
+            )
+        if len(set(agentdog.checkpoints)) != len(agentdog.checkpoints):
+            raise ValueError("agentdog.checkpoints must not contain duplicates")
+        if agentdog.timeout_seconds <= 0:
+            raise ValueError("agentdog.timeout_seconds must be greater than zero")
+        if not 0.0 <= agentdog.temperature <= 2.0:
+            raise ValueError("agentdog.temperature must be between 0 and 2")
+        if agentdog.max_tokens < 1:
+            raise ValueError("agentdog.max_tokens must be positive")
+        if agentdog.max_trajectory_chars < 0:
+            raise ValueError(
+                "agentdog.max_trajectory_chars must be non-negative"
+            )
+        if agentdog.max_revisions < 0:
+            raise ValueError("agentdog.max_revisions must be non-negative")
+        if not agentdog.replacement_message.strip():
+            raise ValueError("agentdog.replacement_message must not be empty")
+    else:
+        agentdog = AgentDoGConfig()
+
     agentguard_raw = raw.get("agentguard", {}) or {}
     if isinstance(agentguard_raw, bool):
         agentguard = AgentGuardConfig(enabled=agentguard_raw)
@@ -812,6 +929,7 @@ def load_config(path: str | Path) -> AppConfig:
         aegis=aegis,
         pro2guard=pro2guard,
         toolsafe=toolsafe,
+        agentdog=agentdog,
         agentguard=agentguard,
         agentsight=agentsight,
         agentdojo=agentdojo,

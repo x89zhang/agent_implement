@@ -36,6 +36,18 @@ pro2guard:
   threshold: 0.1
   unsafe_states:
     - ATTACK_SUCCESS
+toolsafe:
+  enabled: true
+  mode: replan
+  threshold: 0.5
+  provider: openai_compatible
+  model: qwen3.6-35b
+  base_url: http://localhost:8000/v1
+  api_key_env: TOOLSAFE_API_KEY
+  timeout_seconds: 30
+  max_history_steps: 20
+  max_replans: 3
+  fail_closed: true
 agentsight:
   enabled: false
   binary: runtime/bin/agentsight
@@ -43,7 +55,7 @@ agentsight:
   privilege: auto
   required: true
 agentguard:
-  enabled: true
+  enabled: false
   mode: block
   policy: rules/agentguard/agentdojo_policy.rules
   plugin_config: ""
@@ -71,3 +83,11 @@ agentguard:
   remote_timeout_seconds: 5
   remote_retries: 2
   fail_closed: true
+agentdog:
+  enabled: true
+  mode: gate
+  task: unified
+  model: qwen3.6-35b
+  base_url: http://localhost:8000/v1
+  timeout_seconds: 60
+  fail_closed: false

@@ -6,6 +6,7 @@
 !docs/toolsafe.md
 !README.md
 !docs/agentsight.md
+!docs/agentdog.md
 paper/*
 legacy/*
 jobs/*
@@ -13,4 +14,5 @@ tests/
 !tests/
 tests/*
 !tests/test_toolsafe.py
+!tests/test_agentdog.py
 logs_other_proj/

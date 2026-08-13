@@ -9,7 +9,7 @@ from typing import Any, Callable
 
 from .config import AppConfig, ToolConfig
 from .llm import LLMAdapter
-from .middleware import build_middleware_manager
+from .middleware import build_middleware_manager, output_revision_limit
 from .skills import load_enabled_skills, render_skill_context, validate_skill_tools
 
 
@@ -209,12 +209,16 @@ def agent_node(cfg: AppConfig, llm: LLMAdapter) -> Callable[[dict[str, Any]], di
                 output_guard = middleware.guard_model_output(state, response.content, raw_call)
                 response_content = output_guard.content if output_guard.content is not None else response.content
                 call = output_guard.tool_call
-                if not output_guard.retry or attempts >= max(0, cfg.agentguard.max_steps - 1):
+                if not output_guard.retry or attempts >= output_revision_limit(cfg):
                     break
                 attempts += 1
                 runtime_messages.append({
                     "role": "system",
-                    "content": f"AgentGuard requested a safe revision: {output_guard.feedback}",
+                    "content": (
+                        "Safety middleware requested a final-response revision. "
+                        "Do not call tools unless the feedback explicitly concerns a "
+                        "proposed tool action.\n" + output_guard.feedback
+                    ),
                 })
                 input_messages = [dict(m) for m in runtime_messages]
 
@@ -311,6 +315,7 @@ def tool_node(
         state.pop("_last_aegis_decision", None)
         state.pop("_last_pro2guard_decision", None)
         state.pop("_last_toolsafe_decision", None)
+        state.pop("_last_agentdog_decision", None)
         state.pop("_last_agentguard_decision", None)
         decision = middleware.before_tool(state, requested_name, requested_payload)
         if decision.terminate:
@@ -318,6 +323,7 @@ def tool_node(
         aegis_decision = state.pop("_last_aegis_decision", None)
         pro2guard_decision = state.pop("_last_pro2guard_decision", None)
         toolsafe_decision = state.pop("_last_toolsafe_decision", None)
+        agentdog_decision = state.pop("_last_agentdog_decision", None)
         agentguard_decision = state.get("_last_agentguard_decision")
         name = decision.tool_name or requested_name
         payload = decision.arguments if decision.arguments is not None else requested_payload
@@ -361,6 +367,7 @@ def tool_node(
                 "aegis": aegis_decision,
                 "pro2guard": pro2guard_decision,
                 "toolsafe": toolsafe_decision,
+                "agentdog": agentdog_decision,
                 "agentguard": agentguard_decision,
             }
         )
@@ -378,6 +385,7 @@ def tool_node(
                 "aegis": aegis_decision,
                 "pro2guard": pro2guard_decision,
                 "toolsafe": toolsafe_decision,
+                "agentdog": agentdog_decision,
                 "agentguard": agentguard_decision,
             },
         }

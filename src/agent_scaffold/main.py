@@ -298,6 +298,20 @@ def run_once(
                 "model": cfg.toolsafe.model,
                 "status": "pending" if cfg.toolsafe.enabled else "disabled",
             },
+            "agentdog": {
+                "enabled": bool(cfg.agentdog.enabled),
+                "mode": cfg.agentdog.mode,
+                "task": cfg.agentdog.task,
+                "model": cfg.agentdog.model,
+                "checkpoints": list(cfg.agentdog.checkpoints),
+                "status": "pending" if cfg.agentdog.enabled else "disabled",
+                "event_count": 0,
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                },
+            },
             "agentguard": {
                 "enabled": bool(cfg.agentguard.enabled),
                 "mode": cfg.agentguard.mode,
