@@ -21,9 +21,22 @@ try:
     from .agentdojo_adapter import augment_task as augment_task_with_agentdojo_context
     from .agentdojo_adapter import evaluate_last_session as evaluate_agentdojo_session
     from .agentdojo_adapter import reset_session as reset_agentdojo_session
+    from .agent_security_bench_adapter import (
+        augment_task as augment_task_with_agent_security_bench_context,
+    )
+    from .agent_security_bench_adapter import (
+        evaluate_last_session as evaluate_agent_security_bench_session,
+    )
+    from .agent_security_bench_adapter import (
+        reset_session as reset_agent_security_bench_session,
+    )
+    from .agentharm_adapter import augment_task as augment_task_with_agentharm_context
+    from .agentharm_adapter import evaluate_last_session as evaluate_agentharm_session
+    from .agentharm_adapter import reset_session as reset_agentharm_session
     from .agentguard import close_agentguard_session
     from .agentguard.scenario import compile_agentguard_scenario
     from .agentsight import AgentSightObserver, wait_for_start_gate
+    from .agentspec.generator import compile_agentspec_rules
     from .config import load_config
     from .container_runtime import run_once_in_container, should_run_in_container
     from .graph import build_graph
@@ -47,9 +60,28 @@ except ImportError:  # Fallback when executed as a script
     from agent_scaffold.agentdojo_adapter import (
         reset_session as reset_agentdojo_session,
     )
+    from agent_scaffold.agent_security_bench_adapter import (
+        augment_task as augment_task_with_agent_security_bench_context,
+    )
+    from agent_scaffold.agent_security_bench_adapter import (
+        evaluate_last_session as evaluate_agent_security_bench_session,
+    )
+    from agent_scaffold.agent_security_bench_adapter import (
+        reset_session as reset_agent_security_bench_session,
+    )
+    from agent_scaffold.agentharm_adapter import (
+        augment_task as augment_task_with_agentharm_context,
+    )
+    from agent_scaffold.agentharm_adapter import (
+        evaluate_last_session as evaluate_agentharm_session,
+    )
+    from agent_scaffold.agentharm_adapter import (
+        reset_session as reset_agentharm_session,
+    )
     from agent_scaffold.agentguard import close_agentguard_session
     from agent_scaffold.agentguard.scenario import compile_agentguard_scenario
     from agent_scaffold.agentsight import AgentSightObserver, wait_for_start_gate
+    from agent_scaffold.agentspec.generator import compile_agentspec_rules
     from agent_scaffold.config import load_config
     from agent_scaffold.container_runtime import (
         run_once_in_container,
@@ -86,13 +118,20 @@ def _build_job_dir(cfg_name: str, started_at: float, workspace_root: Path) -> Pa
     candidate = base
     counter = 1
     while candidate.exists():
-        candidate = workspace_root / "jobs" / f"{timestamp}_{_slugify(cfg_name)}_{counter}"
+        candidate = (
+            workspace_root / "jobs" / f"{timestamp}_{_slugify(cfg_name)}_{counter}"
+        )
         counter += 1
     candidate.mkdir(parents=True, exist_ok=False)
     return candidate
 
 
-def _build_batch_dir(cfg_name: str, started_at: float, workspace_root: Path, configured: str | None = None) -> Path:
+def _build_batch_dir(
+    cfg_name: str,
+    started_at: float,
+    workspace_root: Path,
+    configured: str | None = None,
+) -> Path:
     if configured:
         candidate = Path(configured)
         if not candidate.is_absolute():
@@ -105,7 +144,11 @@ def _build_batch_dir(cfg_name: str, started_at: float, workspace_root: Path, con
     candidate = base
     counter = 1
     while candidate.exists():
-        candidate = workspace_root / "jobs" / f"{timestamp}_{_slugify(cfg_name)}_batch_{counter}"
+        candidate = (
+            workspace_root
+            / "jobs"
+            / f"{timestamp}_{_slugify(cfg_name)}_batch_{counter}"
+        )
         counter += 1
     candidate.mkdir(parents=True, exist_ok=False)
     return candidate
@@ -124,6 +167,7 @@ class _Tee(io.TextIOBase):
     def flush(self) -> None:
         for stream in self.streams:
             stream.flush()
+
 
 def _normalize_messages(raw: Any) -> list[dict[str, str]]:
     if not isinstance(raw, list):
@@ -159,8 +203,12 @@ def _load_run_payload(path: str) -> dict[str, Any]:
     resume_messages = payload.get("resume_messages")
     return {
         "user_input": payload.get("user_input"),
-        "context_messages": _normalize_messages(context_messages) if context_messages else None,
-        "resume_messages": _normalize_messages(resume_messages) if resume_messages else None,
+        "context_messages": _normalize_messages(context_messages)
+        if context_messages
+        else None,
+        "resume_messages": _normalize_messages(resume_messages)
+        if resume_messages
+        else None,
     }
 
 
@@ -178,10 +226,15 @@ def _write_result_if_requested(result: dict[str, Any]) -> None:
         return
     path = Path(result_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
+    path.write_text(
+        json.dumps(result, ensure_ascii=False, indent=2, default=_json_default),
+        encoding="utf-8",
+    )
 
 
-def _split_system_messages(messages: list[dict[str, str]]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+def _split_system_messages(
+    messages: list[dict[str, str]],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     system_messages: list[dict[str, str]] = []
     other_messages: list[dict[str, str]] = []
     for message in messages:
@@ -201,9 +254,13 @@ def run_once(
     cfg = load_config(cfg_path)
 
     cfg_file = Path(cfg_path).resolve()
-    workspace_root = Path(os.environ.get("AGENT_WORKSPACE_ROOT") or Path.cwd()).resolve()
+    workspace_root = Path(
+        os.environ.get("AGENT_WORKSPACE_ROOT") or Path.cwd()
+    ).resolve()
     run_start = time.time()
-    run_dir = _build_job_dir(cfg.agent.name or cfg_file.parent.name, run_start, workspace_root)
+    run_dir = _build_job_dir(
+        cfg.agent.name or cfg_file.parent.name, run_start, workspace_root
+    )
 
     if should_run_in_container(cfg):
         return run_once_in_container(
@@ -217,9 +274,21 @@ def run_once(
         )
 
     reset_agentdojo_session(cfg.agentdojo)
+    reset_agent_security_bench_session(cfg.agent_security_bench)
+    reset_agentharm_session(cfg.agentharm)
     task = augment_task_with_trip_context(cfg.agent.task.strip(), cfg.trip)
     task = augment_task_with_research_context(task, cfg.research)
     task = augment_task_with_agentdojo_context(task, cfg.agentdojo)
+    task = augment_task_with_agent_security_bench_context(
+        task, cfg.agent_security_bench
+    )
+    task = augment_task_with_agentharm_context(task, cfg.agentharm)
+    agentspec_generation = compile_agentspec_rules(
+        cfg,
+        task,
+        run_dir,
+        user_input=user_input or "",
+    )
     agentguard_scenario = compile_agentguard_scenario(
         cfg,
         task,
@@ -228,20 +297,24 @@ def run_once(
     )
     graph = build_graph(cfg)
     initial_messages = [{"role": "user", "content": task}] if task else []
-    input_messages = (
-        [{"role": "user", "content": user_input}] if user_input else []
-    )
+    input_messages = [{"role": "user", "content": user_input}] if user_input else []
     base_messages = build_initial_messages(cfg)
     enabled_skills = load_enabled_skills(cfg)
-    skill_tool_warnings = validate_skill_tools(enabled_skills, {tool.name for tool in cfg.tools})
+    skill_tool_warnings = validate_skill_tools(
+        enabled_skills, {tool.name for tool in cfg.tools}
+    )
     plan = initialize_plan(cfg, task or (user_input or ""))
     seeded_messages = list(context_messages or [])
     resumed_messages = list(resume_messages or [])
     if resumed_messages:
         resumed_system, resumed_non_system = _split_system_messages(resumed_messages)
-        state_messages = (resumed_system[:1] or base_messages) + resumed_non_system + input_messages
+        state_messages = (
+            (resumed_system[:1] or base_messages) + resumed_non_system + input_messages
+        )
     else:
-        state_messages = base_messages + initial_messages + seeded_messages + input_messages
+        state_messages = (
+            base_messages + initial_messages + seeded_messages + input_messages
+        )
     output_path: Path | None = None
     if cfg.monitoring.enabled:
         configured_output = cfg.monitoring.output_path.strip()
@@ -251,6 +324,31 @@ def run_once(
                 output_path = run_dir / output_path
         else:
             output_path = run_dir / f"trace_{Path(cfg_path).stem}.json"
+    startup_trace: list[dict[str, Any]] = []
+    generation_steps = (
+        ("agentspec_rule_generate", agentspec_generation),
+        ("agentguard_scenario_compile", agentguard_scenario),
+    )
+    for step_name, generated in generation_steps:
+        if generated.enabled:
+            startup_trace.append(
+                {
+                    "step": step_name,
+                    "timestamp": time.time(),
+                    "latency_ms": generated.duration_ms,
+                    "input": {"task": task, "tool_count": len(cfg.tools)},
+                    "output": generated.to_trace(),
+                    "usage": dict(generated.usage or {}),
+                }
+            )
+    startup_usage = {
+        key: sum(
+            int((generated.usage or {}).get(key, 0))
+            for _, generated in generation_steps
+        )
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+    }
+
     state = {
         "messages": state_messages,
         "_toolsafe_user_request": "\n\n".join(
@@ -258,39 +356,20 @@ def run_once(
         ),
         "tool_call": None,
         "iterations": 0,
-        "trace": (
-            [
-                {
-                    "step": "agentguard_scenario_compile",
-                    "timestamp": time.time(),
-                    "latency_ms": agentguard_scenario.duration_ms,
-                    "input": {"task": task, "tool_count": len(cfg.tools)},
-                    "output": agentguard_scenario.to_trace(),
-                    "usage": dict(agentguard_scenario.usage or {}),
-                }
-            ]
-            if agentguard_scenario.enabled
-            else []
-        ),
+        "trace": startup_trace,
         "trace_messages": [dict(message) for message in state_messages],
         "trace_stats": {
-            "api_calls": agentguard_scenario.attempts,
-            "prompt_tokens": int(
-                (agentguard_scenario.usage or {}).get("prompt_tokens", 0)
-            ),
-            "completion_tokens": int(
-                (agentguard_scenario.usage or {}).get("completion_tokens", 0)
-            ),
-            "total_tokens": int(
-                (agentguard_scenario.usage or {}).get("total_tokens", 0)
-            ),
+            "api_calls": sum(generated.attempts for _, generated in generation_steps),
+            **startup_usage,
         },
         "plan": plan,
         "tool_errors": [],
         "harness": {
             "agentsight": {
                 "enabled": bool(cfg.agentsight.enabled),
-                "status": "managed_by_host" if os.environ.get("AGENTSIGHT_MANAGED") == "1" else "disabled",
+                "status": "managed_by_host"
+                if os.environ.get("AGENTSIGHT_MANAGED") == "1"
+                else "disabled",
             },
             "toolsafe": {
                 "enabled": bool(cfg.toolsafe.enabled),
@@ -312,6 +391,12 @@ def run_once(
                     "total_tokens": 0,
                 },
             },
+            "agentspec": {
+                "enabled": bool(cfg.agentspec.enabled),
+                "status": ("pending" if cfg.agentspec.enabled else "disabled"),
+                "rule_count": len(cfg.agentspec.rules),
+                "rule_generator": agentspec_generation.to_trace(),
+            },
             "agentguard": {
                 "enabled": bool(cfg.agentguard.enabled),
                 "mode": cfg.agentguard.mode,
@@ -329,7 +414,9 @@ def run_once(
             },
             "middleware": {
                 "enabled": cfg.middleware.enabled,
-                "modules": cfg.middleware.modules or ["HarnessMiddleware"] if cfg.middleware.enabled else [],
+                "modules": cfg.middleware.modules or ["HarnessMiddleware"]
+                if cfg.middleware.enabled
+                else [],
             },
         },
         "_trace_persist": {
@@ -410,26 +497,48 @@ def run_once(
                 "content": f"Recovered from tool parsing failure and saved output to {recovered_output.name}.",
             }
         )
-    agentdojo_eval = evaluate_agentdojo_session(cfg.agentdojo, result.get("messages", [{}])[-1].get("content", "") if result.get("messages") else "")
-    if agentdojo_eval is not None:
+    final_output = (
+        result.get("messages", [{}])[-1].get("content", "")
+        if result.get("messages")
+        else ""
+    )
+    benchmark_evaluations = (
+        ("agentdojo", cfg.agentdojo, evaluate_agentdojo_session),
+        (
+            "agent_security_bench",
+            cfg.agent_security_bench,
+            evaluate_agent_security_bench_session,
+        ),
+        ("agentharm", cfg.agentharm, evaluate_agentharm_session),
+    )
+    for benchmark_name, benchmark_cfg, evaluator in benchmark_evaluations:
+        evaluation = evaluator(benchmark_cfg, final_output)
+        if evaluation is None:
+            continue
         result.setdefault("trace", []).append(
             {
-                "step": "agentdojo_eval",
+                "step": f"{benchmark_name}_eval",
                 "timestamp": time.time(),
                 "latency_ms": 0,
-                "input": {"agentdojo": _asdict(cfg.agentdojo)},
-                "output": agentdojo_eval,
+                "input": {benchmark_name: _asdict(benchmark_cfg)},
+                "output": evaluation,
                 "usage": None,
             }
         )
-        result.setdefault("harness", {})["agentdojo"] = agentdojo_eval
+        result.setdefault("harness", {})[benchmark_name] = evaluation
         summary = (
-            f"AgentDojo evaluation: utility={agentdojo_eval.get('utility')} "
-            f"security={agentdojo_eval.get('security')} "
-            f"attack_success={agentdojo_eval.get('attack_success')}"
+            f"{benchmark_name} evaluation: "
+            f"utility={evaluation.get('utility')} "
+            f"security={evaluation.get('security')} "
+            f"attack_success={evaluation.get('attack_success')} "
+            f"score={evaluation.get('score')}"
         )
-        result.setdefault("messages", []).append({"role": "assistant", "content": summary})
-        result.setdefault("trace_messages", []).append({"role": "assistant", "content": summary})
+        result.setdefault("messages", []).append(
+            {"role": "assistant", "content": summary}
+        )
+        result.setdefault("trace_messages", []).append(
+            {"role": "assistant", "content": summary}
+        )
     _flush_trace_snapshot(result)
     return result
 
@@ -465,9 +574,16 @@ def _run_repeated(
     resume_messages: list[dict[str, str]] | None,
 ) -> None:
     cfg = load_config(cfg_path)
-    workspace_root = Path(os.environ.get("AGENT_WORKSPACE_ROOT") or Path.cwd()).resolve()
+    workspace_root = Path(
+        os.environ.get("AGENT_WORKSPACE_ROOT") or Path.cwd()
+    ).resolve()
     batch_start = time.time()
-    batch_dir = _build_batch_dir(cfg.agent.name or Path(cfg_path).resolve().parent.name, batch_start, workspace_root, runs_dir)
+    batch_dir = _build_batch_dir(
+        cfg.agent.name or Path(cfg_path).resolve().parent.name,
+        batch_start,
+        workspace_root,
+        runs_dir,
+    )
     previous_job_dir = os.environ.get("AGENT_JOB_DIR")
     summary: dict[str, Any] = {
         "config": str(Path(cfg_path).resolve()),
@@ -484,9 +600,16 @@ def _run_repeated(
             stdout_buffer = io.StringIO()
             stderr_buffer = io.StringIO()
             print(f"=== run {index}/{runs}: {run_dir} ===")
-            item: dict[str, Any] = {"index": index, "run_dir": str(run_dir), "ok": False}
+            item: dict[str, Any] = {
+                "index": index,
+                "run_dir": str(run_dir),
+                "ok": False,
+            }
             try:
-                with contextlib.redirect_stdout(_Tee(sys.stdout, stdout_buffer)), contextlib.redirect_stderr(_Tee(sys.stderr, stderr_buffer)):
+                with (
+                    contextlib.redirect_stdout(_Tee(sys.stdout, stdout_buffer)),
+                    contextlib.redirect_stderr(_Tee(sys.stderr, stderr_buffer)),
+                ):
                     result = run_once(
                         cfg_path,
                         user_input,
@@ -496,14 +619,23 @@ def _run_repeated(
                 actual_run_dir = _result_run_dir(result, run_dir)
                 actual_run_dir.mkdir(parents=True, exist_ok=True)
                 result_path = actual_run_dir / "result.json"
-                result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
-                item.update({
-                    "ok": True,
-                    "run_dir": str(actual_run_dir),
-                    "result_path": str(result_path),
-                    "final": _final_message(result),
-                    "agentdojo": result.get("harness", {}).get("agentdojo") if isinstance(result.get("harness"), dict) else None,
-                })
+                result_path.write_text(
+                    json.dumps(
+                        result, ensure_ascii=False, indent=2, default=_json_default
+                    ),
+                    encoding="utf-8",
+                )
+                item.update(
+                    {
+                        "ok": True,
+                        "run_dir": str(actual_run_dir),
+                        "result_path": str(result_path),
+                        "final": _final_message(result),
+                        "harness": result.get("harness")
+                        if isinstance(result.get("harness"), dict)
+                        else None,
+                    }
+                )
                 messages = result.get("messages", [])
                 if messages:
                     final_text = str(messages[-1]["content"])
@@ -513,17 +645,28 @@ def _run_repeated(
                 run_dir.mkdir(parents=True, exist_ok=True)
                 error_path = run_dir / "error.json"
                 error = {"error": str(exc), "type": type(exc).__name__}
-                error_path.write_text(json.dumps(error, ensure_ascii=False, indent=2), encoding="utf-8")
+                error_path.write_text(
+                    json.dumps(error, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
                 item.update({"error": str(exc), "error_path": str(error_path)})
                 stderr_buffer.write(f"Run {index} failed: {exc}\n")
                 print(f"Run {index} failed: {exc}", file=sys.stderr)
             finally:
                 run_dir.mkdir(parents=True, exist_ok=True)
-                (run_dir / "stdout.log").write_text(stdout_buffer.getvalue(), encoding="utf-8")
-                (run_dir / "stderr.log").write_text(stderr_buffer.getvalue(), encoding="utf-8")
+                (run_dir / "stdout.log").write_text(
+                    stdout_buffer.getvalue(), encoding="utf-8"
+                )
+                (run_dir / "stderr.log").write_text(
+                    stderr_buffer.getvalue(), encoding="utf-8"
+                )
                 summary["items"].append(item)
                 summary["completed_at"] = time.time()
-                (batch_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
+                (batch_dir / "summary.json").write_text(
+                    json.dumps(
+                        summary, ensure_ascii=False, indent=2, default=_json_default
+                    ),
+                    encoding="utf-8",
+                )
     finally:
         if previous_job_dir is None:
             os.environ.pop("AGENT_JOB_DIR", None)
@@ -537,11 +680,28 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="LangGraph agent scaffolding")
     parser.add_argument("--config", required=True, help="config.yaml path")
     parser.add_argument("--input", help="single input to run once")
-    parser.add_argument("--context-file", help="JSON file containing context messages or an object with a messages field")
-    parser.add_argument("--resume-from", help="JSON trace/context file to resume from; uses its messages field as prior conversation")
-    parser.add_argument("--run-payload", help="internal JSON payload used when the harness is launched in a container")
-    parser.add_argument("--runs", type=int, default=1, help="number of times to run the same config/input non-interactively")
-    parser.add_argument("--runs-dir", help="directory for a multi-run batch; defaults to jobs/<timestamp>_<agent>_batch")
+    parser.add_argument(
+        "--context-file",
+        help="JSON file containing context messages or an object with a messages field",
+    )
+    parser.add_argument(
+        "--resume-from",
+        help="JSON trace/context file to resume from; uses its messages field as prior conversation",
+    )
+    parser.add_argument(
+        "--run-payload",
+        help="internal JSON payload used when the harness is launched in a container",
+    )
+    parser.add_argument(
+        "--runs",
+        type=int,
+        default=1,
+        help="number of times to run the same config/input non-interactively",
+    )
+    parser.add_argument(
+        "--runs-dir",
+        help="directory for a multi-run batch; defaults to jobs/<timestamp>_<agent>_batch",
+    )
     args = parser.parse_args()
 
     wait_for_start_gate()
@@ -570,8 +730,12 @@ def main() -> None:
             print(messages[-1]["content"])
         return
 
-    context_messages = _load_context_messages(args.context_file) if args.context_file else None
-    resume_messages = _load_context_messages(args.resume_from) if args.resume_from else None
+    context_messages = (
+        _load_context_messages(args.context_file) if args.context_file else None
+    )
+    resume_messages = (
+        _load_context_messages(args.resume_from) if args.resume_from else None
+    )
 
     if args.runs < 1:
         raise ValueError("--runs must be >= 1")
@@ -587,7 +751,12 @@ def main() -> None:
         return
 
     if args.input is not None:
-        result = run_once(args.config, args.input, context_messages=context_messages, resume_messages=resume_messages)
+        result = run_once(
+            args.config,
+            args.input,
+            context_messages=context_messages,
+            resume_messages=resume_messages,
+        )
         _write_result_if_requested(result)
         messages = result.get("messages", [])
         if messages:
@@ -595,8 +764,18 @@ def main() -> None:
         return
 
     cfg = load_config(args.config)
-    if cfg.agent.task.strip() or cfg.agentdojo.enabled:
-        result = run_once(args.config, None, context_messages=context_messages, resume_messages=resume_messages)
+    if (
+        cfg.agent.task.strip()
+        or cfg.agentdojo.enabled
+        or cfg.agent_security_bench.enabled
+        or cfg.agentharm.enabled
+    ):
+        result = run_once(
+            args.config,
+            None,
+            context_messages=context_messages,
+            resume_messages=resume_messages,
+        )
         _write_result_if_requested(result)
         messages = result.get("messages", [])
         if messages:
@@ -611,7 +790,12 @@ def main() -> None:
             break
         if not user_input:
             continue
-        result = run_once(args.config, user_input, context_messages=context_messages, resume_messages=resume_messages)
+        result = run_once(
+            args.config,
+            user_input,
+            context_messages=context_messages,
+            resume_messages=resume_messages,
+        )
         _write_result_if_requested(result)
         messages = result.get("messages", [])
         if messages:

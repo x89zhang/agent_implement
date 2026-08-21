@@ -36,6 +36,15 @@ pro2guard:
   threshold: 0.1
   unsafe_states:
     - ATTACK_SUCCESS
+agentspec:
+  enabled: false
+  rules: []
+  rule_files: []
+  generator:
+    enabled: true
+    context_mode: benign_only
+    max_attempts: 2
+    max_rules: 12
 toolsafe:
   enabled: true
   mode: replan

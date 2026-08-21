@@ -43,20 +43,72 @@ def _run_checked(cmd: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, cwd=str(cwd), text=True, capture_output=True, check=False)
 
 
+def _agentspec_required(cfg: Any) -> bool:
+    return bool(getattr(getattr(cfg, "agentspec", None), "enabled", False))
+
+
+def _image_has_agentspec(image: str, workspace_root: Path) -> bool:
+    probe = _run_checked(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--entrypoint",
+            "python",
+            image,
+            "-c",
+            (
+                "import importlib.util as u; "
+                "assert u.find_spec('rule') is not None; "
+                "assert u.find_spec('interpreter') is not None"
+            ),
+        ],
+        workspace_root,
+    )
+    return probe.returncode == 0
+
+
+def _effective_build_args(cfg: Any) -> dict[str, str]:
+    build_args = {
+        str(key): str(value)
+        for key, value in (getattr(cfg.container, "build_args", {}) or {}).items()
+    }
+    if _agentspec_required(cfg):
+        build_args["INSTALL_AGENTSPEC"] = "true"
+    return build_args
+
+
 def _ensure_image(cfg: Any, workspace_root: Path) -> None:
     image = str(cfg.container.image)
     inspect = _run_checked(["docker", "image", "inspect", image], workspace_root)
-    if inspect.returncode == 0:
+    image_exists = inspect.returncode == 0
+    agentspec_missing = (
+        image_exists
+        and _agentspec_required(cfg)
+        and not _image_has_agentspec(image, workspace_root)
+    )
+    if image_exists and not agentspec_missing:
         return
     if not bool(cfg.container.auto_build):
+        if agentspec_missing:
+            raise RuntimeError(
+                f"Container image {image!r} does not include the enabled AgentSpec "
+                "runtime and container.auto_build is disabled. Build it with "
+                "--build-arg INSTALL_AGENTSPEC=true or use a compatible image."
+            )
         raise RuntimeError(
             f"Container image {image!r} was not found and container.auto_build is disabled. "
             "Build it first or set container.enabled: false."
         )
+
     dockerfile = Path(str(cfg.container.dockerfile))
-    dockerfile_path = dockerfile if dockerfile.is_absolute() else workspace_root / dockerfile
+    dockerfile_path = (
+        dockerfile if dockerfile.is_absolute() else workspace_root / dockerfile
+    )
     build_cmd = ["docker", "build", "-t", image, "-f", str(dockerfile_path)]
-    for key, value in (getattr(cfg.container, "build_args", {}) or {}).items():
+    for key, value in _effective_build_args(cfg).items():
         build_cmd.extend(["--build-arg", f"{key}={value}"])
     build_cmd.append(str(workspace_root))
     build = _run_checked(build_cmd, workspace_root)
@@ -65,6 +117,11 @@ def _ensure_image(cfg: Any, workspace_root: Path) -> None:
             "Failed to build agent container image.\n"
             f"Command: {' '.join(build_cmd)}\n"
             f"STDOUT:\n{build.stdout}\nSTDERR:\n{build.stderr}"
+        )
+    if _agentspec_required(cfg) and not _image_has_agentspec(image, workspace_root):
+        raise RuntimeError(
+            f"Container image {image!r} was built without an importable AgentSpec "
+            "runtime. Ensure its Dockerfile honors INSTALL_AGENTSPEC=true."
         )
 
 

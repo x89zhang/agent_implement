@@ -1,0 +1,28 @@
+harness: .
+llm:
+  provider: vllm_openai
+  model: qwen3.6-35b
+  temperature: 0.2
+  base_url: http://localhost:8000/v1
+  api_key: ''
+  request_timeout: 120
+agent:
+  name: agent-security-bench-agent
+  task: ''
+graph:
+  type: langchain_react
+  max_iters: 12
+  react_max_iterations: 20
+  react_max_execution_time: 180
+container:
+  image: agent-scaffold-asb:latest
+  build_args:
+    INSTALL_AGENT_SECURITY_BENCH: "true"
+monitoring:
+  enabled: true
+  output_path: trace_agent_security_bench.json
+  print_trace: true
+toolsafe:
+  enabled: false
+agentdog:
+  enabled: false

@@ -1,0 +1,28 @@
+harness: .
+llm:
+  provider: vllm_openai
+  model: qwen3.6-35b
+  temperature: 0.0
+  base_url: http://localhost:8000/v1
+  api_key: ''
+  request_timeout: 180
+agent:
+  name: agentharm-agent
+  task: ''
+graph:
+  type: langchain_react
+  max_iters: 16
+  react_max_iterations: 24
+  react_max_execution_time: 240
+container:
+  image: agent-scaffold-agentharm:latest
+  build_args:
+    INSTALL_AGENTHARM: "true"
+monitoring:
+  enabled: true
+  output_path: trace_agentharm.json
+  print_trace: true
+toolsafe:
+  enabled: false
+agentdog:
+  enabled: false

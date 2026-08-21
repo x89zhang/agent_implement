@@ -452,6 +452,7 @@ def _record_react_runtime_step(state: dict[str, Any], result: str) -> None:
             "usage": {},
             "aegis": event.get("aegis"),
             "pro2guard": event.get("pro2guard"),
+            "agentspec": event.get("agentspec"),
             "toolsafe": event.get("toolsafe"),
             "agentdog": event.get("agentdog"),
             "agentguard": event.get("agentguard"),
@@ -469,18 +470,21 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
         if isinstance(state, dict):
             state.pop("_last_aegis_decision", None)
             state.pop("_last_pro2guard_decision", None)
+            state.pop("_last_agentspec_decision", None)
             state.pop("_last_toolsafe_decision", None)
             state.pop("_last_agentdog_decision", None)
             state.pop("_last_agentguard_decision", None)
         decision = middleware.before_tool(state if isinstance(state, dict) else {}, name, payload)
         aegis_decision = None
         pro2guard_decision = None
+        agentspec_decision = None
         toolsafe_decision = None
         agentdog_decision = None
         agentguard_decision = None
         if isinstance(state, dict):
             aegis_decision = state.pop("_last_aegis_decision", None)
             pro2guard_decision = state.pop("_last_pro2guard_decision", None)
+            agentspec_decision = state.pop("_last_agentspec_decision", None)
             toolsafe_decision = state.pop("_last_toolsafe_decision", None)
             agentdog_decision = state.pop("_last_agentdog_decision", None)
             agentguard_decision = state.get("_last_agentguard_decision")
@@ -501,6 +505,7 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
                     "tool_input": rendered_input,
                     "aegis": aegis_decision,
                     "pro2guard": pro2guard_decision,
+                    "agentspec": agentspec_decision,
                     "toolsafe": toolsafe_decision,
                     "agentdog": agentdog_decision,
                     "agentguard": {"before": agentguard_decision, "after": (state.get("_last_agentguard_decision") if isinstance(state, dict) else None)},
@@ -542,6 +547,7 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
                     "tool_input": rendered_input,
                     "aegis": aegis_decision,
                     "pro2guard": pro2guard_decision,
+                    "agentspec": agentspec_decision,
                     "toolsafe": toolsafe_decision,
                     "agentdog": agentdog_decision,
                     "agentguard": {"before": agentguard_decision, "after": (state.get("_last_agentguard_decision") if isinstance(state, dict) else None)},
@@ -558,6 +564,7 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
                 "tool_input": rendered_input,
                 "aegis": aegis_decision,
                 "pro2guard": pro2guard_decision,
+                "agentspec": agentspec_decision,
                 "toolsafe": toolsafe_decision,
                 "agentdog": agentdog_decision,
                 "agentguard": {"before": agentguard_decision, "after": state.get("_last_agentguard_decision")},
@@ -878,6 +885,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             if idx < len(guard_events):
                 step["aegis"] = guard_events[idx].get("aegis")
                 step["pro2guard"] = guard_events[idx].get("pro2guard")
+                step["agentspec"] = guard_events[idx].get("agentspec")
                 step["toolsafe"] = guard_events[idx].get("toolsafe")
                 step["agentdog"] = guard_events[idx].get("agentdog")
                 step["agentguard"] = guard_events[idx].get("agentguard")
@@ -891,6 +899,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             tool_usage = step.get("usage", {})
             aegis_decision = step.get("aegis")
             pro2guard_decision = step.get("pro2guard")
+            agentspec_decision = step.get("agentspec")
             toolsafe_decision = step.get("toolsafe")
             agentdog_decision = step.get("agentdog")
             agentguard_decision = step.get("agentguard")
@@ -928,6 +937,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                         "usage": tool_usage,
                         "aegis": aegis_decision,
                         "pro2guard": pro2guard_decision,
+                        "agentspec": agentspec_decision,
                         "toolsafe": toolsafe_decision,
                         "agentdog": agentdog_decision,
                         "agentguard": agentguard_decision,
@@ -949,6 +959,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                         "usage": tool_usage,
                         "aegis": aegis_decision,
                         "pro2guard": pro2guard_decision,
+                        "agentspec": agentspec_decision,
                         "toolsafe": toolsafe_decision,
                         "agentdog": agentdog_decision,
                         "agentguard": agentguard_decision,

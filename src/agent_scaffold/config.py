@@ -105,6 +105,44 @@ class Pro2GuardConfig:
 
 
 @dataclass
+class AgentSpecGeneratorConfig:
+    enabled: bool = True
+    context_mode: str = "benign_only"
+    max_attempts: int = 2
+    max_rules: int = 12
+    provider: str = ""
+    model: str = ""
+    temperature: float | None = None
+    base_url: str = ""
+    api_key: str = ""
+    request_timeout: int | None = None
+
+
+@dataclass
+class AgentSpecConfig:
+    enabled: bool = False
+    rules: list[str] = field(default_factory=list)
+    rule_files: list[str] = field(default_factory=list)
+    predicate_modules: list[str] = field(default_factory=list)
+    approval_handler: str = "prompt"
+    max_reflections: int = 3
+    fail_closed: bool = True
+    generator: AgentSpecGeneratorConfig = field(
+        default_factory=AgentSpecGeneratorConfig
+    )
+
+
+@dataclass
+class LlamaFirewallConfig:
+    enabled: bool = False
+    mode: str = "enforce"
+    use_case: str = ""
+    scanners: dict[str, list[str]] = field(default_factory=dict)
+    max_revisions: int = 1
+    fail_closed: bool = False
+
+
+@dataclass
 class ToolSafeConfig:
     enabled: bool = False
     mode: str = "replan"
@@ -217,6 +255,34 @@ class AgentDojoConfig:
 
 
 @dataclass
+class AgentSecurityBenchConfig:
+    enabled: bool = False
+    data_dir: str = ""
+    agent_name: str = "financial_analyst_agent"
+    task_index: int = 0
+    attacker_tool: str = ""
+    injection_method: str = "clean"
+    attack_type: str = "naive"
+    defense_type: str = ""
+    trigger: str = "with perspicacious discernment"
+
+
+@dataclass
+class AgentHarmConfig:
+    enabled: bool = False
+    dataset: str = "harmful"
+    split: str = "test_public"
+    behavior_id: str = ""
+    detailed_behaviors: bool | None = None
+    hint_included: bool | None = None
+    n_irrelevant_tools: int = 0
+    seed: int = 0
+    refusal_judge: str = "openai/gpt-4o-2024-08-06"
+    semantic_judge: str = "openai/gpt-4o-2024-08-06"
+    force_redownload: bool = False
+
+
+@dataclass
 class ContainerConfig:
     enabled: bool = True
     image: str = "agent-scaffold:latest"
@@ -235,6 +301,10 @@ class ContainerConfig:
             "TOOLSAFE_API_KEY",
             "AGENTDOG_API_KEY",
             "AGENTDOG_BASE_URL",
+            "HF_TOKEN",
+            "HUGGING_FACE_HUB_TOKEN",
+            "TOGETHER_API_KEY",
+            "TOKENIZERS_PARALLELISM",
             "HTTP_PROXY",
             "HTTPS_PROXY",
             "NO_PROXY",
@@ -255,11 +325,17 @@ class AppConfig:
     security: SecurityConfig = field(default_factory=SecurityConfig)
     aegis: AegisConfig = field(default_factory=AegisConfig)
     pro2guard: Pro2GuardConfig = field(default_factory=Pro2GuardConfig)
+    agentspec: AgentSpecConfig = field(default_factory=AgentSpecConfig)
+    llamafirewall: LlamaFirewallConfig = field(default_factory=LlamaFirewallConfig)
     toolsafe: ToolSafeConfig = field(default_factory=ToolSafeConfig)
     agentdog: AgentDoGConfig = field(default_factory=AgentDoGConfig)
     agentguard: AgentGuardConfig = field(default_factory=AgentGuardConfig)
     agentsight: AgentSightConfig = field(default_factory=AgentSightConfig)
     agentdojo: AgentDojoConfig = field(default_factory=AgentDojoConfig)
+    agent_security_bench: AgentSecurityBenchConfig = field(
+        default_factory=AgentSecurityBenchConfig
+    )
+    agentharm: AgentHarmConfig = field(default_factory=AgentHarmConfig)
     container: ContainerConfig = field(default_factory=ContainerConfig)
     trip: dict[str, Any] = field(default_factory=dict)
     research: dict[str, Any] = field(default_factory=dict)
@@ -280,7 +356,12 @@ def _container_enabled_from_raw(raw: dict[str, Any]) -> bool:
 def _optional_int(value: Any, default: int) -> int | None:
     if value is None:
         return None
-    if isinstance(value, str) and value.strip().lower() in {"", "none", "null", "unlimited"}:
+    if isinstance(value, str) and value.strip().lower() in {
+        "",
+        "none",
+        "null",
+        "unlimited",
+    }:
         return None
     return int(value if value is not None else default)
 
@@ -303,7 +384,9 @@ def _parse_agentdojo_case(case_id: str) -> tuple[str, str]:
         )
     user_task = match.group(1)
     injection_task = match.group(2) or ""
-    if injection_task.startswith("injection_") and not injection_task.startswith("injection_task_"):
+    if injection_task.startswith("injection_") and not injection_task.startswith(
+        "injection_task_"
+    ):
         injection_task = injection_task.replace("injection_", "injection_task_", 1)
     return user_task, injection_task
 
@@ -350,7 +433,9 @@ def _coerce_yaml_list(path: Path, key: str) -> list[Any]:
     raise ValueError(f"YAML file must contain a list or mapping: {path}")
 
 
-def _apply_harness_files(raw: dict[str, Any], harness_dir: Path | None) -> dict[str, Any]:
+def _apply_harness_files(
+    raw: dict[str, Any], harness_dir: Path | None
+) -> dict[str, Any]:
     if harness_dir is None or not harness_dir.exists():
         return raw
     merged = dict(raw)
@@ -358,7 +443,9 @@ def _apply_harness_files(raw: dict[str, Any], harness_dir: Path | None) -> dict[
     system_prompt_path = harness_dir / "systemprompt.md"
     if system_prompt_path.exists():
         agent_raw = dict(merged.get("agent") or {})
-        agent_raw["system_prompt"] = system_prompt_path.read_text(encoding="utf-8").strip()
+        agent_raw["system_prompt"] = system_prompt_path.read_text(
+            encoding="utf-8"
+        ).strip()
         merged["agent"] = agent_raw
 
     task_path = harness_dir / "task.md"
@@ -442,6 +529,8 @@ def load_config(path: str | Path) -> AppConfig:
     agent_raw = _require(raw, "agent")
     graph_raw = raw.get("graph", {})
     agentdojo_raw = raw.get("agentdojo", {}) or {}
+    agent_security_bench_raw = raw.get("agent_security_bench", {}) or {}
+    agentharm_raw = raw.get("agentharm", {}) or {}
 
     llm = LLMConfig(
         provider=str(_require(llm_raw, "provider")),
@@ -466,8 +555,13 @@ def load_config(path: str | Path) -> AppConfig:
                 name=str(_require(item, "name")),
                 import_path=str(_require(item, "import")),
                 description=str(item.get("description", "")),
-                capabilities=[str(value) for value in (item.get("capabilities", []) or [])],
-                labels={str(key): value for key, value in (item.get("labels", {}) or {}).items()},
+                capabilities=[
+                    str(value) for value in (item.get("capabilities", []) or [])
+                ],
+                labels={
+                    str(key): value
+                    for key, value in (item.get("labels", {}) or {}).items()
+                },
             )
         )
 
@@ -482,7 +576,10 @@ def load_config(path: str | Path) -> AppConfig:
                     f"AgentDojo case '{case_id}' selects user_task '{case_user_task}', "
                     f"but user_task is also set to '{raw_user_task}'. Use only case, or make them match."
                 )
-            if "injection_task" in agentdojo_raw and raw_injection_task != case_injection_task:
+            if (
+                "injection_task" in agentdojo_raw
+                and raw_injection_task != case_injection_task
+            ):
                 raise ValueError(
                     f"AgentDojo case '{case_id}' selects injection_task '{case_injection_task or '<none>'}', "
                     f"but injection_task is also set to '{raw_injection_task or '<none>'}'. Use only case, or make them match."
@@ -502,38 +599,130 @@ def load_config(path: str | Path) -> AppConfig:
             case=case_id,
             user_task=raw_user_task,
             injection_task=raw_injection_task,
-            trusted_tool_output_prompt=bool(agentdojo_raw.get("trusted_tool_output_prompt", True)),
-            custom_injection_text=str(agentdojo_raw.get("custom_injection_text", "") or ""),
+            trusted_tool_output_prompt=bool(
+                agentdojo_raw.get("trusted_tool_output_prompt", True)
+            ),
+            custom_injection_text=str(
+                agentdojo_raw.get("custom_injection_text", "") or ""
+            ),
             attack_template=str(agentdojo_raw.get("attack_template", "") or ""),
-            injection_vectors=[str(item) for item in (agentdojo_raw.get("injection_vectors", []) or [])],
+            injection_vectors=[
+                str(item) for item in (agentdojo_raw.get("injection_vectors", []) or [])
+            ],
             injections={
                 str(key): str(value)
                 for key, value in (
                     agentdojo_raw.get("custom_injections")
                     if agentdojo_raw.get("custom_injections") is not None
-                    else agentdojo_raw.get("injections", {})
-                or {}).items()
+                    else agentdojo_raw.get("injections", {}) or {}
+                ).items()
             },
         )
     else:
         agentdojo = AgentDojoConfig()
 
-    if agentdojo.enabled and not _container_enabled_from_raw(raw):
-        module_name = f"{__package__}.agentdojo_adapter" if __package__ else "agent_scaffold.agentdojo_adapter"
+    if isinstance(agent_security_bench_raw, dict):
+        agent_security_bench = AgentSecurityBenchConfig(
+            enabled=bool(agent_security_bench_raw.get("enabled", False)),
+            data_dir=str(agent_security_bench_raw.get("data_dir", "") or ""),
+            agent_name=str(
+                agent_security_bench_raw.get("agent_name", "financial_analyst_agent")
+            ),
+            task_index=int(agent_security_bench_raw.get("task_index", 0)),
+            attacker_tool=str(agent_security_bench_raw.get("attacker_tool", "") or ""),
+            injection_method=str(
+                agent_security_bench_raw.get("injection_method", "clean")
+            ),
+            attack_type=str(agent_security_bench_raw.get("attack_type", "naive")),
+            defense_type=str(agent_security_bench_raw.get("defense_type", "") or ""),
+            trigger=str(
+                agent_security_bench_raw.get(
+                    "trigger", "with perspicacious discernment"
+                )
+            ),
+        )
+    else:
+        agent_security_bench = AgentSecurityBenchConfig()
+
+    if isinstance(agentharm_raw, dict):
+        detailed_behaviors = agentharm_raw.get("detailed_behaviors")
+        hint_included = agentharm_raw.get("hint_included")
+        agentharm = AgentHarmConfig(
+            enabled=bool(agentharm_raw.get("enabled", False)),
+            dataset=str(agentharm_raw.get("dataset", "harmful")),
+            split=str(agentharm_raw.get("split", "test_public")),
+            behavior_id=str(agentharm_raw.get("behavior_id", "") or ""),
+            detailed_behaviors=bool(detailed_behaviors)
+            if detailed_behaviors is not None
+            else None,
+            hint_included=bool(hint_included) if hint_included is not None else None,
+            n_irrelevant_tools=int(agentharm_raw.get("n_irrelevant_tools", 0)),
+            seed=int(agentharm_raw.get("seed", 0)),
+            refusal_judge=str(
+                agentharm_raw.get("refusal_judge", "openai/gpt-4o-2024-08-06")
+            ),
+            semantic_judge=str(
+                agentharm_raw.get("semantic_judge", "openai/gpt-4o-2024-08-06")
+            ),
+            force_redownload=bool(agentharm_raw.get("force_redownload", False)),
+        )
+    else:
+        agentharm = AgentHarmConfig()
+
+    enabled_benchmarks = [
+        name
+        for name, enabled in (
+            ("agentdojo", agentdojo.enabled),
+            ("agent_security_bench", agent_security_bench.enabled),
+            ("agentharm", agentharm.enabled),
+        )
+        if enabled
+    ]
+    if len(enabled_benchmarks) > 1:
+        raise ValueError(
+            "Enable only one benchmark harness at a time: "
+            + ", ".join(enabled_benchmarks)
+        )
+
+    if enabled_benchmarks and not _container_enabled_from_raw(raw):
+        benchmark_name = enabled_benchmarks[0]
+        adapter_module = {
+            "agentdojo": "agentdojo_adapter",
+            "agent_security_bench": "agent_security_bench_adapter",
+            "agentharm": "agentharm_adapter",
+        }[benchmark_name]
+        module_name = (
+            f"{__package__}.{adapter_module}"
+            if __package__
+            else f"agent_scaffold.{adapter_module}"
+        )
         adapter = importlib.import_module(module_name)
+        benchmark_cfg = {
+            "agentdojo": agentdojo,
+            "agent_security_bench": agent_security_bench,
+            "agentharm": agentharm,
+        }[benchmark_name]
         tools = [
             ToolConfig(name=name, import_path=import_path, description=description)
-            for name, import_path, description in adapter.build_tool_configs(agentdojo)
+            for name, import_path, description in adapter.build_tool_configs(
+                benchmark_cfg
+            )
         ]
 
     graph = GraphConfig(
         type=str(graph_raw.get("type", "single_agent")),
         max_iters=int(graph_raw.get("max_iters", 4)),
-        tool_call_format=str(graph_raw.get("tool_call_format", "TOOL_CALL: <name> <json>")),
+        tool_call_format=str(
+            graph_raw.get("tool_call_format", "TOOL_CALL: <name> <json>")
+        ),
         stop_keyword=str(graph_raw.get("stop_keyword", "FINAL")),
         react_prompt=str(graph_raw.get("react_prompt", "")),
-        react_max_iterations=_optional_int(graph_raw.get("react_max_iterations", 15), 15),
-        react_max_execution_time=_optional_int(graph_raw.get("react_max_execution_time", 120), 120),
+        react_max_iterations=_optional_int(
+            graph_raw.get("react_max_iterations", 15), 15
+        ),
+        react_max_execution_time=_optional_int(
+            graph_raw.get("react_max_execution_time", 120), 120
+        ),
     )
 
     monitoring_raw = raw.get("monitoring", {}) or {}
@@ -577,7 +766,9 @@ def load_config(path: str | Path) -> AppConfig:
 
     middleware_raw = raw.get("middleware", {}) or {}
     if isinstance(middleware_raw, list):
-        middleware = MiddlewareConfig(enabled=True, modules=[str(item) for item in middleware_raw])
+        middleware = MiddlewareConfig(
+            enabled=True, modules=[str(item) for item in middleware_raw]
+        )
     elif isinstance(middleware_raw, dict):
         middleware = MiddlewareConfig(
             enabled=bool(middleware_raw.get("enabled", True)),
@@ -588,17 +779,27 @@ def load_config(path: str | Path) -> AppConfig:
 
     security_raw = raw.get("security", {}) or {}
     legacy_tool_prompt = None
-    if isinstance(agentdojo_raw, dict) and "trusted_tool_output_prompt" in agentdojo_raw:
+    if (
+        isinstance(agentdojo_raw, dict)
+        and "trusted_tool_output_prompt" in agentdojo_raw
+    ):
         legacy_tool_prompt = bool(agentdojo_raw.get("trusted_tool_output_prompt", True))
     if isinstance(security_raw, bool):
         security = SecurityConfig(trusted_tool_output_prompt=security_raw)
     elif isinstance(security_raw, dict):
         security = SecurityConfig(
-            trusted_tool_output_prompt=bool(security_raw.get("trusted_tool_output_prompt", legacy_tool_prompt if legacy_tool_prompt is not None else True)),
+            trusted_tool_output_prompt=bool(
+                security_raw.get(
+                    "trusted_tool_output_prompt",
+                    legacy_tool_prompt if legacy_tool_prompt is not None else True,
+                )
+            ),
         )
     else:
         security = SecurityConfig(
-            trusted_tool_output_prompt=legacy_tool_prompt if legacy_tool_prompt is not None else True,
+            trusted_tool_output_prompt=legacy_tool_prompt
+            if legacy_tool_prompt is not None
+            else True,
         )
 
     aegis_raw = raw.get("aegis", {}) or {}
@@ -610,8 +811,12 @@ def load_config(path: str | Path) -> AppConfig:
             mode=str(aegis_raw.get("mode", "block")),
             risk_threshold=str(aegis_raw.get("risk_threshold", "HIGH")).upper(),
             fail_closed=bool(aegis_raw.get("fail_closed", True)),
-            allow_tools=[str(item) for item in (aegis_raw.get("allow_tools", []) or [])],
-            block_tools=[str(item) for item in (aegis_raw.get("block_tools", []) or [])],
+            allow_tools=[
+                str(item) for item in (aegis_raw.get("allow_tools", []) or [])
+            ],
+            block_tools=[
+                str(item) for item in (aegis_raw.get("block_tools", []) or [])
+            ],
         )
     else:
         aegis = AegisConfig()
@@ -628,7 +833,9 @@ def load_config(path: str | Path) -> AppConfig:
             dtmc_path=str(pro2guard_raw.get("dtmc_path", "")),
             prism_bin=str(pro2guard_raw.get("prism_bin", "prism")),
             abstraction=str(pro2guard_raw.get("abstraction", "")),
-            unsafe_states=[str(item) for item in (pro2guard_raw.get("unsafe_states", []) or [])],
+            unsafe_states=[
+                str(item) for item in (pro2guard_raw.get("unsafe_states", []) or [])
+            ],
             horizon=int(pro2guard_raw.get("horizon", 20)),
             timeout_seconds=int(pro2guard_raw.get("timeout_seconds", 10)),
             fail_closed=bool(pro2guard_raw.get("fail_closed", False)),
@@ -637,6 +844,121 @@ def load_config(path: str | Path) -> AppConfig:
             raise ValueError("pro2guard.mode must be one of: block, warn, monitor")
     else:
         pro2guard = Pro2GuardConfig()
+
+    agentspec_raw = raw.get("agentspec", {}) or {}
+    if isinstance(agentspec_raw, bool):
+        agentspec = AgentSpecConfig(enabled=agentspec_raw)
+    elif isinstance(agentspec_raw, dict):
+        inline_rules = agentspec_raw.get("rules", []) or []
+        rule_files = agentspec_raw.get("rule_files", []) or []
+        predicate_modules = agentspec_raw.get("predicate_modules", []) or []
+        if isinstance(inline_rules, str):
+            inline_rules = [inline_rules]
+        if isinstance(rule_files, str):
+            rule_files = [rule_files]
+        if isinstance(predicate_modules, str):
+            predicate_modules = [predicate_modules]
+        generator_raw = agentspec_raw.get("generator", True)
+        if isinstance(generator_raw, bool):
+            agentspec_generator = AgentSpecGeneratorConfig(enabled=generator_raw)
+        elif isinstance(generator_raw, dict):
+            generator_llm_raw = generator_raw.get("llm", {}) or {}
+            if not isinstance(generator_llm_raw, dict):
+                raise TypeError("agentspec.generator.llm must be a mapping")
+            agentspec_generator = AgentSpecGeneratorConfig(
+                enabled=bool(generator_raw.get("enabled", True)),
+                context_mode=str(
+                    generator_raw.get("context_mode", "benign_only")
+                ).lower(),
+                max_attempts=int(generator_raw.get("max_attempts", 2)),
+                max_rules=int(generator_raw.get("max_rules", 12)),
+                provider=str(
+                    generator_llm_raw.get("provider", generator_raw.get("provider", ""))
+                ).lower(),
+                model=str(
+                    generator_llm_raw.get("model", generator_raw.get("model", ""))
+                ),
+                temperature=(
+                    float(generator_llm_raw["temperature"])
+                    if "temperature" in generator_llm_raw
+                    else (
+                        float(generator_raw["temperature"])
+                        if "temperature" in generator_raw
+                        else None
+                    )
+                ),
+                base_url=str(
+                    generator_llm_raw.get("base_url", generator_raw.get("base_url", ""))
+                ),
+                api_key=str(
+                    generator_llm_raw.get("api_key", generator_raw.get("api_key", ""))
+                ),
+                request_timeout=_optional_int(
+                    generator_llm_raw.get(
+                        "request_timeout", generator_raw.get("request_timeout")
+                    ),
+                    120,
+                ),
+            )
+        else:
+            raise TypeError("agentspec.generator must be a boolean or mapping")
+        agentspec = AgentSpecConfig(
+            enabled=bool(agentspec_raw.get("enabled", False)),
+            rules=[str(item) for item in inline_rules],
+            rule_files=[str(item) for item in rule_files],
+            predicate_modules=[str(item) for item in predicate_modules],
+            approval_handler=str(agentspec_raw.get("approval_handler", "prompt")),
+            max_reflections=int(agentspec_raw.get("max_reflections", 3)),
+            fail_closed=bool(agentspec_raw.get("fail_closed", True)),
+            generator=agentspec_generator,
+        )
+        if agentspec.max_reflections < 0:
+            raise ValueError("agentspec.max_reflections must be non-negative")
+        if agentspec.generator.context_mode not in {"full", "benign_only"}:
+            raise ValueError(
+                "agentspec.generator.context_mode must be one of: full, benign_only"
+            )
+        if agentspec.generator.max_attempts < 1:
+            raise ValueError("agentspec.generator.max_attempts must be at least 1")
+        if agentspec.generator.max_rules < 1:
+            raise ValueError("agentspec.generator.max_rules must be at least 1")
+    else:
+        agentspec = AgentSpecConfig()
+
+    llamafirewall_raw = raw.get("llamafirewall", {}) or {}
+    if isinstance(llamafirewall_raw, bool):
+        llamafirewall = LlamaFirewallConfig(enabled=llamafirewall_raw)
+    elif isinstance(llamafirewall_raw, dict):
+        scanners_raw = llamafirewall_raw.get("scanners", {}) or {}
+        if not isinstance(scanners_raw, dict):
+            raise ValueError(
+                "llamafirewall.scanners must be a role-to-scanners mapping"
+            )
+        llamafirewall = LlamaFirewallConfig(
+            enabled=bool(llamafirewall_raw.get("enabled", False)),
+            mode=str(llamafirewall_raw.get("mode", "enforce")).lower(),
+            use_case=str(llamafirewall_raw.get("use_case", "")).lower(),
+            scanners={
+                str(role).lower(): (
+                    [str(scanner).lower() for scanner in items]
+                    if isinstance(items, list)
+                    else [str(items).lower()]
+                )
+                for role, items in scanners_raw.items()
+            },
+            max_revisions=int(llamafirewall_raw.get("max_revisions", 1)),
+            fail_closed=bool(llamafirewall_raw.get("fail_closed", False)),
+        )
+        if llamafirewall.mode not in {"enforce", "monitor"}:
+            raise ValueError("llamafirewall.mode must be one of: enforce, monitor")
+        if llamafirewall.use_case not in {"", "chatbot", "coding_assistant"}:
+            raise ValueError(
+                "llamafirewall.use_case must be one of: chatbot, coding_assistant"
+            )
+        if llamafirewall.max_revisions < 0:
+            raise ValueError("llamafirewall.max_revisions must be non-negative")
+    else:
+        llamafirewall = LlamaFirewallConfig()
 
     toolsafe_raw = raw.get("toolsafe", {}) or {}
     if isinstance(toolsafe_raw, bool):
@@ -657,11 +979,15 @@ def load_config(path: str | Path) -> AppConfig:
             fail_closed=bool(toolsafe_raw.get("fail_closed", False)),
         )
         if toolsafe.mode not in {"replan", "block", "warn", "monitor"}:
-            raise ValueError("toolsafe.mode must be one of: replan, block, warn, monitor")
+            raise ValueError(
+                "toolsafe.mode must be one of: replan, block, warn, monitor"
+            )
         if not 0.0 <= toolsafe.threshold <= 1.0:
             raise ValueError("toolsafe.threshold must be between 0 and 1")
         if toolsafe.provider != "openai_compatible":
-            raise ValueError("toolsafe.provider currently supports only: openai_compatible")
+            raise ValueError(
+                "toolsafe.provider currently supports only: openai_compatible"
+            )
         if toolsafe.timeout_seconds <= 0:
             raise ValueError("toolsafe.timeout_seconds must be greater than zero")
         if toolsafe.max_history_steps < 0:
@@ -693,27 +1019,19 @@ def load_config(path: str | Path) -> AppConfig:
             mode=str(agentdog_raw.get("mode", "diagnose")).lower(),
             task=agentdog_task,
             checkpoints=[item.lower() for item in checkpoints],
-            provider=str(
-                agentdog_raw.get("provider", "openai_compatible")
-            ).lower(),
+            provider=str(agentdog_raw.get("provider", "openai_compatible")).lower(),
             model=str(agentdog_raw.get("model", default_agentdog_model)),
             base_url=str(agentdog_raw.get("base_url", "")),
-            base_url_env=str(
-                agentdog_raw.get("base_url_env", "AGENTDOG_BASE_URL")
-            ),
+            base_url_env=str(agentdog_raw.get("base_url_env", "AGENTDOG_BASE_URL")),
             api_key=str(agentdog_raw.get("api_key", "")),
             api_key_env=str(agentdog_raw.get("api_key_env", "AGENTDOG_API_KEY")),
             timeout_seconds=float(agentdog_raw.get("timeout_seconds", 60.0)),
             temperature=float(agentdog_raw.get("temperature", 0.0)),
             max_tokens=int(agentdog_raw.get("max_tokens", 1024)),
-            max_trajectory_chars=int(
-                agentdog_raw.get("max_trajectory_chars", 0)
-            ),
+            max_trajectory_chars=int(agentdog_raw.get("max_trajectory_chars", 0)),
             max_revisions=int(agentdog_raw.get("max_revisions", 2)),
             fail_closed=bool(agentdog_raw.get("fail_closed", False)),
-            include_raw_response=bool(
-                agentdog_raw.get("include_raw_response", True)
-            ),
+            include_raw_response=bool(agentdog_raw.get("include_raw_response", True)),
             replacement_message=str(
                 agentdog_raw.get(
                     "replacement_message",
@@ -722,9 +1040,7 @@ def load_config(path: str | Path) -> AppConfig:
             ),
         )
         if agentdog.mode not in {"diagnose", "revise", "gate"}:
-            raise ValueError(
-                "agentdog.mode must be one of: diagnose, revise, gate"
-            )
+            raise ValueError("agentdog.mode must be one of: diagnose, revise, gate")
         if agentdog.task not in {"unified", "coarse"}:
             raise ValueError("agentdog.task must be one of: unified, coarse")
         if agentdog.provider != "openai_compatible":
@@ -750,9 +1066,7 @@ def load_config(path: str | Path) -> AppConfig:
         if agentdog.max_tokens < 1:
             raise ValueError("agentdog.max_tokens must be positive")
         if agentdog.max_trajectory_chars < 0:
-            raise ValueError(
-                "agentdog.max_trajectory_chars must be non-negative"
-            )
+            raise ValueError("agentdog.max_trajectory_chars must be non-negative")
         if agentdog.max_revisions < 0:
             raise ValueError("agentdog.max_revisions must be non-negative")
         if not agentdog.replacement_message.strip():
@@ -765,7 +1079,9 @@ def load_config(path: str | Path) -> AppConfig:
         agentguard = AgentGuardConfig(enabled=agentguard_raw)
     elif isinstance(agentguard_raw, dict):
         sandbox_profile_raw = agentguard_raw.get("sandbox_profile")
-        if sandbox_profile_raw is not None and not isinstance(sandbox_profile_raw, dict):
+        if sandbox_profile_raw is not None and not isinstance(
+            sandbox_profile_raw, dict
+        ):
             raise ValueError("agentguard.sandbox_profile must be a mapping or null")
         scenario_raw = agentguard_raw.get("scenario_compiler", True)
         if isinstance(scenario_raw, bool):
@@ -777,9 +1093,7 @@ def load_config(path: str | Path) -> AppConfig:
             request_timeout_raw = scenario_llm_raw.get("request_timeout")
             scenario_compiler = AgentGuardScenarioCompilerConfig(
                 enabled=bool(scenario_raw.get("enabled", True)),
-                context_mode=str(
-                    scenario_raw.get("context_mode", "full")
-                ).lower(),
+                context_mode=str(scenario_raw.get("context_mode", "full")).lower(),
                 max_attempts=int(scenario_raw.get("max_attempts", 2)),
                 provider=str(scenario_llm_raw.get("provider", "")),
                 model=str(scenario_llm_raw.get("model", "")),
@@ -797,9 +1111,7 @@ def load_config(path: str | Path) -> AppConfig:
                 ),
             )
         else:
-            raise TypeError(
-                "agentguard.scenario_compiler must be a boolean or mapping"
-            )
+            raise TypeError("agentguard.scenario_compiler must be a boolean or mapping")
         if scenario_compiler.max_attempts < 1:
             raise ValueError(
                 "agentguard.scenario_compiler.max_attempts must be positive"
@@ -813,28 +1125,47 @@ def load_config(path: str | Path) -> AppConfig:
             enabled=bool(agentguard_raw.get("enabled", False)),
             mode=str(agentguard_raw.get("mode", "block")).lower(),
             policy=str(agentguard_raw.get("policy", "")),
-            server_url=str(agentguard_raw.get("server_url", agentguard_raw.get("remote_url", os.environ.get("AGENTGUARD_SERVER_URL", "")))),
-            api_key=str(agentguard_raw.get("api_key", os.environ.get("AGENTGUARD_API_KEY", ""))),
+            server_url=str(
+                agentguard_raw.get(
+                    "server_url",
+                    agentguard_raw.get(
+                        "remote_url", os.environ.get("AGENTGUARD_SERVER_URL", "")
+                    ),
+                )
+            ),
+            api_key=str(
+                agentguard_raw.get("api_key", os.environ.get("AGENTGUARD_API_KEY", ""))
+            ),
             plugin_config=str(agentguard_raw.get("plugin_config", "")),
             environment=str(agentguard_raw.get("environment", "")),
             user_id=str(agentguard_raw.get("user_id", "")),
             role=str(agentguard_raw.get("role", "default")),
             trust_level=int(agentguard_raw.get("trust_level", 1)),
             sandbox=str(agentguard_raw.get("sandbox", "local")),
-            sandbox_profile=dict(sandbox_profile_raw) if isinstance(sandbox_profile_raw, dict) else None,
+            sandbox_profile=dict(sandbox_profile_raw)
+            if isinstance(sandbox_profile_raw, dict)
+            else None,
             audit_path=str(agentguard_raw.get("audit_path", "")),
             max_steps=int(agentguard_raw.get("max_steps", 12)),
             max_tool_calls=int(agentguard_raw.get("max_tool_calls", 24)),
             window_size=int(agentguard_raw.get("window_size", 8)),
-            remote_timeout_seconds=float(agentguard_raw.get("remote_timeout_seconds", 5.0)),
+            remote_timeout_seconds=float(
+                agentguard_raw.get("remote_timeout_seconds", 5.0)
+            ),
             remote_retries=int(agentguard_raw.get("remote_retries", 2)),
             fail_closed=bool(agentguard_raw.get("fail_closed", True)),
             scenario_compiler=scenario_compiler,
         )
         if agentguard.mode not in {"block", "warn", "monitor"}:
             raise ValueError("agentguard.mode must be one of: block, warn, monitor")
-        if agentguard.max_steps < 1 or agentguard.max_tool_calls < 1 or agentguard.window_size < 1:
-            raise ValueError("agentguard max_steps, max_tool_calls, and window_size must be positive")
+        if (
+            agentguard.max_steps < 1
+            or agentguard.max_tool_calls < 1
+            or agentguard.window_size < 1
+        ):
+            raise ValueError(
+                "agentguard max_steps, max_tool_calls, and window_size must be positive"
+            )
         if agentguard.remote_timeout_seconds <= 0 or agentguard.remote_retries < 0:
             raise ValueError("agentguard remote timeout and retries values are invalid")
     else:
@@ -849,15 +1180,21 @@ def load_config(path: str | Path) -> AppConfig:
             binary=str(agentsight_raw.get("binary", "agentsight")),
             capture=str(agentsight_raw.get("capture", "full")).lower(),
             db_path=str(agentsight_raw.get("db_path", "agentsight.db")),
-            snapshot_path=str(agentsight_raw.get("snapshot_path", "agentsight_snapshot.json")),
+            snapshot_path=str(
+                agentsight_raw.get("snapshot_path", "agentsight_snapshot.json")
+            ),
             log_path=str(agentsight_raw.get("log_path", "agentsight.log")),
             required=bool(agentsight_raw.get("required", False)),
             privilege=str(agentsight_raw.get("privilege", "auto")).lower(),
             web_server=bool(agentsight_raw.get("web_server", False)),
             server_port=int(agentsight_raw.get("server_port", 7395)),
-            startup_timeout_seconds=float(agentsight_raw.get("startup_timeout_seconds", 10.0)),
+            startup_timeout_seconds=float(
+                agentsight_raw.get("startup_timeout_seconds", 10.0)
+            ),
             warmup_seconds=float(agentsight_raw.get("warmup_seconds", 1.0)),
-            shutdown_timeout_seconds=float(agentsight_raw.get("shutdown_timeout_seconds", 10.0)),
+            shutdown_timeout_seconds=float(
+                agentsight_raw.get("shutdown_timeout_seconds", 10.0)
+            ),
         )
         if agentsight.capture not in {"system", "full"}:
             raise ValueError("agentsight.capture must be one of: system, full")
@@ -866,21 +1203,31 @@ def load_config(path: str | Path) -> AppConfig:
         if agentsight.server_port < 1 or agentsight.server_port > 65535:
             raise ValueError("agentsight.server_port must be between 1 and 65535")
         if agentsight.startup_timeout_seconds <= 0:
-            raise ValueError("agentsight.startup_timeout_seconds must be greater than zero")
+            raise ValueError(
+                "agentsight.startup_timeout_seconds must be greater than zero"
+            )
         if agentsight.warmup_seconds < 0:
             raise ValueError("agentsight.warmup_seconds must be non-negative")
         if agentsight.warmup_seconds > agentsight.startup_timeout_seconds:
-            raise ValueError("agentsight.warmup_seconds must not exceed startup_timeout_seconds")
+            raise ValueError(
+                "agentsight.warmup_seconds must not exceed startup_timeout_seconds"
+            )
         if agentsight.shutdown_timeout_seconds <= 0:
-            raise ValueError("agentsight.shutdown_timeout_seconds must be greater than zero")
+            raise ValueError(
+                "agentsight.shutdown_timeout_seconds must be greater than zero"
+            )
         for field_name in ("db_path", "snapshot_path", "log_path"):
             value = str(getattr(agentsight, field_name)).strip()
             if not value:
                 raise ValueError(f"agentsight.{field_name} must not be empty")
             if Path(value).is_absolute():
-                raise ValueError(f"agentsight.{field_name} must be relative to the job directory")
+                raise ValueError(
+                    f"agentsight.{field_name} must be relative to the job directory"
+                )
             if ".." in Path(value).parts:
-                raise ValueError(f"agentsight.{field_name} must stay inside the job directory")
+                raise ValueError(
+                    f"agentsight.{field_name} must stay inside the job directory"
+                )
     else:
         agentsight = AgentSightConfig()
 
@@ -905,7 +1252,10 @@ def load_config(path: str | Path) -> AppConfig:
             workdir=str(container_raw.get("workdir", "/workspace")),
             network=str(container_raw.get("network", "host")),
             remove=bool(container_raw.get("remove", True)),
-            build_args={str(key): str(value) for key, value in (container_raw.get("build_args", {}) or {}).items()},
+            build_args={
+                str(key): str(value)
+                for key, value in (container_raw.get("build_args", {}) or {}).items()
+            },
             env=env,
         )
     else:
@@ -928,11 +1278,15 @@ def load_config(path: str | Path) -> AppConfig:
         security=security,
         aegis=aegis,
         pro2guard=pro2guard,
+        agentspec=agentspec,
+        llamafirewall=llamafirewall,
         toolsafe=toolsafe,
         agentdog=agentdog,
         agentguard=agentguard,
         agentsight=agentsight,
         agentdojo=agentdojo,
+        agent_security_bench=agent_security_bench,
+        agentharm=agentharm,
         container=container,
         trip=trip,
         research=research,

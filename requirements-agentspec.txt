@@ -1,0 +1,5 @@
+# ICSE AgentSpec runtime. This is intentionally installed from the authors'
+# repository: the `agentspec` project on PyPI is a different package.
+# Update the commit deliberately after checking its generated parser/API.
+git+https://github.com/haoyuwang99/AgentSpec.git@e6fa3902e2cfb9681f454b355691b771f70543f8
+

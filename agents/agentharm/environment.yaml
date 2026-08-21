@@ -1,0 +1,13 @@
+agentharm:
+  enabled: true
+  dataset: harmful
+  split: test_public
+  # Leave empty to select the first behavior after filtering.
+  behavior_id: ''
+  n_irrelevant_tools: 0
+  seed: 0
+  refusal_judge: openai/gpt-4o-2024-08-06
+  semantic_judge: openai/gpt-4o-2024-08-06
+
+security:
+  trusted_tool_output_prompt: false

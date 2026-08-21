@@ -1,0 +1,15 @@
+agent_security_bench:
+  enabled: true
+  agent_name: financial_analyst_agent
+  task_index: 0
+  attacker_tool: InvestmentDiversion
+  injection_method: direct_prompt_injection
+  attack_type: context_ignoring
+  # Supported methods: clean, direct_prompt_injection,
+  # observation_prompt_injection, memory_attack, pot_backdoor, pot_clean.
+  # Optional native ASB-style defenses: delimiters_defense,
+  # instructional_prevention, ob_sandwich_defense.
+  # trigger: with perspicacious discernment
+
+security:
+  trusted_tool_output_prompt: false

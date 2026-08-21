@@ -2,11 +2,19 @@
 !/simulated_envs/virtual_mailbox.json
 *.pyc
 *.txt
+!requirements-llamafirewall.txt
+!requirements-agentspec.txt
+!requirements-agentharm.txt
 *.md
 !docs/toolsafe.md
 !README.md
 !docs/agentsight.md
 !docs/agentdog.md
+!docs/llamafirewall.md
+!docs/agentspec.md
+!agents/agent_security_bench/**
+!agents/agentharm/**
+!scripts/install_asb_data.py
 paper/*
 legacy/*
 jobs/*
@@ -15,4 +23,7 @@ tests/
 tests/*
 !tests/test_toolsafe.py
 !tests/test_agentdog.py
+!tests/test_agentspec.py
+!tests/test_llamafirewall.py
+!tests/test_benchmark_adapters.py
 logs_other_proj/

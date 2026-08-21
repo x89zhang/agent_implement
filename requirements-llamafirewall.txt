@@ -1,0 +1,3 @@
+# Optional security middleware. This intentionally stays out of requirements.txt
+# because it pulls the Torch/Transformers/CodeShield ML stack.
+llamafirewall==1.0.3

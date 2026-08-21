@@ -169,16 +169,26 @@ class MiddlewareManager:
     ) -> ModelDecision:
         current = [dict(message) for message in messages]
         blocked: list[str] = []
+        content: str | None = None
+        decision_type = ""
+        terminate = False
         for middleware in self.middlewares:
             decision = middleware.guard_model_input(state, current)
             if decision.messages is not None:
                 current = [dict(message) for message in decision.messages]
             if not decision.allowed:
                 blocked.append(decision.reason)
+                if decision.content is not None:
+                    content = decision.content
+            decision_type = decision.decision_type or decision_type
+            terminate = terminate or decision.terminate
         return ModelDecision(
             allowed=not blocked,
             reason="; ".join(reason for reason in blocked if reason),
             messages=current,
+            content=content,
+            decision_type=decision_type,
+            terminate=terminate,
         )
 
     def guard_model_output(
@@ -233,7 +243,7 @@ class MiddlewareManager:
         decision_type = ""
         terminate = False
         for middleware in self.middlewares:
-            decision = middleware.before_tool(state, name, dict(payload))
+            decision = middleware.before_tool(state, tool_name, dict(arguments))
             allowed = allowed and decision.allowed
             if decision.reason and not decision.allowed:
                 reasons.append(decision.reason)
@@ -293,6 +303,10 @@ def build_middleware_manager(cfg: AppConfig) -> MiddlewareManager:
         from .pro2guard import Pro2GuardMiddleware
 
         middlewares.append(Pro2GuardMiddleware(cfg))
+    if cfg.agentspec.enabled:
+        from .agentspec import AgentSpecMiddleware
+
+        middlewares.append(AgentSpecMiddleware(cfg))
     if cfg.toolsafe.enabled:
         from .toolsafe import ToolSafeMiddleware
 
@@ -307,6 +321,11 @@ def build_middleware_manager(cfg: AppConfig) -> MiddlewareManager:
         from .agentguard import AgentGuardMiddleware
 
         middlewares.append(AgentGuardMiddleware(cfg))
+    if cfg.llamafirewall.enabled:
+        from .llamafirewall import LlamaFirewallMiddleware
+
+        # Run last so it scans the effective output and its result isolation wins.
+        middlewares.append(LlamaFirewallMiddleware(cfg))
     return MiddlewareManager(middlewares)
 
 
@@ -316,4 +335,6 @@ def output_revision_limit(cfg: AppConfig) -> int:
         limits.append(max(0, cfg.agentguard.max_steps - 1))
     if cfg.agentdog.enabled and cfg.agentdog.mode == "revise":
         limits.append(cfg.agentdog.max_revisions)
+    if cfg.llamafirewall.enabled and cfg.llamafirewall.mode == "enforce":
+        limits.append(cfg.llamafirewall.max_revisions)
     return max(limits)
