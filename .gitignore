@@ -12,6 +12,7 @@
 !docs/agentdog.md
 !docs/llamafirewall.md
 !docs/agentspec.md
+!docs/pro2guard.md
 !agents/agent_security_bench/**
 !agents/agentharm/**
 !scripts/install_asb_data.py
@@ -26,4 +27,6 @@ tests/*
 !tests/test_agentspec.py
 !tests/test_llamafirewall.py
 !tests/test_benchmark_adapters.py
+!tests/test_agentdojo_asr.py
+!tests/test_pro2guard_generator.py
 logs_other_proj/

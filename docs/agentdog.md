@@ -38,7 +38,6 @@ agentdog:
   base_url: http://127.0.0.1:8000/v1
   base_url_env: AGENTDOG_BASE_URL
   api_key_env: AGENTDOG_API_KEY
-  # api_key: ""  # Prefer api_key_env; do not commit credentials.
 
   timeout_seconds: 60
   temperature: 0.0

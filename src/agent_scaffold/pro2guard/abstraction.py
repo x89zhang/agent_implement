@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 
@@ -20,22 +22,46 @@ class ToolState:
 class ToolTraceAbstraction:
     """Default abstraction from scaffold tool events to finite Pro2Guard states."""
 
+    def __init__(self, policy: dict[str, Any] | None = None) -> None:
+        raw_profiles = (policy or {}).get("tool_profiles") or {}
+        self.unsafe_states = [
+            str(state) for state in ((policy or {}).get("unsafe_states") or [])
+        ]
+        self.tool_profiles = {
+            str(name).strip().lower(): {
+                "category": str(profile.get("category", "")).strip().lower(),
+                "side_effect": str(profile.get("side_effect", "")).strip().lower(),
+            }
+            for name, profile in dict(raw_profiles).items()
+            if isinstance(profile, dict)
+        }
+
+
+    @classmethod
+    def from_policy_file(cls, path: str | Path) -> "ToolTraceAbstraction":
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise TypeError("Pro2Guard abstraction policy must be a JSON object")
+        return cls(raw)
+
     def encode_tool_call(self, state: dict[str, Any], name: str, payload: Any) -> str:
         previous = state.get("_pro2guard_last_outcome", "unknown")
+        profile = self.tool_profiles.get(str(name).strip().lower(), {})
         return ToolState(
             tool=_bucket_tool_name(name),
-            category=_tool_category(name, payload),
+            category=profile.get("category") or _tool_category(name, payload),
             sensitivity=_sensitivity(payload),
-            side_effect=_side_effect(name, payload),
+            side_effect=profile.get("side_effect") or _side_effect(name, payload),
             outcome=str(previous),
         ).encode()
 
     def encode_tool_result(self, name: str, payload: Any, result: str, failed: bool) -> str:
+        profile = self.tool_profiles.get(str(name).strip().lower(), {})
         return ToolState(
             tool=_bucket_tool_name(name),
-            category=_tool_category(name, payload),
+            category=profile.get("category") or _tool_category(name, payload),
             sensitivity=_sensitivity(payload),
-            side_effect=_side_effect(name, payload),
+            side_effect=profile.get("side_effect") or _side_effect(name, payload),
             outcome="failed" if failed else "ok",
         ).encode()
 

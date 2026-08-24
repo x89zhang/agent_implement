@@ -18,7 +18,9 @@ if __package__ is None or __package__ == "":
 try:
     from dataclasses import asdict as _asdict
 
+    from .agentdojo_adapter import aggregate_asr as aggregate_agentdojo_asr
     from .agentdojo_adapter import augment_task as augment_task_with_agentdojo_context
+    from .agentdojo_adapter import config_file_snapshot
     from .agentdojo_adapter import evaluate_last_session as evaluate_agentdojo_session
     from .agentdojo_adapter import reset_session as reset_agentdojo_session
     from .agent_security_bench_adapter import (
@@ -42,6 +44,7 @@ try:
     from .graph import build_graph
     from .nodes import _flush_trace_snapshot, build_initial_messages
     from .planner import initialize_plan
+    from .pro2guard.generator import compile_pro2guard_policy
     from .skills import load_enabled_skills, validate_skill_tools
     from .tools import (
         augment_task_with_research_context,
@@ -52,8 +55,12 @@ except ImportError:  # Fallback when executed as a script
     from dataclasses import asdict as _asdict
 
     from agent_scaffold.agentdojo_adapter import (
+        aggregate_asr as aggregate_agentdojo_asr,
+    )
+    from agent_scaffold.agentdojo_adapter import (
         augment_task as augment_task_with_agentdojo_context,
     )
+    from agent_scaffold.agentdojo_adapter import config_file_snapshot
     from agent_scaffold.agentdojo_adapter import (
         evaluate_last_session as evaluate_agentdojo_session,
     )
@@ -90,6 +97,7 @@ except ImportError:  # Fallback when executed as a script
     from agent_scaffold.graph import build_graph
     from agent_scaffold.nodes import _flush_trace_snapshot, build_initial_messages
     from agent_scaffold.planner import initialize_plan
+    from agent_scaffold.pro2guard.generator import compile_pro2guard_policy
     from agent_scaffold.skills import load_enabled_skills, validate_skill_tools
     from agent_scaffold.tools import (
         augment_task_with_research_context,
@@ -283,6 +291,12 @@ def run_once(
         task, cfg.agent_security_bench
     )
     task = augment_task_with_agentharm_context(task, cfg.agentharm)
+    pro2guard_generation = compile_pro2guard_policy(
+        cfg,
+        task,
+        run_dir,
+        user_input=user_input or "",
+    )
     agentspec_generation = compile_agentspec_rules(
         cfg,
         task,
@@ -326,6 +340,7 @@ def run_once(
             output_path = run_dir / f"trace_{Path(cfg_path).stem}.json"
     startup_trace: list[dict[str, Any]] = []
     generation_steps = (
+        ("pro2guard_policy_generate", pro2guard_generation),
         ("agentspec_rule_generate", agentspec_generation),
         ("agentguard_scenario_compile", agentguard_scenario),
     )
@@ -390,6 +405,13 @@ def run_once(
                     "completion_tokens": 0,
                     "total_tokens": 0,
                 },
+            },
+            "pro2guard": {
+                "enabled": bool(cfg.pro2guard.enabled),
+                "status": "pending" if cfg.pro2guard.enabled else "disabled",
+                "mode": cfg.pro2guard.mode,
+                "unsafe_states": list(cfg.pro2guard.unsafe_states),
+                "policy_generator": pro2guard_generation.to_trace(),
             },
             "agentspec": {
                 "enabled": bool(cfg.agentspec.enabled),
@@ -585,11 +607,15 @@ def _run_repeated(
         runs_dir,
     )
     previous_job_dir = os.environ.get("AGENT_JOB_DIR")
+    previous_batch_dir = os.environ.get("AGENT_BATCH_DIR")
+    os.environ["AGENT_BATCH_DIR"] = str(batch_dir)
     summary: dict[str, Any] = {
-        "config": str(Path(cfg_path).resolve()),
+        "config_path": str(Path(cfg_path).resolve()),
+        "config": config_file_snapshot(cfg_path),
         "runs": runs,
         "batch_dir": str(batch_dir),
         "started_at": batch_start,
+        "asr": None,
         "items": [],
     }
 
@@ -660,6 +686,10 @@ def _run_repeated(
                     stderr_buffer.getvalue(), encoding="utf-8"
                 )
                 summary["items"].append(item)
+                agentdojo_asr = aggregate_agentdojo_asr(summary["items"])
+                if agentdojo_asr is not None:
+                    summary["agentdojo"] = agentdojo_asr
+                    summary["asr"] = agentdojo_asr["asr"]
                 summary["completed_at"] = time.time()
                 (batch_dir / "summary.json").write_text(
                     json.dumps(
@@ -668,6 +698,10 @@ def _run_repeated(
                     encoding="utf-8",
                 )
     finally:
+        if previous_batch_dir is None:
+            os.environ.pop("AGENT_BATCH_DIR", None)
+        else:
+            os.environ["AGENT_BATCH_DIR"] = previous_batch_dir
         if previous_job_dir is None:
             os.environ.pop("AGENT_JOB_DIR", None)
         else:

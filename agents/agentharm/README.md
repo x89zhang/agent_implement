@@ -3,6 +3,7 @@
 This harness runs one AgentHarm behavior through the project's agent graph while reusing the official Inspect Evals 0.17.0 dataset loader, tool implementations, grading function, semantic judge, and refusal judge.
 
 ```bash
+export OPENAI_API_KEY="your-api-key"  # Omit for a local endpoint without auth.
 PYTHONPATH=src python src/agent_scaffold/main.py --config agents/agentharm/agent.yaml
 ```
 

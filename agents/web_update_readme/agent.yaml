@@ -4,7 +4,7 @@ llm:
   model: qwen2.5-7b
   temperature: 0.2
   base_url: http://localhost:8000/v1
-  api_key: ''
+  api_key_env: OPENAI_API_KEY
 agent:
   name: github-web-agent
   task: 'Update README.md in the configured repository to include the content `Hello

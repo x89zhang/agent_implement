@@ -15,7 +15,13 @@ class Pro2GuardMiddleware(Middleware):
     def __init__(self, cfg: AppConfig) -> None:
         self.cfg = cfg
         self.pg = cfg.pro2guard
-        self.abstraction = _load_abstraction(self.pg.abstraction)
+        self.abstraction = _load_abstraction(
+            self.pg.abstraction,
+            _resolve_config_path(cfg, self.pg.abstraction_policy_path),
+        )
+        for unsafe_state in getattr(self.abstraction, "unsafe_states", []):
+            if unsafe_state not in self.pg.unsafe_states:
+                self.pg.unsafe_states.append(unsafe_state)
         self._json_model: JsonDTMC | None = None
         self._init_error = ""
         model_path = _resolve_config_path(cfg, self.pg.model_path or self.pg.dtmc_path)
@@ -123,8 +129,10 @@ def _resolve_config_path(cfg: AppConfig, value: str) -> str:
     return str(config_relative)
 
 
-def _load_abstraction(import_path: str) -> Any:
+def _load_abstraction(import_path: str, policy_path: str = "") -> Any:
     if not import_path:
+        if policy_path:
+            return ToolTraceAbstraction.from_policy_file(policy_path)
         return ToolTraceAbstraction()
     module_name, _, attr = import_path.partition(":")
     if not module_name or not attr:

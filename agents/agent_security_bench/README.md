@@ -5,6 +5,7 @@ This harness maps one official ASB task/attacker-tool pair into the project's no
 Run the configured case with:
 
 ```bash
+export OPENAI_API_KEY="your-api-key"  # Omit for a local endpoint without auth.
 PYTHONPATH=src python src/agent_scaffold/main.py --config agents/agent_security_bench/agent.yaml
 ```
 

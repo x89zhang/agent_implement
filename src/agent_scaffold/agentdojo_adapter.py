@@ -3,7 +3,9 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import re
 from dataclasses import asdict, is_dataclass
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -12,6 +14,10 @@ import yaml
 _TOOL_METADATA: dict[str, Any] = {}
 _SESSIONS: dict[str, "AgentDojoSession"] = {}
 _LAST_SESSION: "AgentDojoSession | None" = None
+_SENSITIVE_CONFIG_KEY = re.compile(
+    r"(?:api[_-]?key|access[_-]?token|auth[_-]?token|password|secret)$",
+    re.IGNORECASE,
+)
 
 
 def _import_agentdojo() -> None:
@@ -238,6 +244,7 @@ class AgentDojoSession:
             "utility": bool(utility),
             "security": not attack_success,
             "attack_success": attack_success,
+            "asr": float(attack_success) if self.injection_task is not None else None,
             "agentdojo_security_raw": raw_security_result,
             "tool_call_count": len(self.calls),
             "tool_errors": list(self.errors),
@@ -270,6 +277,70 @@ def evaluate_last_session(cfg: Any, final_output: str) -> dict[str, Any] | None:
     if session is None:
         return None
     return session.evaluate(final_output)
+
+
+def aggregate_asr(items: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Aggregate AgentDojo attack results from completed batch items."""
+    evaluations: list[dict[str, Any]] = []
+    for item in items:
+        harness = item.get("harness")
+        if not isinstance(harness, dict):
+            continue
+        evaluation = harness.get("agentdojo")
+        if isinstance(evaluation, dict):
+            evaluations.append(evaluation)
+
+    if not evaluations:
+        return None
+
+    # Benign cases have no injection task and are not ASR trials.
+    attack_trials = [
+        evaluation
+        for evaluation in evaluations
+        if evaluation.get("injection_task")
+    ]
+    attack_successes = sum(
+        1 for evaluation in attack_trials if evaluation.get("attack_success") is True
+    )
+    return {
+        "evaluated_runs": len(evaluations),
+        "attack_trials": len(attack_trials),
+        "attack_successes": attack_successes,
+        "asr": attack_successes / len(attack_trials) if attack_trials else None,
+    }
+
+
+def redact_config_snapshot(value: Any, key: str = "") -> Any:
+    """Return a JSON-safe config snapshot without credential values."""
+    if key and _SENSITIVE_CONFIG_KEY.search(key):
+        return "***REDACTED***"
+    if isinstance(value, dict):
+        return {
+            str(item_key): redact_config_snapshot(item_value, str(item_key))
+            for item_key, item_value in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [redact_config_snapshot(item) for item in value]
+    return value
+
+
+def config_file_snapshot(config_path: str | Path) -> dict[str, Any]:
+    """Load only agent.yaml and its sibling environment.yaml for a batch report."""
+    agent_path = Path(config_path).resolve()
+    environment_path = agent_path.parent / "environment.yaml"
+
+    agent_config = yaml.safe_load(agent_path.read_text(encoding="utf-8"))
+    environment_config = (
+        yaml.safe_load(environment_path.read_text(encoding="utf-8"))
+        if environment_path.exists()
+        else None
+    )
+    return redact_config_snapshot(
+        {
+            "agent.yaml": agent_config,
+            "environment.yaml": environment_config,
+        }
+    )
 
 
 def _stringify_tool_result(value: Any) -> str:

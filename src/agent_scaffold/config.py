@@ -17,6 +17,7 @@ class LLMConfig:
     temperature: float = 0.2
     base_url: str = ""
     api_key: str = ""
+    api_key_env: str = "OPENAI_API_KEY"
     request_timeout: int | None = 120
 
 
@@ -90,6 +91,23 @@ class AegisConfig:
 
 
 @dataclass
+class Pro2GuardGeneratorConfig:
+    enabled: bool = True
+    context_mode: str = "benign_only"
+    max_attempts: int = 2
+    max_profiles: int = 50
+    max_unsafe_states: int = 20
+    max_model_states: int = 200
+    state_batch_size: int = 8
+    fail_closed: bool = False
+    provider: str = ""
+    model: str = ""
+    temperature: float | None = None
+    base_url: str = ""
+    api_key: str = ""
+    request_timeout: int | None = None
+
+@dataclass
 class Pro2GuardConfig:
     enabled: bool = False
     mode: str = "block"
@@ -98,10 +116,14 @@ class Pro2GuardConfig:
     dtmc_path: str = ""
     prism_bin: str = "prism"
     abstraction: str = ""
+    abstraction_policy_path: str = ""
     unsafe_states: list[str] = field(default_factory=list)
     horizon: int = 20
     timeout_seconds: int = 10
     fail_closed: bool = False
+    generator: Pro2GuardGeneratorConfig = field(
+        default_factory=Pro2GuardGeneratorConfig
+    )
 
 
 @dataclass
@@ -532,12 +554,28 @@ def load_config(path: str | Path) -> AppConfig:
     agent_security_bench_raw = raw.get("agent_security_bench", {}) or {}
     agentharm_raw = raw.get("agentharm", {}) or {}
 
+    llm_provider = str(_require(llm_raw, "provider"))
+    default_api_key_env = (
+        "ANTHROPIC_API_KEY"
+        if llm_provider.lower() == "anthropic"
+        else "OPENAI_API_KEY"
+    )
+    inline_api_key = str(llm_raw.get("api_key", "") or "")
+    if inline_api_key:
+        raise ValueError(
+            "llm.api_key must not be stored in YAML; set llm.api_key_env and "
+            "export that environment variable instead"
+        )
+    api_key_env = str(
+        llm_raw.get("api_key_env", default_api_key_env) or ""
+    )
     llm = LLMConfig(
-        provider=str(_require(llm_raw, "provider")),
+        provider=llm_provider,
         model=str(_require(llm_raw, "model")),
         temperature=float(llm_raw.get("temperature", 0.2)),
         base_url=str(llm_raw.get("base_url", "")),
-        api_key=str(llm_raw.get("api_key", "")),
+        api_key=os.environ.get(api_key_env, "") if api_key_env else "",
+        api_key_env=api_key_env,
         request_timeout=_optional_int(llm_raw.get("request_timeout", 120), 120),
     )
 
@@ -825,6 +863,62 @@ def load_config(path: str | Path) -> AppConfig:
     if isinstance(pro2guard_raw, bool):
         pro2guard = Pro2GuardConfig(enabled=pro2guard_raw)
     elif isinstance(pro2guard_raw, dict):
+        generator_raw = pro2guard_raw.get("generator", True)
+        if isinstance(generator_raw, bool):
+            pro2guard_generator = Pro2GuardGeneratorConfig(enabled=generator_raw)
+        elif isinstance(generator_raw, dict):
+            generator_llm_raw = generator_raw.get("llm", {}) or {}
+            if not isinstance(generator_llm_raw, dict):
+                raise TypeError("pro2guard.generator.llm must be a mapping")
+            pro2guard_generator = Pro2GuardGeneratorConfig(
+                enabled=bool(generator_raw.get("enabled", True)),
+                context_mode=str(
+                    generator_raw.get("context_mode", "benign_only")
+                ).lower(),
+                max_attempts=int(generator_raw.get("max_attempts", 2)),
+                max_profiles=int(generator_raw.get("max_profiles", 50)),
+                max_unsafe_states=int(
+                    generator_raw.get("max_unsafe_states", 20)
+                ),
+                max_model_states=int(generator_raw.get("max_model_states", 200)),
+                state_batch_size=int(generator_raw.get("state_batch_size", 8)),
+                fail_closed=bool(generator_raw.get("fail_closed", False)),
+                provider=str(
+                    generator_llm_raw.get(
+                        "provider", generator_raw.get("provider", "")
+                    )
+                ).lower(),
+                model=str(
+                    generator_llm_raw.get("model", generator_raw.get("model", ""))
+                ),
+                temperature=(
+                    float(generator_llm_raw["temperature"])
+                    if "temperature" in generator_llm_raw
+                    else (
+                        float(generator_raw["temperature"])
+                        if "temperature" in generator_raw
+                        else None
+                    )
+                ),
+                base_url=str(
+                    generator_llm_raw.get(
+                        "base_url", generator_raw.get("base_url", "")
+                    )
+                ),
+                api_key=str(
+                    generator_llm_raw.get(
+                        "api_key", generator_raw.get("api_key", "")
+                    )
+                ),
+                request_timeout=_optional_int(
+                    generator_llm_raw.get(
+                        "request_timeout", generator_raw.get("request_timeout")
+                    ),
+                    120,
+                ),
+            )
+        else:
+            raise TypeError("pro2guard.generator must be a boolean or mapping")
         pro2guard = Pro2GuardConfig(
             enabled=bool(pro2guard_raw.get("enabled", False)),
             mode=str(pro2guard_raw.get("mode", "block")).lower(),
@@ -833,13 +927,37 @@ def load_config(path: str | Path) -> AppConfig:
             dtmc_path=str(pro2guard_raw.get("dtmc_path", "")),
             prism_bin=str(pro2guard_raw.get("prism_bin", "prism")),
             abstraction=str(pro2guard_raw.get("abstraction", "")),
+            abstraction_policy_path=str(
+                pro2guard_raw.get("abstraction_policy_path", "")
+            ),
             unsafe_states=[
                 str(item) for item in (pro2guard_raw.get("unsafe_states", []) or [])
             ],
             horizon=int(pro2guard_raw.get("horizon", 20)),
             timeout_seconds=int(pro2guard_raw.get("timeout_seconds", 10)),
             fail_closed=bool(pro2guard_raw.get("fail_closed", False)),
+            generator=pro2guard_generator,
         )
+        if pro2guard.generator.context_mode not in {"full", "benign_only"}:
+            raise ValueError(
+                "pro2guard.generator.context_mode must be one of: full, benign_only"
+            )
+        if pro2guard.generator.max_attempts < 1:
+            raise ValueError("pro2guard.generator.max_attempts must be at least 1")
+        if pro2guard.generator.max_profiles < 0:
+            raise ValueError("pro2guard.generator.max_profiles must be non-negative")
+        if pro2guard.generator.max_unsafe_states < 0:
+            raise ValueError(
+                "pro2guard.generator.max_unsafe_states must be non-negative"
+            )
+        if pro2guard.generator.max_model_states < 1:
+            raise ValueError(
+                "pro2guard.generator.max_model_states must be at least 1"
+            )
+        if pro2guard.generator.state_batch_size < 1:
+            raise ValueError(
+                "pro2guard.generator.state_batch_size must be at least 1"
+            )
         if pro2guard.mode not in {"block", "warn", "monitor"}:
             raise ValueError("pro2guard.mode must be one of: block, warn, monitor")
     else:

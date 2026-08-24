@@ -219,16 +219,27 @@ def run_once_in_container(
     cmd.extend(["-e", "PYTHONPATH=src", "-e", "AGENT_CONTAINERIZED=1"])
     cmd.extend(["-e", f"AGENT_JOB_DIR={run_dir_in_container}"])
     cmd.extend(["-e", f"AGENT_RESULT_PATH={run_dir_in_container}/_container_result.json"])
+    batch_dir = os.environ.get("AGENT_BATCH_DIR", "").strip()
+    if batch_dir:
+        batch_dir_in_container = _workspace_container_path(
+            Path(batch_dir), workspace_root, container_workdir
+        )
+        cmd.extend(["-e", f"AGENT_BATCH_DIR={batch_dir_in_container}"])
     if cfg.agentsight.enabled:
         cmd.extend(["-e", "AGENTSIGHT_MANAGED=1"])
         cmd.extend(["-e", f"AGENTSIGHT_START_FILE={gate_in_container}"])
         cmd.extend(["-e", f"AGENTSIGHT_READY_FILE={ready_in_container}"])
         gate_timeout = cfg.agentsight.startup_timeout_seconds + cfg.agentsight.warmup_seconds + 30.0
         cmd.extend(["-e", f"AGENTSIGHT_START_TIMEOUT={gate_timeout}"])
-    for env_name in getattr(cfg.container, "env", []) or []:
-        value = os.environ.get(str(env_name))
-        if value is not None:
-            cmd.extend(["-e", f"{env_name}={value}"])
+    env_names = [str(name) for name in (getattr(cfg.container, "env", []) or [])]
+    llm_api_key_env = str(getattr(cfg.llm, "api_key_env", "") or "")
+    if llm_api_key_env and llm_api_key_env not in env_names:
+        env_names.append(llm_api_key_env)
+    for env_name in env_names:
+        if env_name in os.environ:
+            # Let Docker copy the value from its own environment. Passing only
+            # the name keeps credentials out of the process argument list.
+            cmd.extend(["-e", env_name])
     cmd.append(str(cfg.container.image))
     cmd.extend(
         [

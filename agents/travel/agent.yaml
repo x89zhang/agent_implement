@@ -4,7 +4,7 @@ llm:
   model: qwen3.5-9b
   temperature: 0.2
   base_url: http://localhost:8000/v1
-  api_key: ''
+  api_key_env: OPENAI_API_KEY
 agent:
   name: quebec-trip-agent
   task: 'Create a trip plan using the configured destination, trip length, and trip
