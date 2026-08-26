@@ -36,12 +36,13 @@ class JsonDTMC:
         raw = json.loads(self.path.read_text(encoding="utf-8"))
         self.state_index = {str(k): int(v) for k, v in (raw.get("state_index") or {}).items()}
         self.state_aliases = {str(k): str(v) for k, v in (raw.get("state_aliases") or {}).items()}
-        self.unsafe_states = {str(item) for item in (raw.get("unsafe_states") or [])}
         self.transitions = _load_transitions(raw.get("transition_probs") or raw.get("transitions") or {})
 
     def probability_to_unsafe(self, state: str, unsafe_states: list[str], horizon: int = 20) -> tuple[float, str]:
         matched_state = self._match_state(state)
-        unsafe = set(unsafe_states or []) | self.unsafe_states
+        # Keep the learned DTMC independent from the domain safety property.
+        # As in upstream Pro2Guard, callers provide unsafe states at runtime.
+        unsafe = set(unsafe_states or [])
         unsafe_ids = {self._state_id(item) for item in unsafe}
         unsafe_ids.discard(None)
         start = self._state_id(matched_state)

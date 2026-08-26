@@ -14,14 +14,16 @@ ATTACK_SUCCESS_STATE = "ATTACK_SUCCESS"
 SAFE_TERMINAL_STATE = "SAFE_TERMINAL"
 
 
-def build_model_from_traces(paths: list[str], unsafe_states: list[str] | None = None) -> dict[str, Any]:
+def build_model_from_traces(paths: list[str]) -> dict[str, Any]:
     abstraction = ToolTraceAbstraction()
     sequences: list[list[str]] = []
-    for pattern in paths:
-        for trace_path in glob.glob(pattern):
-            sequence = _states_from_trace(Path(trace_path), abstraction)
-            if sequence:
-                sequences.append(sequence)
+    trace_paths = _resolve_trace_paths(paths)
+    if not trace_paths:
+        raise ValueError("No trace_agentdojo.json files matched the supplied inputs")
+    for trace_path in trace_paths:
+        sequence = _states_from_trace(trace_path, abstraction)
+        if sequence:
+            sequences.append(sequence)
 
     states = sorted({state for sequence in sequences for state in sequence})
     state_index = {state: idx for idx, state in enumerate(states)}
@@ -46,13 +48,31 @@ def build_model_from_traces(paths: list[str], unsafe_states: list[str] | None = 
         "state_index": state_index,
         "transition_counts": {str(src): {str(dst): count for dst, count in row.items()} for src, row in counts.items()},
         "transition_probs": transition_probs,
-        "unsafe_states": list(unsafe_states or []),
         "terminal_states": {
             "attack_success": ATTACK_SUCCESS_STATE,
             "safe": SAFE_TERMINAL_STATE,
         },
         "format": "agent_scaffold.pro2guard.json_dtmc.v1",
     }
+
+
+def _resolve_trace_paths(inputs: list[str]) -> list[Path]:
+    resolved: dict[str, Path] = {}
+    for value in inputs:
+        direct = Path(value)
+        matches = (
+            [direct]
+            if direct.exists()
+            else [Path(item) for item in glob.glob(value, recursive=True)]
+        )
+        for match in matches:
+            candidates = (
+                match.rglob("trace_agentdojo.json") if match.is_dir() else [match]
+            )
+            for candidate in candidates:
+                if candidate.is_file():
+                    resolved[str(candidate.resolve())] = candidate
+    return [resolved[key] for key in sorted(resolved)]
 
 
 def _states_from_trace(path: Path, abstraction: ToolTraceAbstraction) -> list[str]:
@@ -127,12 +147,15 @@ def _agentdojo_attack_success(raw: dict[str, Any]) -> bool | None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build a Pro2Guard JSON DTMC from scaffold trace files.")
-    parser.add_argument("traces", nargs="+", help="Trace JSON files or glob patterns.")
+    parser.add_argument(
+        "traces",
+        nargs="+",
+        help="Trace JSON files, glob patterns, or directories searched recursively.",
+    )
     parser.add_argument("--output", required=True, help="Output JSON DTMC path.")
-    parser.add_argument("--unsafe-state", action="append", default=[], help="Unsafe state id/name. Repeatable. Use ATTACK_SUCCESS for AgentDojo attack-success terminal states.")
     args = parser.parse_args()
 
-    model = build_model_from_traces(args.traces, args.unsafe_state)
+    model = build_model_from_traces(args.traces)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(model, ensure_ascii=False, indent=2), encoding="utf-8")

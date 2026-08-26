@@ -269,6 +269,7 @@ class AgentDojoConfig:
     case: str = ""
     user_task: str = "user_task_0"
     injection_task: str = ""
+    injection_enabled: bool = True
     trusted_tool_output_prompt: bool = True
     custom_injection_text: str = ""
     attack_template: str = ""
@@ -637,6 +638,7 @@ def load_config(path: str | Path) -> AppConfig:
             case=case_id,
             user_task=raw_user_task,
             injection_task=raw_injection_task,
+            injection_enabled=bool(agentdojo_raw.get("injection_enabled", True)),
             trusted_tool_output_prompt=bool(
                 agentdojo_raw.get("trusted_tool_output_prompt", True)
             ),

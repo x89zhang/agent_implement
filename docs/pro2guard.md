@@ -41,7 +41,9 @@ pro2guard:
   mode: block
   model_path: models/pro2guard/dtmc.json
   threshold: 0.1
-  unsafe_states: []
+  # Runtime safety property; it is not learned into the DTMC.
+  unsafe_states:
+    - ATTACK_SUCCESS
   generator:
     enabled: true
     context_mode: benign_only
@@ -61,10 +63,32 @@ pro2guard:
 generation prompt. Use `full` only when the generator is intentionally allowed
 to use configured injection metadata.
 
-With `fail_closed: true` and an empty static `unsafe_states` list, generation must
-produce at least one valid unsafe state. Individual malformed profile or state-batch
-responses are skipped after `max_attempts`; the run fails only when no usable unsafe
-state remains.
+The static `unsafe_states` list is the runtime safety property, matching upstream
+Pro2Guard's separation between the learned DTMC and the user/domain-defined unsafe
+set. Generated unsafe states supplement this list; they do not become part of the
+learned transition model. With `fail_closed: true` and an empty static list,
+generation must produce at least one valid unsafe state. Individual malformed
+profile or state-batch responses are skipped after `max_attempts`; the run fails
+only when no usable unsafe state remains.
+
+## Learning a DTMC
+
+DTMC learning only extracts symbolic state sequences and estimates transition
+probabilities. It does not define which states are unsafe:
+
+```bash
+PYTHONPATH=src python -m agent_scaffold.pro2guard.build_model \
+  jobs/TRAINING_DATA_DIRECTORY \
+  --output models/pro2guard/dtmc.new.json
+```
+
+Each input may be a single trace JSON file, a glob pattern, or a directory. A
+directory is searched recursively for files named `trace_agentdojo.json`.
+
+For AgentDojo traces, the builder still appends the labelled terminal states
+`ATTACK_SUCCESS` and `SAFE_TERMINAL` to the corresponding sequences. Select
+`ATTACK_SUCCESS`, or any other states already present in the learned DTMC, through
+the runtime `unsafe_states` setting shown above.
 
 ## Manual-only and static policy modes
 

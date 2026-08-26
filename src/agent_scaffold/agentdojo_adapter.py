@@ -102,6 +102,7 @@ def _session_key(cfg: Any) -> str:
             "benchmark_version": getattr(cfg, "benchmark_version", ""),
             "user_task": getattr(cfg, "user_task", ""),
             "injection_task": getattr(cfg, "injection_task", ""),
+            "injection_enabled": getattr(cfg, "injection_enabled", True),
             "custom_injection_text": getattr(cfg, "custom_injection_text", ""),
             "attack_template": getattr(cfg, "attack_template", ""),
             "injection_vectors": getattr(cfg, "injection_vectors", []),
@@ -152,7 +153,10 @@ def _default_attack_injections(
     custom_text: str = "",
     selected_vectors: list[str] | None = None,
     attack_template: str = "",
+    injection_enabled: bool = True,
 ) -> dict[str, str]:
+    if not injection_enabled:
+        return {}
     if configured or injection_task is None:
         return dict(configured)
     try:
@@ -183,6 +187,7 @@ class AgentDojoSession:
         self.suite = _suite_for(cfg)
         self.user_task = self.suite.get_user_task_by_id(cfg.user_task)
         self.injection_task = self.suite.get_injection_task_by_id(cfg.injection_task) if cfg.injection_task else None
+        self.injection_enabled = bool(getattr(cfg, "injection_enabled", True))
         injections = _default_attack_injections(
             self.suite,
             self.injection_task,
@@ -190,6 +195,7 @@ class AgentDojoSession:
             str(getattr(cfg, "custom_injection_text", "") or ""),
             [str(item) for item in (getattr(cfg, "injection_vectors", []) or [])],
             str(getattr(cfg, "attack_template", "") or ""),
+            self.injection_enabled,
         )
         environment = self.suite.load_and_inject_default_environment(injections)
         self.environment = self.user_task.init_environment(environment)
@@ -222,6 +228,7 @@ class AgentDojoSession:
 
         attack_success = False
         raw_security_result = None
+        injection_enabled = bool(getattr(self, "injection_enabled", True))
         if self.injection_task is not None:
             raw_security_result = self.injection_task.security_from_traces(
                 final_output,
@@ -241,10 +248,15 @@ class AgentDojoSession:
             "benchmark_version": self.cfg.benchmark_version,
             "user_task": self.cfg.user_task,
             "injection_task": self.cfg.injection_task or None,
+            "injection_enabled": injection_enabled,
             "utility": bool(utility),
             "security": not attack_success,
             "attack_success": attack_success,
-            "asr": float(attack_success) if self.injection_task is not None else None,
+            "asr": (
+                float(attack_success)
+                if self.injection_task is not None and injection_enabled
+                else None
+            ),
             "agentdojo_security_raw": raw_security_result,
             "tool_call_count": len(self.calls),
             "tool_errors": list(self.errors),
@@ -293,11 +305,12 @@ def aggregate_asr(items: list[dict[str, Any]]) -> dict[str, Any] | None:
     if not evaluations:
         return None
 
-    # Benign cases have no injection task and are not ASR trials.
+    # Benign cases and declared-but-disabled injections are not ASR trials.
     attack_trials = [
         evaluation
         for evaluation in evaluations
         if evaluation.get("injection_task")
+        and evaluation.get("injection_enabled", True)
     ]
     attack_successes = sum(
         1 for evaluation in attack_trials if evaluation.get("attack_success") is True
