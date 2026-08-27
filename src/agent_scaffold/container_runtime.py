@@ -235,6 +235,11 @@ def run_once_in_container(
     llm_api_key_env = str(getattr(cfg.llm, "api_key_env", "") or "")
     if llm_api_key_env and llm_api_key_env not in env_names:
         env_names.append(llm_api_key_env)
+    scenario_api_key_env = str(
+        getattr(cfg.agentguard.scenario_compiler, "api_key_env", "") or ""
+    )
+    if scenario_api_key_env and scenario_api_key_env not in env_names:
+        env_names.append(scenario_api_key_env)
     for env_name in env_names:
         if env_name in os.environ:
             # Let Docker copy the value from its own environment. Passing only

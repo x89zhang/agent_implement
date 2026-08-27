@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import time
 from dataclasses import asdict, dataclass, replace
@@ -53,6 +55,19 @@ _BASE_INJECTION_PHRASES = {
     "override your guidelines",
     "reveal your instructions",
 }
+
+
+_RULE_OUTPUT_CONTRACT = (
+    "Rule validation contract: every rule must constrain at least one of "
+    "tool_names, capabilities, risk_signals, or conditions; omit optional broad "
+    "audit rules instead of leaving all four empty. Condition fields must start "
+    "with principal., payload.arguments., payload.tool_name, tool., target., or "
+    "trace.; tool_result.* fields are invalid. Condition operators are eq, ne, gt, "
+    "gte, lt, lte, in, not_in, contains, icontains, any_in, regex, or exists. The "
+    "required indirect-injection rule must use event_types=[\"tool_result\"], a "
+    "blocking or sanitize effect, and include the exact risk signal "
+    "\"prompt_injection\" or \"tool_result_injection\". Return only the JSON object."
+)
 
 
 @dataclass
@@ -110,6 +125,66 @@ def compile_agentguard_scenario(
     input_payload = _scenario_input(cfg, task, user_input)
     _write_json(run_dir / "agentguard_scenario_input.json", input_payload)
 
+    cache_key = _batch_cache_key(cfg, input_payload)
+    cache_path = _batch_cache_path(run_dir)
+    cached = _load_batch_cache(cache_path, cache_key, cfg.tools, trusted_task)
+    if cached is not None:
+        plan, raw_text = cached
+        raw_path = run_dir / "agentguard_scenario_raw.txt"
+        raw_path.write_text(raw_text, encoding="utf-8")
+        policy = _compile_policy(plan, cfg, trusted_task)
+        plugin_config = _compile_plugin_config(plan, cfg)
+        policy_path = run_dir / "agentguard_policy.generated.json"
+        plugin_path = run_dir / "agentguard_plugins.generated.json"
+        manifest_path = run_dir / "agentguard_scenario.json"
+        _write_json(policy_path, policy)
+        _write_json(plugin_path, plugin_config)
+        _apply_plan(cfg, plan, policy_path, plugin_path)
+        usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        manifest = {
+            "version": 1,
+            "status": "compiled",
+            "source": "cache",
+            "cache_hit": True,
+            "cache_path": str(cache_path),
+            "context_mode": settings.context_mode,
+            "attempts": 0,
+            "summary": plan.get("summary", ""),
+            "warnings": [],
+            "llm": {
+                "provider": _compiler_llm_config(cfg).provider,
+                "model": _compiler_llm_config(cfg).model,
+            },
+            "tools": [
+                {
+                    "name": tool.name,
+                    "capabilities": list(tool.capabilities),
+                    "labels": dict(tool.labels),
+                }
+                for tool in cfg.tools
+            ],
+            "policy_path": str(policy_path.resolve()),
+            "plugin_config_path": str(plugin_path.resolve()),
+            "policy_rule_count": len(policy["rules"]),
+            "usage": usage,
+        }
+        _write_json(manifest_path, manifest)
+        return ScenarioCompilationResult(
+            enabled=True,
+            status="compiled",
+            source="cache",
+            attempts=0,
+            summary=str(plan.get("summary", "")),
+            context_mode=settings.context_mode,
+            policy_path=str(policy_path.resolve()),
+            plugin_config_path=str(plugin_path.resolve()),
+            manifest_path=str(manifest_path.resolve()),
+            raw_response_path=str(raw_path.resolve()),
+            warnings=[],
+            usage=usage,
+            duration_ms=int((time.time() - started) * 1000),
+        )
+
     compiler_llm = llm or LLMAdapter(_compiler_llm_config(cfg))
     prompt = _compiler_prompt(input_payload)
     attempts = 0
@@ -144,6 +219,9 @@ def compile_agentguard_scenario(
                 _compiler_prompt(input_payload)
                 + "\n\nYour previous response was rejected. Correct this validation error: "
                 + str(exc)[:800]
+                + "\nRecheck the entire response against this contract, not only the reported "
+                "error:\n"
+                + _RULE_OUTPUT_CONTRACT
             )
 
     raw_path = run_dir / "agentguard_scenario_raw.txt"
@@ -154,6 +232,16 @@ def compile_agentguard_scenario(
         raise RuntimeError(
             "AgentGuard scenario compiler requires a valid LLM-generated policy: "
             + "; ".join(warnings)
+        )
+    if cache_path is not None:
+        _write_json(
+            cache_path,
+            {
+                "version": 1,
+                "cache_key": cache_key,
+                "plan": plan,
+                "raw_response": raw_text,
+            },
         )
 
     policy = _compile_policy(plan, cfg, trusted_task)
@@ -169,6 +257,8 @@ def compile_agentguard_scenario(
         "version": 1,
         "status": status,
         "source": source,
+        "cache_hit": False,
+        "cache_path": str(cache_path) if cache_path else "",
         "context_mode": settings.context_mode,
         "attempts": attempts,
         "summary": plan.get("summary", ""),
@@ -208,6 +298,55 @@ def compile_agentguard_scenario(
     )
 
 
+def _batch_cache_path(run_dir: Path) -> Path | None:
+    configured = os.environ.get("AGENT_BATCH_DIR", "").strip()
+    if not configured:
+        return None
+    batch_dir = Path(configured).resolve()
+    try:
+        run_dir.resolve().relative_to(batch_dir)
+    except ValueError:
+        return None
+    return batch_dir / "agentguard_scenario.batch-cache.json"
+
+
+def _batch_cache_key(cfg: AppConfig, input_payload: dict[str, Any]) -> str:
+    llm = _compiler_llm_config(cfg)
+    payload = {
+        "version": 1,
+        "input": input_payload,
+        "llm": {
+            "provider": llm.provider,
+            "model": llm.model,
+            "temperature": llm.temperature,
+            "base_url": llm.base_url,
+            "api_key_env": llm.api_key_env,
+        },
+    }
+    encoded = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _load_batch_cache(
+    cache_path: Path | None,
+    cache_key: str,
+    tools: list[ToolConfig],
+    trusted_task: str,
+) -> tuple[dict[str, Any], str] | None:
+    if cache_path is None or not cache_path.is_file():
+        return None
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+        if payload.get("version") != 1 or payload.get("cache_key") != cache_key:
+            return None
+        plan = _validate_plan(payload.get("plan"), tools, trusted_task)
+        return plan, str(payload.get("raw_response", ""))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
 def _compiler_llm_config(cfg: AppConfig) -> LLMConfig:
     settings = cfg.agentguard.scenario_compiler
     base = cfg.llm
@@ -221,7 +360,8 @@ def _compiler_llm_config(cfg: AppConfig) -> LLMConfig:
             else base.temperature
         ),
         base_url=settings.base_url or base.base_url,
-        api_key=settings.api_key or base.api_key,
+        api_key=(settings.api_key if settings.api_key_env else base.api_key),
+        api_key_env=settings.api_key_env or base.api_key_env,
         request_timeout=(
             settings.request_timeout
             if settings.request_timeout is not None
@@ -357,6 +497,8 @@ def _compiler_prompt(payload: dict[str, Any]) -> str:
         "It must also include a tool_result rule for prompt_injection or "
         "tool_result_injection. Use only the event types llm_input, llm_output, "
         "tool_invoke, and tool_result. "
+        + _RULE_OUTPUT_CONTRACT
+        + " "
         + threat_instruction
         + "\n\nRequired output shape:\n"
         + json.dumps(schema, ensure_ascii=False, indent=2)

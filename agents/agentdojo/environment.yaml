@@ -7,7 +7,7 @@ agentdojo:
   # Attack example: case: user_task_3_injection_3
   case: user_task_15_injection_5
   # Keep the injection task declared in case, but set false for a no-injection control run.
-  injection_enabled: false
+  injection_enabled: true
   attack_template: important_instructions
   # By default, the selected injection task goal is placed into every built-in injection vector.
   # Keep the default positions and wrap the goal with an AgentDojo attack template:

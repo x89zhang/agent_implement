@@ -215,6 +215,7 @@ class AgentGuardScenarioCompilerConfig:
     temperature: float | None = None
     base_url: str = ""
     api_key: str = ""
+    api_key_env: str = ""
     request_timeout: int | None = None
 
 
@@ -1211,6 +1212,15 @@ def load_config(path: str | Path) -> AppConfig:
             if not isinstance(scenario_llm_raw, dict):
                 raise TypeError("agentguard.scenario_compiler.llm must be a mapping")
             request_timeout_raw = scenario_llm_raw.get("request_timeout")
+            inline_scenario_api_key = str(scenario_llm_raw.get("api_key", "") or "")
+            if inline_scenario_api_key:
+                raise ValueError(
+                    "agentguard.scenario_compiler.llm.api_key must not be stored in "
+                    "YAML; set api_key_env and export that environment variable instead"
+                )
+            scenario_api_key_env = str(
+                scenario_llm_raw.get("api_key_env", "") or ""
+            )
             scenario_compiler = AgentGuardScenarioCompilerConfig(
                 enabled=bool(scenario_raw.get("enabled", True)),
                 context_mode=str(scenario_raw.get("context_mode", "full")).lower(),
@@ -1223,7 +1233,12 @@ def load_config(path: str | Path) -> AppConfig:
                     else None
                 ),
                 base_url=str(scenario_llm_raw.get("base_url", "")),
-                api_key=str(scenario_llm_raw.get("api_key", "")),
+                api_key=(
+                    os.environ.get(scenario_api_key_env, "")
+                    if scenario_api_key_env
+                    else ""
+                ),
+                api_key_env=scenario_api_key_env,
                 request_timeout=(
                     int(request_timeout_raw)
                     if request_timeout_raw is not None

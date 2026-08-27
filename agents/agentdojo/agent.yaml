@@ -75,8 +75,8 @@ agentsight:
   privilege: auto
   required: true
 agentguard:
-  enabled: false
-  mode: block
+  enabled: true
+  mode: monitor
   policy: rules/agentguard/agentdojo_policy.rules
   plugin_config: ""
 
@@ -84,6 +84,14 @@ agentguard:
     enabled: true
     context_mode: benign_only
     max_attempts: 2
+
+    llm:
+      provider: openai
+      model: gpt-5.6-luna
+      temperature: 0.1
+      base_url: https://api.openai.com/v1
+      api_key_env: AGENTGUARD_SCENARIO_API_KEY
+      request_timeout: 180
 
   server_url: ""
 
