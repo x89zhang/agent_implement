@@ -332,12 +332,32 @@ def _normalize_react_tool_input(tool_input: Any) -> Any:
             return parsed
     return tool_input
 
-def _build_react_output_parser(tool_names: set[str]) -> Any | None:
+def _react_claims_tools_unavailable(text: str) -> bool:
+    lowered = text.lower()
+    if "tool" not in lowered:
+        return False
+    return any(
+        phrase in lowered
+        for phrase in (
+            "not available",
+            "unavailable",
+            "unable to access",
+            "cannot access",
+            "can't access",
+            "do not have access",
+            "don't have access",
+        )
+    )
+
+
+def _build_react_output_parser(
+    tool_names: set[str], *, allow_plain_final: bool = False
+) -> Any | None:
     try:
-        from langchain_core.agents import AgentAction  # type: ignore
+        from langchain_core.agents import AgentAction, AgentFinish  # type: ignore
     except Exception:
         try:
-            from langchain.schema import AgentAction  # type: ignore
+            from langchain.schema import AgentAction, AgentFinish  # type: ignore
         except Exception:
             return None
 
@@ -357,7 +377,23 @@ def _build_react_output_parser(tool_names: set[str]) -> Any | None:
 
     class _CompatReActOutputParser(base_parser_cls):  # type: ignore[misc, valid-type]
         def parse(self, text: str) -> Any:
-            parsed = super().parse(text)
+            try:
+                parsed = super().parse(text)
+            except Exception:
+                stripped = text.strip()
+                has_react_prefix = bool(
+                    re.search(r"(?im)^\s*(?:thought|action|action input)\s*:", stripped)
+                )
+                if (
+                    allow_plain_final
+                    and stripped
+                    and not has_react_prefix
+                    and not _react_claims_tools_unavailable(stripped)
+                ):
+                    return AgentFinish(
+                        return_values={"output": stripped}, log=text
+                    )
+                raise
             tool = getattr(parsed, "tool", None)
             tool_input = _normalize_react_tool_input(getattr(parsed, "tool_input", ""))
             if isinstance(tool, str):
@@ -614,6 +650,21 @@ def build_graph(cfg: AppConfig) -> Any:
     return builder.compile()
 
 
+def _langchain_react_supports_stop(cfg: AppConfig) -> bool:
+    provider = cfg.llm.provider.strip().lower()
+    model = cfg.llm.model.strip().lower()
+    return not (provider == "openai" and model.startswith("gpt-5"))
+
+
+def _react_parsing_feedback(_error: Exception) -> str:
+    return (
+        "Invalid ReAct response. The tools listed in the prompt are available. "
+        "If a tool is needed, reply with exactly one Thought, Action, and "
+        "Action Input JSON block. If the task is complete, reply with "
+        "Final Answer: followed by the answer. Do not claim tools are unavailable."
+    )
+
+
 def _build_langchain_react_graph(cfg: AppConfig) -> Any:
     llm = LLMAdapter(cfg.llm)
     lc_model = llm.get_lc_chat_model()
@@ -677,6 +728,12 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
     missing_tool_warnings = validate_skill_tools(skills, {tool.name for tool in cfg.tools})
     if missing_tool_warnings:
         role_parts.append("# Harness Warnings\n" + "\n".join(f"- {item}" for item in missing_tool_warnings))
+    role_parts.append(
+        "# ReAct protocol requirement\n"
+        "The tools listed below are available in this runtime. Never claim "
+        "that they are missing or inaccessible. Use the exact Thought, "
+        "Action, and Action Input format when a tool is needed."
+    )
     role_prefix = "\n\n".join(part for part in role_parts if part)
     if prompt_text:
         if role_prefix:
@@ -752,12 +809,20 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
         )
 
     callbacks = _build_react_callbacks(cfg.monitoring.print_trace)
-    output_parser = _build_react_output_parser({t.name for t in cfg.tools})
+    output_parser = _build_react_output_parser(
+        {t.name for t in cfg.tools}, allow_plain_final=True
+    )
+    parsing_error_handler = _react_parsing_feedback
 
     if create_react_agent:
         create_kwargs: dict[str, Any] = {}
         if output_parser is not None:
             create_kwargs["output_parser"] = output_parser
+        if not _langchain_react_supports_stop(cfg):
+            # GPT-5 family endpoints reject LangChain's default stop parameter.
+            # Keep the default enabled for local OpenAI-compatible models such
+            # as the vLLM-hosted Qwen backend.
+            create_kwargs["stop_sequence"] = False
         agent = create_react_agent(lc_model, tools, PROMPT, **create_kwargs)
         executor = AgentExecutor(
             agent=agent,
@@ -766,7 +831,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             return_intermediate_steps=True,
             max_iterations=cfg.graph.react_max_iterations,
             max_execution_time=cfg.graph.react_max_execution_time,
-            handle_parsing_errors=True,
+            handle_parsing_errors=parsing_error_handler,
             callbacks=callbacks,
         )
     else:
@@ -778,7 +843,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             return_intermediate_steps=True,
             max_iterations=cfg.graph.react_max_iterations,
             max_execution_time=cfg.graph.react_max_execution_time,
-            handle_parsing_errors=True,
+            handle_parsing_errors=parsing_error_handler,
             callbacks=callbacks,
         )
 

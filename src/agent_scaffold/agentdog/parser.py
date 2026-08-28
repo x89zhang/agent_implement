@@ -74,6 +74,7 @@ def _parse_coarse(
 def _parse_unified(
     response: str,
 ) -> tuple[str, str, list[str], list[str], list[str]]:
+    response = _restore_prompted_think_opener(response)
     think_match = re.search(
         r"<think>\s*(?P<analysis>.*?)\s*</think>",
         response,
@@ -116,6 +117,25 @@ def _parse_unified(
         ),
         _parse_categories(fields["risk source"], RISK_SOURCES, "Risk Source"),
     )
+
+
+def _restore_prompted_think_opener(response: str) -> str:
+    """Restore the opener when the vLLM chat template supplied it in the prompt."""
+    if re.search(r"<think>", response, flags=re.IGNORECASE):
+        return response
+    closers = list(re.finditer(r"</think>", response, flags=re.IGNORECASE))
+    if len(closers) != 1:
+        return response
+    closer = closers[0]
+    analysis = response[: closer.start()].strip()
+    suffix = response[closer.end() :].strip()
+    if not analysis or not re.search(
+        r"^Safety:\s*(safe|unsafe)\s*$",
+        suffix,
+        flags=re.IGNORECASE | re.MULTILINE,
+    ):
+        return response
+    return f"<think>\n{analysis}\n</think>\n\n{suffix}"
 
 
 def _named_fields(text: str) -> dict[str, str]:

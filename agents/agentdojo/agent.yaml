@@ -1,9 +1,9 @@
 harness: .
 llm:
-  provider: vllm_openai
-  model: qwen3.6-35b
+  provider: openai
+  model: gpt-5.6-luna
   temperature: 0.2
-  base_url: http://localhost:8000/v1
+  base_url: https://api.openai.com/v1
   api_key_env: OPENAI_API_KEY
   request_timeout: 120
 agent:
@@ -75,7 +75,7 @@ agentsight:
   privilege: auto
   required: true
 agentguard:
-  enabled: true
+  enabled: false
   mode: monitor
   policy: rules/agentguard/agentdojo_policy.rules
   plugin_config: ""
@@ -111,10 +111,11 @@ agentguard:
   remote_retries: 2
   fail_closed: true
 agentdog:
-  enabled: false
-  mode: gate
+  enabled: true
+  mode: diagnose
+  checkpoints: [pre_reply]
   task: unified
-  model: qwen3.6-35b
-  base_url: http://localhost:8000/v1
-  timeout_seconds: 60
+  model: agentdog-unified
+  base_url: http://localhost:8001/v1
+  timeout_seconds: 180
   fail_closed: false
