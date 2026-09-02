@@ -48,7 +48,9 @@ def _build_react_user_input(state: dict[str, Any]) -> str:
     return ""
 
 
+
 def _extract_react_actions(log_text: str) -> list[dict[str, Any]]:
+    """Recover legacy Action blocks from an otherwise invalid model response."""
     actions: list[dict[str, Any]] = []
     if not log_text:
         return actions
@@ -85,10 +87,10 @@ def _extract_react_actions(log_text: str) -> list[dict[str, Any]]:
                         escape = False
                     elif ch == "\\":
                         escape = True
-                    elif ch == '"':
+                    elif ch == "\"":
                         in_string = False
                     continue
-                if ch == '"':
+                if ch == "\"":
                     in_string = True
                     continue
                 if ch == opener:
@@ -130,9 +132,9 @@ def _extract_react_actions(log_text: str) -> list[dict[str, Any]]:
 
 def _expand_react_steps(
     intermediate_steps: list[Any],
-    raw_tools: dict[str, Any],
     estimate_tokens: Any,
     print_trace: bool,
+    raw_tools: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     expanded: list[dict[str, Any]] = []
     for action, observation in intermediate_steps:
@@ -141,9 +143,8 @@ def _expand_react_steps(
         log_text = getattr(action, "log", "")
 
         if tool_name == "_Exception":
-            recovered_actions = _extract_react_actions(str(log_text))
-            if recovered_actions:
-                for recovered in recovered_actions:
+            if raw_tools:
+                for recovered in _extract_react_actions(str(log_text)):
                     recovered_name = str(recovered.get("tool", ""))
                     recovered_input = recovered.get("tool_input", {})
                     if recovered_name not in raw_tools:
@@ -151,15 +152,20 @@ def _expand_react_steps(
                     else:
                         try:
                             if isinstance(recovered_input, dict):
-                                recovered_output = str(raw_tools[recovered_name](**recovered_input))
+                                recovered_output = str(
+                                    raw_tools[recovered_name](**recovered_input)
+                                )
                             else:
-                                recovered_output = str(raw_tools[recovered_name](recovered_input))
+                                recovered_output = str(
+                                    raw_tools[recovered_name](recovered_input)
+                                )
                         except Exception as exc:
                             recovered_output = f"Tool execution failed: {exc}"
                     usage = {
                         "input_tokens": estimate_tokens(str(recovered_input)),
                         "output_tokens": estimate_tokens(str(recovered_output)),
-                        "total_tokens": estimate_tokens(str(recovered_input)) + estimate_tokens(str(recovered_output)),
+                        "total_tokens": estimate_tokens(str(recovered_input))
+                        + estimate_tokens(str(recovered_output)),
                         "source": "estimated",
                     }
                     expanded.append(
@@ -173,7 +179,9 @@ def _expand_react_steps(
                         }
                     )
                     if print_trace:
-                        thought_text = str(recovered.get("thought") or "").strip()
+                        thought_text = str(
+                            recovered.get("thought") or ""
+                        ).strip()
                         if thought_text:
                             print("\n[THOUGHT]")
                             print(thought_text)
@@ -181,11 +189,7 @@ def _expand_react_steps(
                         print(f"{recovered_name} {recovered_input}")
                         print("[TOOL OUTPUT]")
                         print(recovered_output)
-                        print(
-                            f"[TOKENS] input={usage.get('input_tokens')} output={usage.get('output_tokens')} "
-                            f"total={usage.get('total_tokens')} source={usage.get('source')}"
-                        )
-                continue
+            continue
 
         thought_text = ""
         for line in str(log_text).splitlines():
@@ -332,32 +336,14 @@ def _normalize_react_tool_input(tool_input: Any) -> Any:
             return parsed
     return tool_input
 
-def _react_claims_tools_unavailable(text: str) -> bool:
-    lowered = text.lower()
-    if "tool" not in lowered:
-        return False
-    return any(
-        phrase in lowered
-        for phrase in (
-            "not available",
-            "unavailable",
-            "unable to access",
-            "cannot access",
-            "can't access",
-            "do not have access",
-            "don't have access",
-        )
-    )
-
-
-def _build_react_output_parser(
-    tool_names: set[str], *, allow_plain_final: bool = False
-) -> Any | None:
+def _build_react_output_parser(tool_names: set[str]) -> Any | None:
     try:
         from langchain_core.agents import AgentAction, AgentFinish  # type: ignore
+        from langchain_core.exceptions import OutputParserException  # type: ignore
     except Exception:
         try:
             from langchain.schema import AgentAction, AgentFinish  # type: ignore
+            from langchain.schema import OutputParserException  # type: ignore
         except Exception:
             return None
 
@@ -375,31 +361,105 @@ def _build_react_output_parser(
     if base_parser_cls is None:
         return None
 
-    class _CompatReActOutputParser(base_parser_cls):  # type: ignore[misc, valid-type]
+    class _ActionOnlyReActOutputParser(base_parser_cls):  # type: ignore[misc, valid-type]
         def parse(self, text: str) -> Any:
+            def fail(reason: str) -> Any:
+                raise OutputParserException(
+                    reason,
+                    observation=reason,
+                    llm_output=text,
+                    send_to_llm=True,
+                )
+
+            if re.search(r"(?im)^\s*Final Answer\s*:", text):
+                return fail(
+                    "Final Answer is not valid in the action-only protocol. "
+                    "Use Action: finish with Action Input JSON containing answer."
+                )
+            thoughts = re.findall(r"(?im)^\s*Thought\s*:", text)
+            actions = re.findall(r"(?im)^\s*Action\s*:", text)
+            action_inputs = re.findall(r"(?im)^\s*Action Input\s*:", text)
+            if len(thoughts) != 1 or len(actions) != 1 or len(action_inputs) != 1:
+                return fail(
+                    "Expected exactly one Thought, one Action, and one Action Input; "
+                    f"found {len(thoughts)}, {len(actions)}, and {len(action_inputs)}."
+                )
             try:
                 parsed = super().parse(text)
-            except Exception:
-                stripped = text.strip()
-                has_react_prefix = bool(
-                    re.search(r"(?im)^\s*(?:thought|action|action input)\s*:", stripped)
-                )
-                if (
-                    allow_plain_final
-                    and stripped
-                    and not has_react_prefix
-                    and not _react_claims_tools_unavailable(stripped)
-                ):
-                    return AgentFinish(
-                        return_values={"output": stripped}, log=text
-                    )
-                raise
+            except Exception as exc:
+                return fail(f"Could not parse the ReAct action: {exc}")
             tool = getattr(parsed, "tool", None)
-            tool_input = _normalize_react_tool_input(getattr(parsed, "tool_input", ""))
+            tool_input = _normalize_react_tool_input(
+                getattr(parsed, "tool_input", "")
+            )
+            if not isinstance(tool, str):
+                return fail("The response did not contain a valid action name.")
+            normalized_name = _normalize_react_tool_name(
+                tool, tool_names | {"finish"}
+            )
+            if not isinstance(tool_input, dict):
+                return fail("Action Input must be one valid JSON object.")
+            if normalized_name == "finish":
+                answer = tool_input.get("answer")
+                if not isinstance(answer, str) or not answer.strip():
+                    return fail(
+                        "The finish action requires a non-empty string field named answer."
+                    )
+                return AgentFinish(
+                    return_values={"output": answer.strip()}, log=text
+                )
+            if normalized_name not in tool_names:
+                return fail(f"Unknown action {normalized_name!r}.")
+            return AgentAction(
+                tool=normalized_name,
+                tool_input=tool_input,
+                log=getattr(parsed, "log", text),
+            )
+
+    return _ActionOnlyReActOutputParser()
+
+
+
+def _build_legacy_react_output_parser(tool_names: set[str]) -> Any | None:
+    try:
+        from langchain_core.agents import AgentAction  # type: ignore
+    except Exception:
+        try:
+            from langchain.schema import AgentAction  # type: ignore
+        except Exception:
+            return None
+
+    base_parser_cls = None
+    for module_name in (
+        "langchain.agents.output_parsers.react_single_input",
+        "langchain_classic.agents.output_parsers.react_single_input",
+    ):
+        try:
+            module = __import__(
+                module_name, fromlist=["ReActSingleInputOutputParser"]
+            )
+            base_parser_cls = getattr(module, "ReActSingleInputOutputParser")
+            break
+        except Exception:
+            continue
+    if base_parser_cls is None:
+        return None
+
+    class _CompatReActOutputParser(base_parser_cls):  # type: ignore[misc, valid-type]
+        def parse(self, text: str) -> Any:
+            parsed = super().parse(text)
+            tool = getattr(parsed, "tool", None)
+            tool_input = _normalize_react_tool_input(
+                getattr(parsed, "tool_input", "")
+            )
             if isinstance(tool, str):
                 normalized_name = _normalize_react_tool_name(tool, tool_names)
                 if normalized_name in tool_names:
-                    return AgentAction(tool=normalized_name, tool_input=tool_input, log=getattr(parsed, "log", text))
+                    return AgentAction(
+                        tool=normalized_name,
+                        tool_input=tool_input,
+                        log=getattr(parsed, "log", text),
+                    )
                 normalized = _parse_function_style_action(tool, tool_names)
                 if normalized is not None:
                     tool_name, payload = normalized
@@ -408,7 +468,11 @@ def _build_react_output_parser(
                     else:
                         payload.pop("__arg", None)
                         tool_input = payload
-                    return AgentAction(tool=tool_name, tool_input=tool_input, log=getattr(parsed, "log", text))
+                    return AgentAction(
+                        tool=tool_name,
+                        tool_input=tool_input,
+                        log=getattr(parsed, "log", text),
+                    )
             return parsed
 
     return _CompatReActOutputParser()
@@ -656,26 +720,35 @@ def _langchain_react_supports_stop(cfg: AppConfig) -> bool:
     return not (provider == "openai" and model.startswith("gpt-5"))
 
 
-def _react_parsing_feedback(_error: Exception) -> str:
+def _react_parsing_feedback(error: Exception) -> str:
     return (
-        "Invalid ReAct response. The tools listed in the prompt are available. "
-        "If a tool is needed, reply with exactly one Thought, Action, and "
-        "Action Input JSON block. If the task is complete, reply with "
-        "Final Answer: followed by the answer. Do not claim tools are unavailable."
+        "FORMAT_ERROR: "
+        + str(error)
+        + "\nEvery response must contain exactly one Thought, one Action, and "
+        "one Action Input JSON object. Use a registered tool action to continue. "
+        "To end, use Action: finish with "
+        'Action Input: {"answer": "your final response"}. '
+        "Plain-text answers and Final Answer are invalid."
     )
+
 
 
 def _build_langchain_react_graph(cfg: AppConfig) -> Any:
     llm = LLMAdapter(cfg.llm)
-    lc_model = llm.get_lc_chat_model()
 
     try:
         from langchain_core.tools import StructuredTool  # type: ignore
-        from langchain_core.prompts import PromptTemplate  # type: ignore
+        from langchain_core.prompts import (  # type: ignore
+            ChatPromptTemplate,
+            MessagesPlaceholder,
+            PromptTemplate,
+        )
+        from langchain_core.messages import SystemMessage  # type: ignore
     except Exception as exc:  # pragma: no cover - runtime import
         raise RuntimeError("Missing dependency: langchain_core") from exc
 
     create_react_agent = None
+    create_tool_calling_agent = None
     initialize_agent = None
     AgentType = None
     AgentExecutor = None
@@ -716,6 +789,39 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                             "Missing dependency: langchain or langchain-classic (AgentExecutor)"
                         ) from exc
 
+    for module_name in ("langchain_classic.agents", "langchain.agents"):
+        try:
+            module = __import__(
+                module_name, fromlist=["create_tool_calling_agent"]
+            )
+            create_tool_calling_agent = getattr(
+                module, "create_tool_calling_agent"
+            )
+            break
+        except Exception:
+            continue
+
+    react_protocol = str(
+        getattr(cfg.graph, "react_protocol", "action_only") or "action_only"
+    ).strip().lower()
+    if react_protocol not in {"action_only", "legacy", "native_tool_calling"}:
+        raise ValueError(
+            "graph.react_protocol must be action_only, legacy, or native_tool_calling, got "
+            f"{react_protocol!r}"
+        )
+
+    provider = cfg.llm.provider.strip().lower()
+    model = cfg.llm.model.strip().lower()
+    if react_protocol == "native_tool_calling":
+        if provider != "openai" or not model.startswith("gpt"):
+            raise ValueError(
+                "graph.react_protocol=native_tool_calling currently requires "
+                "an OpenAI GPT model"
+            )
+        lc_model = llm.get_lc_chat_model(use_responses_api=True)
+    else:
+        lc_model = llm.get_lc_chat_model()
+
     prompt_text = cfg.graph.react_prompt.strip()
     role_parts = [cfg.agent.system_prompt.strip()]
     skills = load_enabled_skills(cfg)
@@ -725,68 +831,122 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
     security_prompt = render_tool_output_security_prompt(cfg)
     if security_prompt:
         role_parts.append(security_prompt)
-    missing_tool_warnings = validate_skill_tools(skills, {tool.name for tool in cfg.tools})
-    if missing_tool_warnings:
-        role_parts.append("# Harness Warnings\n" + "\n".join(f"- {item}" for item in missing_tool_warnings))
-    role_parts.append(
-        "# ReAct protocol requirement\n"
-        "The tools listed below are available in this runtime. Never claim "
-        "that they are missing or inaccessible. Use the exact Thought, "
-        "Action, and Action Input format when a tool is needed."
+    missing_tool_warnings = validate_skill_tools(
+        skills, {tool.name for tool in cfg.tools}
     )
-    role_prefix = "\n\n".join(part for part in role_parts if part)
-    if prompt_text:
-        if role_prefix:
-            prompt_text = f"{role_prefix}\n\n{prompt_text}"
-        PROMPT = PromptTemplate.from_template(prompt_text)
-    else:
-        try:
-            from langchain.agents.react.prompt import PROMPT  # type: ignore
-            extra_rules = (
-                "Additional rules:\n"
-                "- Output exactly one action per response.\n"
-                "- Do not emit multiple Action blocks in one message.\n"
-                "- Do not invent Observation lines; wait for the tool result.\n"
-                "- If you are done, output Final Answer instead of another Thought-only message.\n"
-                "- Do not output </think> or other XML-style reasoning tags.\n"
-                "- The Action line must contain only the tool name, for example: Action: research_search.\n"
-                "- Put all arguments only in Action Input JSON; never write Python calls like research_search(query=...).\n\n"
-            )
-            if role_prefix:
-                PROMPT = PromptTemplate.from_template(f"{role_prefix}\n\n{extra_rules}{PROMPT.template}")
-            else:
-                PROMPT = PromptTemplate.from_template(f"{extra_rules}{PROMPT.template}")
-        except Exception:
-            prompt_text = (
-                "You are a helpful assistant.\n\n"
-                "Answer the following questions as best you can. You have access to the following tools:\n\n"
-                "{tools}\n\n"
-                "Use the following format:\n\n"
-                "Question: the input question you must answer\n"
-                "Thought: you should always think about what to do\n"
-                "Action: the action to take, should be one of [{tool_names}]\n"
-                "Action Input: the input to the action\n"
-                "Observation: the result of the action\n"
-                "... (this Thought/Action/Action Input/Observation can repeat)\n"
-                "Thought: I now know the final answer\n"
-                "Final Answer: the final answer to the original question\n\n"
-                "Additional rules:\n"
-                "- Output exactly one action per response.\n"
-                "- Do not emit multiple Action blocks in one message.\n"
-                "- Do not invent Observation lines; wait for the tool result.\n"
-                "- If you are done, output Final Answer instead of another Thought-only message.\n"
-                "- Do not output </think> or other XML-style reasoning tags.\n"
-                "- The Action line must contain only the tool name, for example: Action: research_search.\n"
-                "- Put all arguments only in Action Input JSON; never write Python calls like research_search(query=...).\n\n"
-                "Question: {input}\n"
-                "{agent_scratchpad}"
-            )
+    if missing_tool_warnings:
+        role_parts.append(
+            "# Harness Warnings\n"
+            + "\n".join(f"- {item}" for item in missing_tool_warnings)
+        )
+
+    if react_protocol == "native_tool_calling":
+        if prompt_text:
+            role_parts.append(prompt_text)
+        system_content = "\n\n".join(
+            part for part in role_parts if part
+        ) or "You are a helpful assistant."
+        PROMPT = ChatPromptTemplate.from_messages(
+            [
+                SystemMessage(content=system_content),
+                ("human", "{input}"),
+                MessagesPlaceholder(variable_name="agent_scratchpad"),
+            ]
+        )
+    elif react_protocol == "legacy":
+        role_prefix = "\n\n".join(part for part in role_parts if part)
+        if prompt_text:
             if role_prefix:
                 prompt_text = f"{role_prefix}\n\n{prompt_text}"
             PROMPT = PromptTemplate.from_template(prompt_text)
+        else:
+            try:
+                from langchain.agents.react.prompt import (  # type: ignore
+                    PROMPT as LEGACY_PROMPT,
+                )
 
-    raw_tools: dict[str, Any] = {}
+                extra_rules = (
+                    "Additional rules:\n"
+                    "- Output exactly one action per response.\n"
+                    "- Do not emit multiple Action blocks in one message.\n"
+                    "- Do not invent Observation lines; wait for the tool result.\n"
+                    "- If you are done, output Final Answer instead of another Thought-only message.\n"
+                    "- Do not output </think> or other XML-style reasoning tags.\n"
+                    "- The Action line must contain only the tool name, for example: Action: research_search.\n"
+                    "- Put all arguments only in Action Input JSON; never write Python calls like research_search(query=...).\n\n"
+                )
+                if role_prefix:
+                    PROMPT = PromptTemplate.from_template(
+                        f"{role_prefix}\n\n{extra_rules}{LEGACY_PROMPT.template}"
+                    )
+                else:
+                    PROMPT = PromptTemplate.from_template(
+                        f"{extra_rules}{LEGACY_PROMPT.template}"
+                    )
+            except Exception:
+                prompt_text = (
+                    "You are a helpful assistant.\n\n"
+                    "Answer the following questions as best you can. You have access to the following tools:\n\n"
+                    "{tools}\n\n"
+                    "Use the following format:\n\n"
+                    "Question: the input question you must answer\n"
+                    "Thought: you should always think about what to do\n"
+                    "Action: the action to take, should be one of [{tool_names}]\n"
+                    "Action Input: the input to the action\n"
+                    "Observation: the result of the action\n"
+                    "... (this Thought/Action/Action Input/Observation can repeat)\n"
+                    "Thought: I now know the final answer\n"
+                    "Final Answer: the final answer to the original question\n\n"
+                    "Additional rules:\n"
+                    "- Output exactly one action per response.\n"
+                    "- Do not emit multiple Action blocks in one message.\n"
+                    "- Do not invent Observation lines; wait for the tool result.\n"
+                    "- If you are done, output Final Answer instead of another Thought-only message.\n"
+                    "- Do not output </think> or other XML-style reasoning tags.\n"
+                    "- The Action line must contain only the tool name, for example: Action: research_search.\n"
+                    "- Put all arguments only in Action Input JSON; never write Python calls like research_search(query=...).\n\n"
+                    "Question: {input}\n"
+                    "{agent_scratchpad}"
+                )
+                if role_prefix:
+                    prompt_text = f"{role_prefix}\n\n{prompt_text}"
+                PROMPT = PromptTemplate.from_template(prompt_text)
+    else:
+        protocol_rules = (
+            "# Action-only ReAct protocol\n"
+            "The tools listed below are available and executable. Every response "
+            "must contain exactly one Thought, one Action, and one Action Input. "
+            "Action Input must be one valid JSON object matching the selected tool. "
+            "Never output Observation; wait for the runtime result. Never return a "
+            "plain-text answer or refusal. Final Answer syntax is invalid. To end "
+            "the task, use Action: finish and Action Input: "
+            "{{\"answer\": \"your final response\"}}. Use finish only after the task is "
+            "actually complete."
+        )
+        role_parts.append(protocol_rules)
+        role_prefix = "\n\n".join(part for part in role_parts if part)
+        if prompt_text:
+            prompt_text = f"{role_prefix}\n\n{prompt_text}"
+        else:
+            prompt_text = (
+                f"{role_prefix}\n\n"
+                "You have access to the following tools:\n\n"
+                "{tools}\n\n"
+                "Use exactly this format on every turn:\n\n"
+                "Thought: explain the next step briefly\n"
+                "Action: exactly one name from [{tool_names}]\n"
+                "Action Input: one valid JSON object\n\n"
+                "When the requested task has been completed, end with exactly:\n\n"
+                "Thought: the task is complete\n"
+                "Action: finish\n"
+                "Action Input: {{\"answer\": \"concise final response\"}}\n\n"
+                "Question: {input}\n"
+                "{agent_scratchpad}"
+            )
+        PROMPT = PromptTemplate.from_template(prompt_text)
+
     tool_functions = {tool.name: load_tool(tool) for tool in cfg.tools}
+    raw_tools: dict[str, Any] = {}
     tools = []
     middleware = build_middleware_manager(cfg)
     active_state: dict[str, Any] | None = None
@@ -808,20 +968,67 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             )
         )
 
-    callbacks = _build_react_callbacks(cfg.monitoring.print_trace)
-    output_parser = _build_react_output_parser(
-        {t.name for t in cfg.tools}, allow_plain_final=True
-    )
-    parsing_error_handler = _react_parsing_feedback
+    output_parser = None
+    parsing_error_handler: Any = True
+    if react_protocol == "action_only":
+        def _finish(answer: str) -> str:
+            """Finish the task and return the final answer to the user."""
+            return answer
 
-    if create_react_agent:
-        create_kwargs: dict[str, Any] = {}
-        if output_parser is not None:
-            create_kwargs["output_parser"] = output_parser
+        tools.append(
+            StructuredTool.from_function(
+                _finish,
+                name="finish",
+                description=(
+                    "Finish the task only after it is complete. The answer "
+                    "argument is returned to the user."
+                ),
+            )
+        )
+        output_parser = _build_react_output_parser(
+            {t.name for t in cfg.tools}
+        )
+        parsing_error_handler = _react_parsing_feedback
+    elif react_protocol == "legacy":
+        output_parser = _build_legacy_react_output_parser(
+            {t.name for t in cfg.tools}
+        )
+
+    callbacks = _build_react_callbacks(cfg.monitoring.print_trace)
+
+    if react_protocol == "native_tool_calling":
+        if create_tool_calling_agent is None:
+            raise RuntimeError(
+                "native_tool_calling requires LangChain "
+                "create_tool_calling_agent support"
+            )
+        agent = create_tool_calling_agent(lc_model, tools, PROMPT)
+        executor = AgentExecutor(
+            agent=agent,
+            tools=tools,
+            verbose=False,
+            return_intermediate_steps=True,
+            max_iterations=cfg.graph.react_max_iterations,
+            max_execution_time=cfg.graph.react_max_execution_time,
+            handle_parsing_errors=True,
+            callbacks=callbacks,
+        )
+    else:
+        if output_parser is None:
+            raise RuntimeError(
+                f"{react_protocol} ReAct requires a compatible output parser"
+            )
+        if not create_react_agent:
+            raise RuntimeError(
+                f"{react_protocol} ReAct requires LangChain "
+                "create_react_agent support"
+            )
+        create_kwargs: dict[str, Any] = {
+            "output_parser": output_parser,
+        }
         if not _langchain_react_supports_stop(cfg):
-            # GPT-5 family endpoints reject LangChain's default stop parameter.
-            # Keep the default enabled for local OpenAI-compatible models such
-            # as the vLLM-hosted Qwen backend.
+            # GPT-5 endpoints reject LangChain text-ReAct stop sequences.
+            # Native tool calling does not use this text stop parameter.
             create_kwargs["stop_sequence"] = False
         agent = create_react_agent(lc_model, tools, PROMPT, **create_kwargs)
         executor = AgentExecutor(
@@ -834,18 +1041,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             handle_parsing_errors=parsing_error_handler,
             callbacks=callbacks,
         )
-    else:
-        executor = initialize_agent(
-            tools,
-            lc_model,
-            agent=AgentType.REACT_DESCRIPTION,
-            verbose=False,
-            return_intermediate_steps=True,
-            max_iterations=cfg.graph.react_max_iterations,
-            max_execution_time=cfg.graph.react_max_execution_time,
-            handle_parsing_errors=parsing_error_handler,
-            callbacks=callbacks,
-        )
+
 
     def _node(state: dict[str, Any]) -> dict[str, Any]:
         nonlocal active_state
@@ -941,9 +1137,9 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
 
         steps = runtime_steps or _expand_react_steps(
             result.get("intermediate_steps", []),
-            raw_tools=raw_tools,
             estimate_tokens=llm.estimate_tokens,
             print_trace=cfg.monitoring.print_trace and bool(callbacks),
+            raw_tools=raw_tools if react_protocol == "legacy" else None,
         )
         guard_events = state.pop("_react_guard_events", [])
         for idx, step in enumerate(steps):
@@ -1059,7 +1255,10 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                 "step": "langchain_react",
                 "timestamp": start,
                 "latency_ms": int((time.time() - start) * 1000),
-                "input": {"input": user_input},
+                "input": {
+                    "input": user_input,
+                    "protocol": react_protocol,
+                },
                 "output": {"content": output, "intermediate_steps": steps},
                 "usage": usage,
             }
@@ -1081,7 +1280,8 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                         "model": cfg.llm.model,
                         "provider": cfg.llm.provider,
                         "intermediate_steps": len(steps),
-                    },
+                        "protocol": react_protocol,
+                        },
                     "actions": [],
                     "latency_ms": int((time.time() - start) * 1000),
                     "usage": usage,

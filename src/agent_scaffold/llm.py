@@ -107,10 +107,22 @@ class LLMAdapter:
         usage = _extract_usage(result)
         return LLMResponse(content=result.content, usage=usage)
 
-    def get_lc_chat_model(self) -> Any:
+    def get_lc_chat_model(
+        self,
+        *,
+        use_responses_api: bool | None = None,
+    ) -> Any:
         self._lazy_init()
         if self._client == "mock":
             raise RuntimeError("mock provider does not support LangChain ReAct agent")
+        if use_responses_api is not None:
+            if self.config.provider.lower() != "openai":
+                raise ValueError(
+                    "OpenAI model overrides are only supported by the openai provider"
+                )
+            return self._client.model_copy(
+                update={"use_responses_api": use_responses_api}
+            )
         return self._client
 
     def estimate_tokens(self, text: str) -> int:

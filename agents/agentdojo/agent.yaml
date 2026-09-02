@@ -15,6 +15,8 @@ graph:
   tool_call_format: 'TOOL_CALL: <name> <json>'
   stop_keyword: FINAL
   react_prompt: ''
+  # action_only, legacy, or native_tool_calling (OpenAI/GPT native tools)
+  react_protocol: action_only
   react_max_iterations: 20
   react_max_execution_time: 180
 container:
@@ -111,7 +113,7 @@ agentguard:
   remote_retries: 2
   fail_closed: true
 agentdog:
-  enabled: true
+  enabled: false
   mode: diagnose
   checkpoints: [pre_reply]
   task: unified

@@ -117,6 +117,8 @@ def normalize_react_intermediate_steps(
         if not isinstance(item, (tuple, list)) or len(item) != 2:
             continue
         action, observation = item
+        if _content(getattr(action, "tool", "")) == "_Exception":
+            continue
         log = _content(getattr(action, "log", ""))
         thought = ""
         for line in log.splitlines():

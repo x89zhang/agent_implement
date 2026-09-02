@@ -44,6 +44,7 @@ class GraphConfig:
     tool_call_format: str = "TOOL_CALL: <name> <json>"
     stop_keyword: str = "FINAL"
     react_prompt: str = ""
+    react_protocol: str = "action_only"
     react_max_iterations: int | None = 15
     react_max_execution_time: int | None = 120
 
@@ -758,6 +759,9 @@ def load_config(path: str | Path) -> AppConfig:
         ),
         stop_keyword=str(graph_raw.get("stop_keyword", "FINAL")),
         react_prompt=str(graph_raw.get("react_prompt", "")),
+        react_protocol=str(
+            graph_raw.get("react_protocol", "action_only")
+        ).strip().lower(),
         react_max_iterations=_optional_int(
             graph_raw.get("react_max_iterations", 15), 15
         ),
