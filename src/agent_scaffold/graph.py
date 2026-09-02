@@ -810,6 +810,16 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             f"{react_protocol!r}"
         )
 
+    openai_transport = str(
+        getattr(cfg.graph, "openai_transport", "chat_completions")
+        or "chat_completions"
+    ).strip().lower()
+    if openai_transport not in {"chat_completions", "responses"}:
+        raise ValueError(
+            "graph.openai_transport must be chat_completions or responses, got "
+            f"{openai_transport!r}"
+        )
+
     provider = cfg.llm.provider.strip().lower()
     model = cfg.llm.model.strip().lower()
     if react_protocol == "native_tool_calling":
@@ -819,8 +829,21 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                 "an OpenAI GPT model"
             )
         lc_model = llm.get_lc_chat_model(use_responses_api=True)
+        effective_transport = "responses"
+    elif (
+        react_protocol == "action_only"
+        and openai_transport == "responses"
+        and provider == "openai"
+        and model.startswith("gpt")
+    ):
+        lc_model = llm.get_lc_chat_model(
+            use_responses_api=True,
+            output_version="v0",
+        )
+        effective_transport = "responses"
     else:
         lc_model = llm.get_lc_chat_model()
+        effective_transport = "chat_completions"
 
     prompt_text = cfg.graph.react_prompt.strip()
     role_parts = [cfg.agent.system_prompt.strip()]
@@ -1258,6 +1281,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                 "input": {
                     "input": user_input,
                     "protocol": react_protocol,
+                    "transport": effective_transport,
                 },
                 "output": {"content": output, "intermediate_steps": steps},
                 "usage": usage,
@@ -1281,7 +1305,8 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                         "provider": cfg.llm.provider,
                         "intermediate_steps": len(steps),
                         "protocol": react_protocol,
-                        },
+                        "transport": effective_transport,
+                    },
                     "actions": [],
                     "latency_ms": int((time.time() - start) * 1000),
                     "usage": usage,

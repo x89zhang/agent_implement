@@ -17,6 +17,8 @@ graph:
   react_prompt: ''
   # action_only, legacy, or native_tool_calling (OpenAI/GPT native tools)
   react_protocol: action_only
+  # OpenAI GPT action_only only; Qwen/vLLM and legacy keep their existing transport.
+  openai_transport: responses
   react_max_iterations: 20
   react_max_execution_time: 180
 container:

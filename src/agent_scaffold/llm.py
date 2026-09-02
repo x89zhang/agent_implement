@@ -111,18 +111,22 @@ class LLMAdapter:
         self,
         *,
         use_responses_api: bool | None = None,
+        output_version: str | None = None,
     ) -> Any:
         self._lazy_init()
         if self._client == "mock":
             raise RuntimeError("mock provider does not support LangChain ReAct agent")
-        if use_responses_api is not None:
+        if use_responses_api is not None or output_version is not None:
             if self.config.provider.lower() != "openai":
                 raise ValueError(
                     "OpenAI model overrides are only supported by the openai provider"
                 )
-            return self._client.model_copy(
-                update={"use_responses_api": use_responses_api}
-            )
+            updates: dict[str, Any] = {}
+            if use_responses_api is not None:
+                updates["use_responses_api"] = use_responses_api
+            if output_version is not None:
+                updates["output_version"] = output_version
+            return self._client.model_copy(update=updates)
         return self._client
 
     def estimate_tokens(self, text: str) -> int:
