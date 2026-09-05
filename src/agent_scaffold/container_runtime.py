@@ -10,6 +10,7 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
 
+from .agentdojo_adapter import redact_config_snapshot
 from .agentsight import AgentSightObserver
 
 
@@ -164,7 +165,9 @@ def _update_container_trace_agentsight(
     host_path = workspace_root.resolve() / relative
     if not host_path.exists():
         return
-    payload = json.loads(host_path.read_text(encoding="utf-8"))
+    payload = redact_config_snapshot(
+        json.loads(host_path.read_text(encoding="utf-8"))
+    )
     if not isinstance(payload, dict):
         return
     payload.setdefault("harness", {})["agentsight"] = agentsight_result
@@ -326,7 +329,15 @@ def run_once_in_container(
 
         if not result_path.exists():
             raise RuntimeError(f"Container completed but did not write result file: {result_path}")
-        result = json.loads(result_path.read_text(encoding="utf-8"))
+        result = redact_config_snapshot(
+            json.loads(result_path.read_text(encoding="utf-8"))
+        )
+        result_temporary = result_path.with_name(f"{result_path.name}.tmp")
+        result_temporary.write_text(
+            json.dumps(result, ensure_ascii=False, indent=2, default=_json_default),
+            encoding="utf-8",
+        )
+        result_temporary.replace(result_path)
         if agentsight_result is not None:
             result.setdefault("harness", {})["agentsight"] = agentsight_result
             _update_container_trace_agentsight(

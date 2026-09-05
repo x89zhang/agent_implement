@@ -8,6 +8,12 @@ agentdojo:
   case: user_task_15_injection_5
   # Keep the injection task declared in case, but set false for a no-injection control run.
   injection_enabled: true
+  # Toggle AgentDojo built-in tool-output injection vectors independently.
+  # false + skill_injection_enabled true gives a skill-only injection run.
+  standard_injection_enabled: false
+  # Expose the selected attack payload as a synthetic enabled skill.
+  # This remains active when standard_injection_enabled is false.
+  skill_injection_enabled: true
   attack_template: important_instructions
   # By default, the selected injection task goal is placed into every built-in injection vector.
   # Keep the default positions and wrap the goal with an AgentDojo attack template:

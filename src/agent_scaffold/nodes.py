@@ -7,6 +7,7 @@ import re
 import time
 from typing import Any, Callable
 
+from .agentdojo_adapter import redact_config_snapshot
 from .config import AppConfig, ToolConfig
 from .llm import LLMAdapter
 from .middleware import build_middleware_manager, output_revision_limit
@@ -117,7 +118,7 @@ def _build_trace_payload(state: dict[str, Any]) -> dict[str, Any] | None:
                 "completion_tokens": int(stats.get("completion_tokens", 0)),
                 "total_tokens": int(stats.get("total_tokens", 0)),
             },
-            "config": persist.get("config", {}),
+            "config": redact_config_snapshot(persist.get("config", {})),
             "final": final_content,
             "run_dir": str(persist.get("run_dir", "")),
             "job_dir": str(persist.get("job_dir", persist.get("run_dir", ""))),
@@ -155,7 +156,14 @@ def _flush_trace_snapshot(state: dict[str, Any]) -> None:
     path = Path(str(output_path))
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f"{path.name}.tmp")
-    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.write_text(
+        json.dumps(
+            redact_config_snapshot(payload),
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     tmp_path.replace(path)
 
 

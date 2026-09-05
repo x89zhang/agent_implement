@@ -6,6 +6,7 @@ from typing import Any
 
 import yaml
 
+from .agentdojo_adapter import render_skill_injection_payload
 from .config import AppConfig
 
 
@@ -32,6 +33,17 @@ def load_enabled_skills(cfg: AppConfig) -> list[SkillSpec]:
         spec = _load_skill(cfg, item)
         if spec is not None:
             specs.append(spec)
+    payload = render_skill_injection_payload(cfg.agentdojo)
+    if payload:
+        specs.append(
+            SkillSpec(
+                name="agentdojo-skill-payload",
+                description="Additional reusable instructions for the current task.",
+                priority=50,
+                path="agentdojo://skill-injection",
+                instructions=payload,
+            )
+        )
     specs.sort(key=lambda spec: (spec.priority, spec.name))
     return specs
 

@@ -34,6 +34,68 @@ from .nodes import (
 )
 
 
+def _build_previous_response_id_text_model(model: Any) -> tuple[Any, Any]:
+    """Add Responses API continuation without changing the text-ReAct loop.
+
+    create_react_agent rebuilds the complete prompt on every iteration and
+    discards the AIMessage metadata that LangChain normally uses to infer
+    previous_response_id. This wrapper retains that ID and submits only the
+    newly appended ReAct scratchpad suffix. If the prompt is not an exact
+    continuation, it safely starts a new response chain with the full prompt.
+    """
+    try:
+        from langchain_core.runnables import RunnableLambda  # type: ignore
+        from langchain_core.runnables.config import RunnableConfig  # type: ignore
+    except Exception as exc:  # pragma: no cover - runtime import
+        raise RuntimeError("Missing dependency: langchain_core") from exc
+
+    chain: dict[str, str | None] = {
+        "response_id": None,
+        "prompt": None,
+        "output": None,
+    }
+
+    def reset() -> None:
+        chain.update(response_id=None, prompt=None, output=None)
+
+    def invoke(input_value: Any, config: RunnableConfig) -> Any:
+        if hasattr(input_value, "to_string"):
+            prompt = str(input_value.to_string())
+        else:
+            prompt = str(input_value)
+
+        request_input = prompt
+        invoke_options: dict[str, Any] = {}
+        response_id = chain["response_id"]
+        prior_prompt = chain["prompt"]
+        prior_output = chain["output"]
+        if response_id and prior_prompt is not None and prior_output is not None:
+            expected_prefix = prior_prompt + prior_output
+            if prompt.startswith(expected_prefix):
+                request_input = prompt[len(expected_prefix) :]
+                invoke_options["previous_response_id"] = response_id
+            else:
+                # Never combine a previous response with a duplicated or
+                # unrelated full prompt.
+                reset()
+
+        result = model.invoke(request_input, config=config, **invoke_options)
+        metadata = getattr(result, "response_metadata", None)
+        next_id = metadata.get("id") if isinstance(metadata, dict) else None
+        output = getattr(result, "content", None)
+        if (
+            isinstance(next_id, str)
+            and next_id.startswith("resp_")
+            and isinstance(output, str)
+        ):
+            chain.update(response_id=next_id, prompt=prompt, output=output)
+        else:
+            reset()
+        return result
+
+    return RunnableLambda(invoke, name="responses_previous_response_id"), reset
+
+
 def _build_react_user_input(state: dict[str, Any]) -> str:
     messages = state.get("messages") or []
     user_parts = [
@@ -820,6 +882,10 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             f"{openai_transport!r}"
         )
 
+    use_previous_response_id = bool(
+        getattr(cfg.graph, "openai_use_previous_response_id", False)
+    )
+
     provider = cfg.llm.provider.strip().lower()
     model = cfg.llm.model.strip().lower()
     if react_protocol == "native_tool_calling":
@@ -844,6 +910,18 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
     else:
         lc_model = llm.get_lc_chat_model()
         effective_transport = "chat_completions"
+
+    reset_response_chain = None
+    if (
+        use_previous_response_id
+        and react_protocol == "action_only"
+        and effective_transport == "responses"
+        and provider == "openai"
+        and model.startswith("gpt")
+    ):
+        lc_model, reset_response_chain = _build_previous_response_id_text_model(
+            lc_model
+        )
 
     prompt_text = cfg.graph.react_prompt.strip()
     role_parts = [cfg.agent.system_prompt.strip()]
@@ -1049,8 +1127,12 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
         create_kwargs: dict[str, Any] = {
             "output_parser": output_parser,
         }
-        if not _langchain_react_supports_stop(cfg):
-            # GPT-5 endpoints reject LangChain text-ReAct stop sequences.
+        if (
+            reset_response_chain is not None
+            or not _langchain_react_supports_stop(cfg)
+        ):
+            # Responses continuation and GPT-5 endpoints do not use the
+            # LangChain text-ReAct stop request parameter.
             # Native tool calling does not use this text stop parameter.
             create_kwargs["stop_sequence"] = False
         agent = create_react_agent(lc_model, tools, PROMPT, **create_kwargs)
@@ -1070,6 +1152,9 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
         nonlocal active_state
         start = time.time()
         active_state = state
+        if reset_response_chain is not None:
+            # A response chain belongs to one top-level agent run only.
+            reset_response_chain()
         state.pop("_react_runtime_steps", None)
         state.pop("_agentdog_react_steps", None)
         runtime_steps: list[dict[str, Any]] = []

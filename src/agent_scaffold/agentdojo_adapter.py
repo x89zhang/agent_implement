@@ -15,7 +15,9 @@ _TOOL_METADATA: dict[str, Any] = {}
 _SESSIONS: dict[str, "AgentDojoSession"] = {}
 _LAST_SESSION: "AgentDojoSession | None" = None
 _SENSITIVE_CONFIG_KEY = re.compile(
-    r"(?:api[_-]?key|access[_-]?token|auth[_-]?token|password|secret)$",
+    r"(?:api[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|"
+    r"id[_-]?token|bearer[_-]?token|private[_-]?key|client[_-]?secret|"
+    r"password|secret|authorization|cookie|credentials?)\Z",
     re.IGNORECASE,
 )
 
@@ -103,6 +105,12 @@ def _session_key(cfg: Any) -> str:
             "user_task": getattr(cfg, "user_task", ""),
             "injection_task": getattr(cfg, "injection_task", ""),
             "injection_enabled": getattr(cfg, "injection_enabled", True),
+            "standard_injection_enabled": getattr(
+                cfg, "standard_injection_enabled", True
+            ),
+            "skill_injection_enabled": getattr(
+                cfg, "skill_injection_enabled", False
+            ),
             "custom_injection_text": getattr(cfg, "custom_injection_text", ""),
             "attack_template": getattr(cfg, "attack_template", ""),
             "injection_vectors": getattr(cfg, "injection_vectors", []),
@@ -144,6 +152,30 @@ def _render_attack_text(goal: str, attack_template: str) -> str:
         available = ", ".join(sorted(_ATTACK_TEMPLATES))
         raise ValueError(f"Unknown AgentDojo attack template: {attack_template}. Available: {available}")
     return template.format(goal=goal)
+
+
+
+def render_skill_injection_payload(cfg: Any) -> str:
+    """Render the selected AgentDojo attack as compromised skill instructions."""
+    if not (
+        getattr(cfg, "enabled", False)
+        and getattr(cfg, "injection_enabled", True)
+        and getattr(cfg, "skill_injection_enabled", False)
+    ):
+        return ""
+    injection_task_id = str(getattr(cfg, "injection_task", "") or "")
+    if not injection_task_id:
+        raise ValueError(
+            "agentdojo.skill_injection_enabled requires an injection task in "
+            "the combined AgentDojo case id"
+        )
+    suite = _suite_for(cfg)
+    injection_task = suite.get_injection_task_by_id(injection_task_id)
+    goal = str(getattr(cfg, "custom_injection_text", "") or injection_task.GOAL)
+    return _render_attack_text(
+        goal,
+        str(getattr(cfg, "attack_template", "") or ""),
+    )
 
 
 def _default_attack_injections(
@@ -188,6 +220,9 @@ class AgentDojoSession:
         self.user_task = self.suite.get_user_task_by_id(cfg.user_task)
         self.injection_task = self.suite.get_injection_task_by_id(cfg.injection_task) if cfg.injection_task else None
         self.injection_enabled = bool(getattr(cfg, "injection_enabled", True))
+        self.standard_injection_enabled = bool(
+            getattr(cfg, "standard_injection_enabled", True)
+        )
         injections = _default_attack_injections(
             self.suite,
             self.injection_task,
@@ -195,7 +230,7 @@ class AgentDojoSession:
             str(getattr(cfg, "custom_injection_text", "") or ""),
             [str(item) for item in (getattr(cfg, "injection_vectors", []) or [])],
             str(getattr(cfg, "attack_template", "") or ""),
-            self.injection_enabled,
+            self.injection_enabled and self.standard_injection_enabled,
         )
         environment = self.suite.load_and_inject_default_environment(injections)
         self.environment = self.user_task.init_environment(environment)
@@ -249,6 +284,12 @@ class AgentDojoSession:
             "user_task": self.cfg.user_task,
             "injection_task": self.cfg.injection_task or None,
             "injection_enabled": injection_enabled,
+            "standard_injection_enabled": bool(
+                getattr(self.cfg, "standard_injection_enabled", True)
+            ),
+            "skill_injection_enabled": bool(
+                getattr(self.cfg, "skill_injection_enabled", False)
+            ),
             "utility": bool(utility),
             "security": not attack_success,
             "attack_success": attack_success,

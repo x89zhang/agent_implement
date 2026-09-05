@@ -21,6 +21,7 @@ try:
     from .agentdojo_adapter import aggregate_asr as aggregate_agentdojo_asr
     from .agentdojo_adapter import augment_task as augment_task_with_agentdojo_context
     from .agentdojo_adapter import config_file_snapshot
+    from .agentdojo_adapter import redact_config_snapshot
     from .agentdojo_adapter import evaluate_last_session as evaluate_agentdojo_session
     from .agentdojo_adapter import reset_session as reset_agentdojo_session
     from .agent_security_bench_adapter import (
@@ -61,6 +62,7 @@ except ImportError:  # Fallback when executed as a script
         augment_task as augment_task_with_agentdojo_context,
     )
     from agent_scaffold.agentdojo_adapter import config_file_snapshot
+    from agent_scaffold.agentdojo_adapter import redact_config_snapshot
     from agent_scaffold.agentdojo_adapter import (
         evaluate_last_session as evaluate_agentdojo_session,
     )
@@ -235,7 +237,12 @@ def _write_result_if_requested(result: dict[str, Any]) -> None:
     path = Path(result_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps(result, ensure_ascii=False, indent=2, default=_json_default),
+        json.dumps(
+            redact_config_snapshot(result),
+            ensure_ascii=False,
+            indent=2,
+            default=_json_default,
+        ),
         encoding="utf-8",
     )
 
@@ -449,7 +456,7 @@ def run_once(
             "agent_name": cfg.agent.name,
             "timestamp": run_start,
             "started_at": run_start,
-            "config": _asdict(cfg),
+            "config": redact_config_snapshot(_asdict(cfg)),
             "input": user_input,
         },
     }
@@ -647,7 +654,10 @@ def _run_repeated(
                 result_path = actual_run_dir / "result.json"
                 result_path.write_text(
                     json.dumps(
-                        result, ensure_ascii=False, indent=2, default=_json_default
+                        redact_config_snapshot(result),
+                        ensure_ascii=False,
+                        indent=2,
+                        default=_json_default,
                     ),
                     encoding="utf-8",
                 )
@@ -693,7 +703,10 @@ def _run_repeated(
                 summary["completed_at"] = time.time()
                 (batch_dir / "summary.json").write_text(
                     json.dumps(
-                        summary, ensure_ascii=False, indent=2, default=_json_default
+                        redact_config_snapshot(summary),
+                        ensure_ascii=False,
+                        indent=2,
+                        default=_json_default,
                     ),
                     encoding="utf-8",
                 )

@@ -46,6 +46,7 @@ class GraphConfig:
     react_prompt: str = ""
     react_protocol: str = "action_only"
     openai_transport: str = "chat_completions"
+    openai_use_previous_response_id: bool = False
     react_max_iterations: int | None = 15
     react_max_execution_time: int | None = 120
 
@@ -273,6 +274,8 @@ class AgentDojoConfig:
     user_task: str = "user_task_0"
     injection_task: str = ""
     injection_enabled: bool = True
+    standard_injection_enabled: bool = True
+    skill_injection_enabled: bool = False
     trusted_tool_output_prompt: bool = True
     custom_injection_text: str = ""
     attack_template: str = ""
@@ -642,6 +645,12 @@ def load_config(path: str | Path) -> AppConfig:
             user_task=raw_user_task,
             injection_task=raw_injection_task,
             injection_enabled=bool(agentdojo_raw.get("injection_enabled", True)),
+            standard_injection_enabled=bool(
+                agentdojo_raw.get("standard_injection_enabled", True)
+            ),
+            skill_injection_enabled=bool(
+                agentdojo_raw.get("skill_injection_enabled", False)
+            ),
             trusted_tool_output_prompt=bool(
                 agentdojo_raw.get("trusted_tool_output_prompt", True)
             ),
@@ -766,6 +775,9 @@ def load_config(path: str | Path) -> AppConfig:
         openai_transport=str(
             graph_raw.get("openai_transport", "chat_completions")
         ).strip().lower(),
+        openai_use_previous_response_id=bool(
+            graph_raw.get("openai_use_previous_response_id", False)
+        ),
         react_max_iterations=_optional_int(
             graph_raw.get("react_max_iterations", 15), 15
         ),
