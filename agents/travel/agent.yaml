@@ -38,6 +38,12 @@ graph:
   tool_call_format: 'TOOL_CALL: <name> <json>'
   stop_keyword: FINAL
   react_prompt: ''
+  # action_only, legacy, or native_tool_calling (OpenAI/GPT native tools)
+  react_protocol: action_only
+  # OpenAI GPT action_only only; other providers keep their existing transport.
+  openai_transport: responses
+  # Continue OpenAI GPT action_only Responses runs via previous_response_id.
+  openai_use_previous_response_id: true
   react_max_iterations: 20
   react_max_execution_time: 120
 monitoring:

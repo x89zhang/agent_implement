@@ -146,6 +146,7 @@ class AgentSpecGeneratorConfig:
 @dataclass
 class AgentSpecConfig:
     enabled: bool = False
+    mode: str = "enforce"
     rules: list[str] = field(default_factory=list)
     rule_files: list[str] = field(default_factory=list)
     predicate_modules: list[str] = field(default_factory=list)
@@ -1045,6 +1046,7 @@ def load_config(path: str | Path) -> AppConfig:
             raise TypeError("agentspec.generator must be a boolean or mapping")
         agentspec = AgentSpecConfig(
             enabled=bool(agentspec_raw.get("enabled", False)),
+            mode=str(agentspec_raw.get("mode", "enforce")).strip().lower(),
             rules=[str(item) for item in inline_rules],
             rule_files=[str(item) for item in rule_files],
             predicate_modules=[str(item) for item in predicate_modules],
@@ -1053,6 +1055,8 @@ def load_config(path: str | Path) -> AppConfig:
             fail_closed=bool(agentspec_raw.get("fail_closed", True)),
             generator=agentspec_generator,
         )
+        if agentspec.mode not in {"enforce", "monitor"}:
+            raise ValueError("agentspec.mode must be one of: enforce, monitor")
         if agentspec.max_reflections < 0:
             raise ValueError("agentspec.max_reflections must be non-negative")
         if agentspec.generator.context_mode not in {"full", "benign_only"}:

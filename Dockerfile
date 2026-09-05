@@ -17,7 +17,10 @@ RUN if [ "$INSTALL_LLAMA_FIREWALL" = "true" ]; then \
 ARG INSTALL_AGENTSPEC=false
 COPY requirements-agentspec.txt /tmp/requirements-agentspec.txt
 RUN if [ "$INSTALL_AGENTSPEC" = "true" ]; then \
-      pip install --no-cache-dir -r /tmp/requirements-agentspec.txt; \
+      apt-get update \
+      && apt-get install -y --no-install-recommends git ca-certificates \
+      && rm -rf /var/lib/apt/lists/* \
+      && pip install --no-cache-dir -r /tmp/requirements-agentspec.txt; \
     fi
 
 # Optional benchmark extras. Set --build-arg INSTALL_AGENTDOJO=true if the

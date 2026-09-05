@@ -223,6 +223,12 @@ class AgentSpecMiddleware(Middleware):
                     intermediate_steps=_intermediate_steps(state),
                 )
                 enforcement = evaluated.enforcement
+                if self.settings.mode == "monitor":
+                    self._record(
+                        state, evaluated, "monitor", True,
+                        _reason(evaluated, f"requested {enforcement}; monitor allowed the original call"),
+                    )
+                    continue
                 if enforcement == "none":
                     self._record(state, evaluated, "allow", True, "")
                     continue
@@ -281,7 +287,9 @@ class AgentSpecMiddleware(Middleware):
                 arguments=replacement[1],
                 decision_type="invoke_action",
             )
-        return ToolDecision(True, "", decision_type="allow")
+        return ToolDecision(True, "", decision_type=(
+            "monitor" if self.settings.mode == "monitor" else "allow"
+        ))
 
     def _self_reflect(
         self, state: dict[str, Any], evaluated: Evaluation
@@ -360,15 +368,16 @@ class AgentSpecMiddleware(Middleware):
         payload: dict[str, Any],
         error: str,
     ) -> ToolDecision:
-        allowed = not self.settings.fail_closed
+        allowed = self.settings.mode == "monitor" or not self.settings.fail_closed
         reason = (
-            f"AgentSpec failed {'closed' if self.settings.fail_closed else 'open'}: "
+            f"AgentSpec failed {'open' if allowed else 'closed'}: "
             f"{error}"
         )
         data = {
             "rule_id": "",
             "event": name,
             "enforcement": "error",
+            "mode": self.settings.mode,
             "action": "error",
             "allowed": allowed,
             "reason": reason,
@@ -397,6 +406,7 @@ class AgentSpecMiddleware(Middleware):
             "rule_id": evaluated.rule_id,
             "event": evaluated.event,
             "enforcement": evaluated.enforcement,
+            "mode": self.settings.mode,
             "action": action,
             "allowed": allowed,
             "reason": reason,

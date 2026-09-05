@@ -34,7 +34,7 @@ monitoring:
   output_path: trace_agentdojo.json
   print_trace: true
 aegis:
-  enabled: false
+  enabled: true
   mode: monitor
   risk_threshold: HIGH
 pro2guard:
@@ -56,6 +56,8 @@ pro2guard:
     state_batch_size: 8
     fail_closed: true
 agentspec:
+  # enforce applies rule actions; monitor records decisions and allows original calls.
+  mode: monitor
   enabled: false
   rules: []
   rule_files: []
@@ -64,6 +66,16 @@ agentspec:
     context_mode: benign_only
     max_attempts: 2
     max_rules: 12
+llamafirewall:
+  enabled: false
+  # enforce blocks or revises unsafe output; monitor records decisions only.
+  mode: monitor
+  # Optional preset: chatbot or coding_assistant. Empty uses library defaults.
+  use_case: ""
+  # Optional role-to-scanner mapping; empty uses library defaults.
+  scanners: {}
+  max_revisions: 1
+  fail_closed: false
 toolsafe:
   enabled: false
   mode: monitor
