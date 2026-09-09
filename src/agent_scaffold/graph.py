@@ -34,6 +34,47 @@ from .nodes import (
 )
 
 
+def _validate_native_tool_turn(parsed: Any) -> Any:
+    """Check native turns; explanatory text never executes tools."""
+    from langchain_core.agents import AgentFinish
+    from langchain_core.exceptions import OutputParserException
+
+    def fail(reason: str) -> Any:
+        # Keep rejected text out of the shared text-action recovery path.
+        raise OutputParserException(
+            reason, observation=reason, llm_output="", send_to_llm=True
+        )
+
+    if isinstance(parsed, AgentFinish):
+        return fail("End with a native finish call, not a plain-text answer.")
+    if not isinstance(parsed, list) or len(parsed) != 1:
+        return fail("Issue exactly one native tool call per turn, including finish.")
+    action = parsed[0]
+    messages = getattr(action, "message_log", [])
+    content = getattr(messages[0], "content", "") if messages else ""
+    if isinstance(content, list):
+        content = "\n".join(
+            block.get("text", "") for block in content
+            if isinstance(block, dict) and block.get("type") in {"text", "output_text"}
+        )
+    if not isinstance(content, str):
+        content = ""
+    pattern = r"\s*Thought:[ \t]*([^\n]+)\n[ \t]*Action:[ \t]*([^\n]+)\s*"
+    match = re.fullmatch(pattern, content)
+    if not match or not match[1].strip() or match[2].strip() != action.tool:
+        return fail(
+            "Include Thought: brief action rationale (not private reasoning), then "
+            "Action: exact_tool_name on the next line, matching the native call."
+        )
+    if action.tool == "finish":
+        args = action.tool_input
+        answer = args.get("answer") if isinstance(args, dict) else None
+        if not isinstance(answer, str) or not answer.strip():
+            return fail("The finish call requires a non-empty answer string.")
+        return AgentFinish(return_values={"output": answer.strip()}, log=action.log)
+    return parsed
+
+
 def _build_previous_response_id_text_model(model: Any) -> tuple[Any, Any]:
     """Add Responses API continuation without changing the text-ReAct loop.
 
@@ -944,6 +985,16 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
     if react_protocol == "native_tool_calling":
         if prompt_text:
             role_parts.append(prompt_text)
+        role_parts.append(
+            "# Native tool protocol\n"
+            "Every turn must contain exactly two text lines: Thought: a brief action "
+            "rationale (not private reasoning), then Action: the exact tool name. "
+            "Then issue exactly one matching native tool call with structured arguments. "
+            "Text only describes the call; it never executes it. Never invent observations. "
+            "To end, call finish with a non-empty answer using the same Thought/Action "
+            "format. Plain-text answers cannot end the task. "
+            "Use finish only after the task is actually complete."
+        )
         system_content = "\n\n".join(
             part for part in role_parts if part
         ) or "You are a helpful assistant."
@@ -1098,12 +1149,20 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
     callbacks = _build_react_callbacks(cfg.monitoring.print_trace)
 
     if react_protocol == "native_tool_calling":
+        from langchain_core.runnables import RunnableLambda
+
+        def _native_finish(answer: str) -> str:
+            """Finish the completed task with its final answer."""
+            return answer
+
+        tools.append(StructuredTool.from_function(_native_finish, name="finish"))
         if create_tool_calling_agent is None:
             raise RuntimeError(
                 "native_tool_calling requires LangChain "
                 "create_tool_calling_agent support"
             )
         agent = create_tool_calling_agent(lc_model, tools, PROMPT)
+        agent = agent | RunnableLambda(_validate_native_tool_turn)
         executor = AgentExecutor(
             agent=agent,
             tools=tools,
