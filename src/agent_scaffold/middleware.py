@@ -335,6 +335,4 @@ def output_revision_limit(cfg: AppConfig) -> int:
         limits.append(max(0, cfg.agentguard.max_steps - 1))
     if cfg.agentdog.enabled and cfg.agentdog.mode == "revise":
         limits.append(cfg.agentdog.max_revisions)
-    if cfg.llamafirewall.enabled and cfg.llamafirewall.mode == "enforce":
-        limits.append(cfg.llamafirewall.max_revisions)
     return max(limits)

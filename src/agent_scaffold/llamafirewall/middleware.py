@@ -6,7 +6,33 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..config import AppConfig
-from ..middleware import Middleware, ModelDecision, ResultDecision
+from ..middleware import Middleware, ModelDecision, ResultDecision, ToolExecutionTerminated
+
+
+def guard_react_actions(turn: Any, manager: Any, state: dict[str, Any]) -> Any:
+    """Scan parsed actions, including their reasoning, before executor dispatch.
+
+    Final answers are scanned by the existing final-output hook. Do not run
+    other guards here: their before_tool hooks already enforce their policies.
+    """
+    actions = turn if isinstance(turn, list) else [turn]
+    for action in actions:
+        if not hasattr(action, "tool"):
+            continue
+        arguments = action.tool_input
+        if not isinstance(arguments, dict):
+            arguments = {"__arg": arguments}
+        for guard in manager.middlewares:
+            if not isinstance(guard, LlamaFirewallMiddleware):
+                continue
+            verdict = guard.guard_model_output(
+                state, str(action.log or ""), (action.tool, arguments)
+            )
+            if not verdict.allowed:
+                raise ToolExecutionTerminated(
+                    verdict.content or verdict.reason, action.tool, arguments
+                )
+    return turn
 
 
 @dataclass
@@ -40,6 +66,10 @@ class _Runtime:
         raise ValueError(f"Unsupported LlamaFirewall role: {role}")
 
     def build(self, cfg: Any) -> Any:
+        if cfg.factory:
+            module_name, function_name = cfg.factory.rsplit(":", 1)
+            factory = getattr(importlib.import_module(module_name), function_name)
+            return factory(**cfg.factory_kwargs)
         if cfg.scanners:
             scanners: dict[Any, list[Any]] = {}
             for role_name, scanner_names in cfg.scanners.items():
@@ -99,7 +129,10 @@ class LlamaFirewallMiddleware(Middleware):
                 continue
             content = str(raw.get("content") or "")
             if content:
-                results.append(self._scan(state, f"{role}_input", role, content))
+                result = self._scan(state, f"{role}_input", role, content)
+                results.append(result)
+                if not self._permitted(result):
+                    break
 
         decisive = self._decisive(results)
         if not decisive or self._permitted(decisive):
@@ -110,7 +143,7 @@ class LlamaFirewallMiddleware(Middleware):
             messages=messages,
             content=self._withheld(decisive),
             decision_type=decisive["decision"],
-            terminate=decisive["decision"] == "human_in_the_loop_required",
+            terminate=True,
         )
 
     def guard_model_output(
@@ -122,20 +155,14 @@ class LlamaFirewallMiddleware(Middleware):
         if self._permitted(result):
             return ModelDecision(content=content, tool_call=tool_call)
 
-        human = result["decision"] == "human_in_the_loop_required"
         return ModelDecision(
             allowed=False,
             reason=result["reason"],
             content=self._withheld(result),
             tool_call=None,
-            retry=not human and self.options.max_revisions > 0,
-            feedback=(
-                "LlamaFirewall rejected the previous response. Produce a safe, "
-                "policy-compliant alternative that still addresses the user request. "
-                f"Scanner reason: {result['reason']}"
-            ),
+            retry=False,
             decision_type=result["decision"],
-            terminate=human,
+            terminate=True,
         )
 
     def after_tool(
@@ -149,12 +176,8 @@ class LlamaFirewallMiddleware(Middleware):
         scan = self._scan(state, "tool_output", "tool", result)
         if self._permitted(scan):
             return ResultDecision(result=result)
-        return ResultDecision(
-            allowed=False,
-            reason=scan["reason"],
-            result=self._withheld(scan),
-            decision_type=scan["decision"],
-        )
+        # Stop on the native verdict without feeding fabricated observations back.
+        raise ToolExecutionTerminated(self._withheld(scan), name, payload)
 
     def _scan(
         self,
@@ -174,7 +197,11 @@ class LlamaFirewallMiddleware(Middleware):
             native, updated_trace = self.firewall.scan_replay_build_trace(
                 message, trace
             )
-            state["_llamafirewall_trace"] = updated_trace
+            # Monitor executes rejected messages, so subsequent scans need them.
+            # Enforce retains the native allow-only trace.
+            state["_llamafirewall_trace"] = (
+                trace + [message] if self.options.mode == "monitor" else updated_trace
+            )
             event = {
                 "phase": phase,
                 "role": role,

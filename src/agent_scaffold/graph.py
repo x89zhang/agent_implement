@@ -1106,6 +1106,16 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
     def _get_active_state() -> dict[str, Any]:
         return active_state if active_state is not None else {}
 
+    def _guard_firewall_actions(turn: Any) -> Any:
+        from .llamafirewall.middleware import guard_react_actions
+        return guard_react_actions(turn, middleware, _get_active_state())
+
+    def _with_firewall_actions(agent: Any) -> Any:
+        if not cfg.llamafirewall.enabled:
+            return agent
+        from langchain_core.runnables import RunnableLambda
+        return agent | RunnableLambda(_guard_firewall_actions)
+
     for t in cfg.tools:
         fn = tool_functions[t.name]
         lc_fn = _build_traced_react_tool(t.name, fn, cfg, middleware, _get_active_state, tool_functions)
@@ -1163,6 +1173,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             )
         agent = create_tool_calling_agent(lc_model, tools, PROMPT)
         agent = agent | RunnableLambda(_validate_native_tool_turn)
+        agent = _with_firewall_actions(agent)
         executor = AgentExecutor(
             agent=agent,
             tools=tools,
@@ -1195,6 +1206,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             # Native tool calling does not use this text stop parameter.
             create_kwargs["stop_sequence"] = False
         agent = create_react_agent(lc_model, tools, PROMPT, **create_kwargs)
+        agent = _with_firewall_actions(agent)
         executor = AgentExecutor(
             agent=agent,
             tools=tools,
@@ -1231,7 +1243,9 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
         if callbacks:
             invoke_kwargs["callbacks"] = callbacks
         input_guard = middleware.guard_model_input(
-            state, [{"role": "user", "content": user_input}]
+            state, ([{"role": "system", "content": role_prefix}]
+                    if cfg.llamafirewall.enabled else [])
+            + [{"role": "user", "content": user_input}]
         )
         if input_guard.messages:
             user_input = "\n\n".join(

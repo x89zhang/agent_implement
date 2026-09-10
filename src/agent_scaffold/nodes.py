@@ -347,7 +347,12 @@ def tool_node(
             except Exception as exc:
                 result = f"Tool execution failed: {exc}"
         failed = (not decision.allowed) or str(result).startswith("Tool execution failed:") or str(result).startswith("Tool not found:")
-        result_decision = middleware.after_tool(state, name, payload, result, failed)
+        from .middleware import ToolExecutionTerminated, ResultDecision
+        try:
+            result_decision = middleware.after_tool(state, name, payload, result, failed)
+        except ToolExecutionTerminated as exc:
+            state["_terminate_after_tool"] = True
+            result_decision = ResultDecision(allowed=False, result=exc.result)
         result = str(result_decision.result)
         if not result_decision.allowed:
             failed = True

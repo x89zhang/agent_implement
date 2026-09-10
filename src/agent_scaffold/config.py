@@ -164,7 +164,9 @@ class LlamaFirewallConfig:
     mode: str = "enforce"
     use_case: str = ""
     scanners: dict[str, list[str]] = field(default_factory=dict)
-    max_revisions: int = 1
+    max_revisions: int = 0  # Legacy field; native decisions never trigger revision.
+    factory: str = ""
+    factory_kwargs: dict[str, Any] = field(default_factory=dict)
     fail_closed: bool = False
 
 
@@ -1091,7 +1093,9 @@ def load_config(path: str | Path) -> AppConfig:
                 )
                 for role, items in scanners_raw.items()
             },
-            max_revisions=int(llamafirewall_raw.get("max_revisions", 1)),
+            max_revisions=int(llamafirewall_raw.get("max_revisions", 0)),
+            factory=str(llamafirewall_raw.get("factory", "")),
+            factory_kwargs=dict(llamafirewall_raw.get("factory_kwargs", {}) or {}),
             fail_closed=bool(llamafirewall_raw.get("fail_closed", False)),
         )
         if llamafirewall.mode not in {"enforce", "monitor"}:
@@ -1102,6 +1106,10 @@ def load_config(path: str | Path) -> AppConfig:
             )
         if llamafirewall.max_revisions < 0:
             raise ValueError("llamafirewall.max_revisions must be non-negative")
+        if llamafirewall.factory and ":" not in llamafirewall.factory:
+            raise ValueError("llamafirewall.factory must use module:function syntax")
+        if llamafirewall.factory and (llamafirewall.scanners or llamafirewall.use_case):
+            raise ValueError("llamafirewall.factory cannot be combined with scanners/use_case")
     else:
         llamafirewall = LlamaFirewallConfig()
 
