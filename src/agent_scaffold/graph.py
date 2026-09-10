@@ -5,6 +5,7 @@ import functools
 import inspect
 import json
 import re
+from pathlib import Path
 from typing import Any
 import time
 
@@ -34,12 +35,40 @@ from .nodes import (
 )
 
 
-def _validate_native_tool_turn(parsed: Any) -> Any:
+class _SerialNativeToolModel:
+    """Supply request-level serial tool binding to LangChain's agent factory."""
+
+    def __init__(self, model: Any) -> None:
+        self.model = model
+
+    def bind_tools(self, tools: Any, **kwargs: Any) -> Any:
+        return self.model.bind_tools(
+            tools, **{**kwargs, "parallel_tool_calls": False}
+        )
+
+
+def _validate_native_tool_turn(parsed: Any, record: Any = None) -> Any:
     """Check native turns; explanatory text never executes tools."""
     from langchain_core.agents import AgentFinish
     from langchain_core.exceptions import OutputParserException
 
     def fail(reason: str) -> Any:
+        if record is not None:
+            actions = parsed if isinstance(parsed, list) else []
+            record({
+                "event": "validation_failed", "reason": reason,
+                "parsed_type": type(parsed).__name__,
+                "content": [
+                    getattr(message, "content", "")
+                    for action in actions
+                    for message in getattr(action, "message_log", [])
+                ] or getattr(parsed, "log", ""),
+                "tool_calls": [
+                    {"name": getattr(action, "tool", ""),
+                     "arguments": getattr(action, "tool_input", None)}
+                    for action in actions
+                ],
+            })
         # Keep rejected text out of the shared text-action recovery path.
         raise OutputParserException(
             reason, observation=reason, llm_output="", send_to_llm=True
@@ -61,11 +90,15 @@ def _validate_native_tool_turn(parsed: Any) -> Any:
         content = ""
     pattern = r"\s*Thought:[ \t]*([^\n]+)\n[ \t]*Action:[ \t]*([^\n]+)\s*"
     match = re.fullmatch(pattern, content)
-    if not match or not match[1].strip() or match[2].strip() != action.tool:
+    if not match or not match[1].strip():
         return fail(
             "Include Thought: brief action rationale (not private reasoning), then "
             "Action: exact_tool_name on the next line, matching the native call."
         )
+    # Normalize only the explanatory text; never rewrite the native call.
+    declared_tool = match[2].strip().removeprefix("functions.")
+    if declared_tool != action.tool:
+        return fail(f"Action must match the native tool name: {action.tool}")
     if action.tool == "finish":
         args = action.tool_input
         answer = args.get("answer") if isinstance(args, dict) else None
@@ -1157,6 +1190,50 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
         )
 
     callbacks = _build_react_callbacks(cfg.monitoring.print_trace)
+    native_diagnostics: list[dict[str, Any]] = []
+
+    def record_native(event: dict[str, Any]) -> None:
+        entry = {"timestamp": time.time(), **event}
+        native_diagnostics.append(entry)
+        if active_state is None:
+            return
+        persist = active_state.get("_trace_persist", {})
+        run_dir = persist.get("run_dir") or persist.get("job_dir")
+        if run_dir:
+            try:
+                with (Path(run_dir) / "native_protocol_debug.jsonl").open("a") as stream:
+                    stream.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+            except OSError as exc:
+                # Diagnostics must not change agent execution behavior.
+                if cfg.monitoring.print_trace:
+                    print(f"[NATIVE DIAGNOSTIC WRITE ERROR] {exc}", flush=True)
+
+    if react_protocol == "native_tool_calling":
+        from langchain_core.callbacks import BaseCallbackHandler
+
+        class NativeDiagnosticCallback(BaseCallbackHandler):
+            def on_chat_model_start(self, serialized: Any, messages: Any, **kwargs: Any) -> None:
+                record_native({"event": "model_call_started"})
+
+            def on_llm_end(self, response: Any, **kwargs: Any) -> None:
+                for group in response.generations:
+                    for generation in group:
+                        message = getattr(generation, "message", None)
+                        record_native({
+                            "event": "model_response",
+                            "content": getattr(message, "content", generation.text),
+                            "tool_calls": getattr(message, "tool_calls", []),
+                            "invalid_tool_calls": getattr(message, "invalid_tool_calls", []),
+                        })
+
+            def on_agent_action(self, action: Any, **kwargs: Any) -> None:
+                if getattr(action, "tool", "") == "_Exception":
+                    record_native({"event": "parser_error", "reason": action.tool_input,
+                                   "log": action.log})
+                    if cfg.monitoring.print_trace:
+                        print(f"[PARSER ERROR] {action.tool_input}", flush=True)
+
+        callbacks = [*callbacks, NativeDiagnosticCallback()]
 
     if react_protocol == "native_tool_calling":
         from langchain_core.runnables import RunnableLambda
@@ -1171,8 +1248,8 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                 "native_tool_calling requires LangChain "
                 "create_tool_calling_agent support"
             )
-        agent = create_tool_calling_agent(lc_model, tools, PROMPT)
-        agent = agent | RunnableLambda(_validate_native_tool_turn)
+        agent = create_tool_calling_agent(_SerialNativeToolModel(lc_model), tools, PROMPT)
+        agent = agent | RunnableLambda(lambda parsed: _validate_native_tool_turn(parsed, record_native))
         agent = _with_firewall_actions(agent)
         executor = AgentExecutor(
             agent=agent,
@@ -1223,6 +1300,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
         nonlocal active_state
         start = time.time()
         active_state = state
+        native_diagnostics.clear()
         if reset_response_chain is not None:
             # A response chain belongs to one top-level agent run only.
             reset_response_chain()
@@ -1315,6 +1393,30 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             state.pop("_react_runtime_steps", None)
         state["messages"].append({"role": "assistant", "content": output})
         middleware.after_model(state, output, None)
+
+        if react_protocol == "native_tool_calling":
+            raw_steps = result.get("intermediate_steps", []) or []
+            parser_errors = [
+                {"reason": action.tool_input, "log": action.log, "observation": observation}
+                for action, observation in raw_steps
+                if getattr(action, "tool", "") == "_Exception"
+            ]
+            diagnostics = {
+                "parser_error_count": len(parser_errors),
+                "model_call_count": sum(e["event"] == "model_call_started" for e in native_diagnostics),
+                "executed_tool_step_count": len(runtime_steps) if runtime_steps else sum(
+                    getattr(action, "tool", "") != "_Exception" for action, _ in raw_steps
+                ),
+                "elapsed_seconds": time.time() - start,
+                "max_iterations": cfg.graph.react_max_iterations,
+                "max_execution_time": cfg.graph.react_max_execution_time,
+            }
+            record_native({"event": "execution_ended", **diagnostics})
+            state.setdefault("trace", []).append({
+                "step": "native_protocol_diagnostics", "timestamp": time.time(),
+                "output": {**diagnostics, "parser_errors": parser_errors,
+                           "events": list(native_diagnostics)},
+            })
 
         steps = runtime_steps or _expand_react_steps(
             result.get("intermediate_steps", []),
