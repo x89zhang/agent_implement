@@ -1,0 +1,37 @@
+# Hermes native skills + project defense + automatic Docker build.
+llm:
+  provider: openai
+  model: gpt-5.6-luna
+  base_url: https://api.openai.com/v1
+  api_key_env: OPENAI_API_KEY
+  temperature: 0.2
+agent:
+  name: hermes-agentdojo-guarded-container
+  system_prompt: ''
+  task: ''
+container:
+  enabled: true
+  auto_build: true
+  network: host
+monitoring:
+  enabled: true
+execution:
+  backend: hermes
+  hermes:
+    repo_path: /home/xiaoliang_zhang/hermes-agent
+    python_executable: ../../runtime/venvs/hermes/bin/python
+    expected_commit: 5172f22df275a8c0b4bc0545da01c7a377c1690f
+    max_iterations: 30
+    timeout_seconds: 300
+agentdojo:
+  enabled: true
+  benchmark_version: v1.2.2
+  suite: slack
+  case: user_task_15_injection_5
+  injection_enabled: true
+  standard_injection_enabled: false
+  skill_injection_enabled: true
+aegis:
+  enabled: true
+  mode: block
+  risk_threshold: HIGH

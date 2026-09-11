@@ -184,8 +184,12 @@ def run_once_in_container(
     resume_messages: list[dict[str, str]] | None,
     workspace_root: Path,
     run_dir: Path,
+    extra_mounts: list[tuple[str, str]] | None = None,
+    image_ready: bool = False,
+    run_as_host_user: bool = False,
 ) -> dict[str, Any]:
-    _ensure_image(cfg, workspace_root)
+    if not image_ready:
+        _ensure_image(cfg, workspace_root)
 
     container_workdir = str(cfg.container.workdir).rstrip("/") or "/workspace"
     config_in_container = _workspace_container_path(Path(cfg_path), workspace_root, container_workdir)
@@ -215,10 +219,14 @@ def run_once_in_container(
 
     name = _container_name(run_dir)
     cmd = ["docker", "run", "-d", "--name", name]
+    if run_as_host_user:
+        cmd.extend(["--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/tmp"])
     network = str(cfg.container.network or "").strip()
     if network:
         cmd.extend(["--network", network])
     cmd.extend(["-v", f"{workspace_root}:{container_workdir}", "-w", container_workdir])
+    for host, target in extra_mounts or []:
+        cmd.extend(["--mount", f"type=bind,src={host},dst={target},readonly"])
     cmd.extend(["-e", "PYTHONPATH=src", "-e", "AGENT_CONTAINERIZED=1"])
     cmd.extend(["-e", f"AGENT_JOB_DIR={run_dir_in_container}"])
     cmd.extend(["-e", f"AGENT_RESULT_PATH={run_dir_in_container}/_container_result.json"])

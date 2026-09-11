@@ -30,3 +30,11 @@ tests/*
 !tests/test_agentdojo_asr.py
 !tests/test_pro2guard_generator.py
 logs_other_proj/
+
+# Hermes integration artifacts and source files
+runtime/venvs/
+!requirements-hermes-bridge.txt
+!integrations/hermes/README.md
+!docs/hermes-integration-plan.md
+!agents/hermes/asb-poisoning.txt
+!tests/test_hermes_backend.py

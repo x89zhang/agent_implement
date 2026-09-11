@@ -1,0 +1,27 @@
+# Standalone configuration: no builtin harness prompts or guards are loaded.
+llm:
+  provider: openai
+  model: gpt-5.6-luna
+  base_url: https://api.openai.com/v1
+  api_key_env: OPENAI_API_KEY
+  temperature: 0.2
+agent:
+  name: hermes-agentharm
+  system_prompt: ''
+  task: ''
+container:
+  enabled: false
+monitoring:
+  enabled: true
+execution:
+  backend: hermes
+  hermes:
+    repo_path: /home/xiaoliang_zhang/hermes-agent
+    python_executable: ../../runtime/venvs/hermes/bin/python
+    expected_commit: 5172f22df275a8c0b4bc0545da01c7a377c1690f
+    max_iterations: 30
+    timeout_seconds: 300
+agentharm:
+  enabled: true
+  dataset: benign
+  split: test_public

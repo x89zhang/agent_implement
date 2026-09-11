@@ -1,0 +1,35 @@
+# Standalone configuration: no builtin harness prompts or guards are loaded.
+llm:
+  provider: openai
+  model: gpt-5.6-luna
+  base_url: https://api.openai.com/v1
+  api_key_env: OPENAI_API_KEY
+  temperature: 0.2
+agent:
+  name: hermes-asb
+  system_prompt: ''
+  task: ''
+container:
+  enabled: false
+monitoring:
+  enabled: true
+execution:
+  backend: hermes
+  hermes:
+    repo_path: /home/xiaoliang_zhang/hermes-agent
+    python_executable: ../../runtime/venvs/hermes/bin/python
+    expected_commit: 5172f22df275a8c0b4bc0545da01c7a377c1690f
+    max_iterations: 30
+    timeout_seconds: 300
+agent_security_bench:
+  enabled: true
+  data_dir: /home/xiaoliang_zhang/ASB/data
+  agent_name: financial_analyst_agent
+  task_index: 0
+  attacker_tool: InvestmentDiversion
+  injection_method: memory_attack
+  attack_type: context_ignoring
+memory_experiment:
+  mode: native_two_stage
+  poisoning_input_file: asb-poisoning.txt
+  run_clean_control: true

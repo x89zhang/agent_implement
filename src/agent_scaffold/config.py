@@ -9,6 +9,8 @@ from typing import Any
 
 import yaml
 
+from .backends.config import ExecutionConfig, parse_execution
+
 
 @dataclass
 class LLMConfig:
@@ -371,6 +373,7 @@ class AppConfig:
     container: ContainerConfig = field(default_factory=ContainerConfig)
     trip: dict[str, Any] = field(default_factory=dict)
     research: dict[str, Any] = field(default_factory=dict)
+    execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     config_dir: str = "."
 
 
@@ -1433,6 +1436,8 @@ def load_config(path: str | Path) -> AppConfig:
     research_raw = raw.get("research") or {}
     research = research_raw if isinstance(research_raw, dict) else {}
 
+    execution = parse_execution(raw, config_path.parent)
+
     return AppConfig(
         llm=llm,
         agent=agent,
@@ -1457,5 +1462,6 @@ def load_config(path: str | Path) -> AppConfig:
         container=container,
         trip=trip,
         research=research,
+        execution=execution,
         config_dir=str(config_path.parent),
     )

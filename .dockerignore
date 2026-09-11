@@ -4,3 +4,7 @@ __pycache__
 *.pyc
 jobs
 legacy
+
+runtime
+.env
+.env.*

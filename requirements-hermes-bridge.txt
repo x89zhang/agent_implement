@@ -1,0 +1,5 @@
+# Install in the PROJECT interpreter, separately from Hermes.
+# Both SDK 1.x decorator and SDK 2.x constructor APIs are supported.
+mcp>=1.12,<3
+jsonschema>=4,<5
+psutil>=5.9,<8

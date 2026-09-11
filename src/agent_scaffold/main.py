@@ -42,7 +42,6 @@ try:
     from .agentspec.generator import compile_agentspec_rules
     from .config import load_config
     from .container_runtime import run_once_in_container, should_run_in_container
-    from .graph import build_graph
     from .nodes import _flush_trace_snapshot, build_initial_messages
     from .planner import initialize_plan
     from .pro2guard.generator import compile_pro2guard_policy
@@ -96,7 +95,6 @@ except ImportError:  # Fallback when executed as a script
         run_once_in_container,
         should_run_in_container,
     )
-    from agent_scaffold.graph import build_graph
     from agent_scaffold.nodes import _flush_trace_snapshot, build_initial_messages
     from agent_scaffold.planner import initialize_plan
     from agent_scaffold.pro2guard.generator import compile_pro2guard_policy
@@ -260,6 +258,13 @@ def _split_system_messages(
     return system_messages, other_messages
 
 
+def build_graph(cfg):
+    """Keep graph dependencies lazy for external agent backends."""
+    from .graph import build_graph as build_builtin_graph
+
+    return build_builtin_graph(cfg)
+
+
 def run_once(
     cfg_path: str,
     user_input: str | None,
@@ -277,8 +282,13 @@ def run_once(
         cfg.agent.name or cfg_file.parent.name, run_start, workspace_root
     )
 
+
     if should_run_in_container(cfg):
-        return run_once_in_container(
+        runner = run_once_in_container
+        if cfg.execution.backend == "hermes":
+            from .backends.container import run_hermes_in_container
+            runner = run_hermes_in_container
+        return runner(
             cfg=cfg,
             cfg_path=str(cfg_file),
             user_input=user_input,
@@ -287,6 +297,12 @@ def run_once(
             workspace_root=workspace_root,
             run_dir=run_dir,
         )
+
+    if cfg.execution.backend == "hermes":
+        from .backends.hermes import run_hermes
+
+        return run_hermes(cfg, cfg_file, run_dir, user_input, context_messages, resume_messages)
+
 
     reset_agentdojo_session(cfg.agentdojo)
     reset_agent_security_bench_session(cfg.agent_security_bench)
