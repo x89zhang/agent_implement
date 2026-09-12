@@ -40,7 +40,7 @@ execution:
 
 container:
   # true: automatically build and run the project + Hermes Docker image.
-  enabled: false
+  enabled: true
   # Base name; the runner appends a source/dependency hash to image tags.
   image: agent-scaffold-agentdojo:latest
   auto_build: true
@@ -126,7 +126,7 @@ memory_experiment:
 # Guard dependencies and endpoints belong to the project interpreter/service.
 
 aegis:
-  enabled: true
+  enabled: false
   # monitor records risk; block enforces the configured threshold.
   mode: monitor
   risk_threshold: HIGH
@@ -193,7 +193,7 @@ llamafirewall:
   fail_closed: false
 
 toolsafe:
-  enabled: false
+  enabled: true
   # monitor, warn, replan, block
   mode: monitor
   threshold: 0.5

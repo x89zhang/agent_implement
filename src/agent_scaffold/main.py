@@ -288,7 +288,7 @@ def run_once(
         if cfg.execution.backend == "hermes":
             from .backends.container import run_hermes_in_container
             runner = run_hermes_in_container
-        return runner(
+        result = runner(
             cfg=cfg,
             cfg_path=str(cfg_file),
             user_input=user_input,
@@ -297,6 +297,11 @@ def run_once(
             workspace_root=workspace_root,
             run_dir=run_dir,
         )
+        if cfg.execution.backend == "hermes" and cfg.monitoring.print_trace:
+            from .backends.hermes import print_result_evaluation
+
+            print_result_evaluation(result)
+        return result
 
     if cfg.execution.backend == "hermes":
         from .backends.hermes import run_hermes

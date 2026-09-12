@@ -46,6 +46,18 @@ def print_evaluation(name: str, evaluation: dict) -> None:
     )
 
 
+def print_result_evaluation(result: dict) -> None:
+    """Print the benchmark evaluation carried by a completed Hermes result."""
+    harness = result.get("harness", {})
+    if not isinstance(harness, dict):
+        return
+    for name in ("agentdojo", "agentharm", "agent_security_bench"):
+        evaluation = harness.get(name)
+        if isinstance(evaluation, dict):
+            print_evaluation(name, evaluation)
+            return
+
+
 def preflight(cfg):
     config = cfg.execution.hermes
     if any(
