@@ -66,7 +66,14 @@ class DefensePlugin:
             }
             for t in self.agent.tools
         ]
-        self.rpc("initialize", tools=tools, task=self.request["prompt"])
+        self.rpc(
+            "initialize",
+            tools=tools,
+            task=self.request["prompt"],
+            generation_task=self.request.get(
+                "generation_task", self.request["prompt"]
+            ),
+        )
         self.handles = [
             ctx.register_middleware("llm_execution", self.model),
             ctx.register_middleware("tool_execution", self.tool),
@@ -350,7 +357,14 @@ class ReplayRecorderPlugin:
             }
             for t in self.agent.tools
         ]
-        self._record("initialize", tools=tools, task=self.request["prompt"])
+        self._record(
+            "initialize",
+            tools=tools,
+            task=self.request["prompt"],
+            generation_task=self.request.get(
+                "generation_task", self.request["prompt"]
+            ),
+        )
         self.handles = [
             ctx.register_middleware("llm_execution", self.model),
             ctx.register_middleware("tool_execution", self.tool),

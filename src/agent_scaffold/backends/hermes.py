@@ -242,6 +242,10 @@ def _run_phase(
             "schema_version": 1,
             "repo_path": settings.repo_path,
             "prompt": prompt,
+            # Generators receive the clean benchmark task even when this phase runs
+            # an adversarial carrier through prompt_override. Runtime guards still
+            # receive and inspect the actual prompt above.
+            "generation_task": bridge.task,
             "model": cfg.llm.model,
             "provider": "custom" if cfg.llm.provider == "openai" else "openrouter",
             "base_url": cfg.llm.base_url

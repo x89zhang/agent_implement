@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from ..config import AppConfig, LLMConfig, ToolConfig
@@ -13,6 +16,7 @@ from .middleware import UpstreamAgentSpecRuntime
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _ENFORCEMENTS = {"user_inspection", "llm_self_reflect", "stop", "skip"}
+_CACHE_VERSION = 1
 
 
 @dataclass
@@ -80,7 +84,17 @@ def compile_agentspec_rules(
     input_path = run_dir / "agentspec_rule_input.json"
     _write_json(input_path, input_payload)
 
-    generator_llm = llm or LLMAdapter(_generator_llm_config(cfg))
+    cache_key = _cache_key(cfg, input_payload)
+    cache_path = _cache_path()
+    cached_raw = _load_cached_raw(cache_path, cache_key)
+    source = "cache" if cached_raw is not None else "llm"
+    generator_llm = (
+        SimpleNamespace(
+            chat=lambda _messages: SimpleNamespace(content=cached_raw, usage=None)
+        )
+        if cached_raw is not None
+        else llm or LLMAdapter(_generator_llm_config(cfg))
+    )
     base_prompt = _generator_prompt(input_payload)
     prompt = base_prompt
     attempts = 0
@@ -134,6 +148,16 @@ def compile_agentspec_rules(
             "AgentSpec requires valid LLM-generated rules: " + "; ".join(warnings)
         )
 
+    if cache_path is not None and source == "llm":
+        _write_json(
+            cache_path,
+            {
+                "version": _CACHE_VERSION,
+                "cache_key": cache_key,
+                "raw_response": raw_text,
+            },
+        )
+
     rules_path = run_dir / "agentspec_rules.generated.ar"
     rules_path.write_text("\n".join(generated_texts), encoding="utf-8")
     cfg.agentspec.rules.extend(generated_texts)
@@ -142,9 +166,9 @@ def compile_agentspec_rules(
     manifest = {
         "version": 1,
         "status": "compiled",
-        "source": "llm",
+        "source": source,
         "context_mode": settings.context_mode,
-        "attempts": attempts,
+        "attempts": 0 if source == "cache" else attempts,
         "summary": str(plan.get("summary", "")),
         "warnings": warnings,
         "llm": {
@@ -161,8 +185,8 @@ def compile_agentspec_rules(
     return RuleGenerationResult(
         enabled=True,
         status="compiled",
-        source="llm",
-        attempts=attempts,
+        source=source,
+        attempts=0 if source == "cache" else attempts,
         summary=str(plan.get("summary", "")),
         context_mode=settings.context_mode,
         rules_path=str(rules_path.resolve()),
@@ -174,6 +198,51 @@ def compile_agentspec_rules(
         usage=usage,
         duration_ms=int((time.time() - started) * 1000),
     )
+
+
+def _cache_path() -> Path | None:
+    value = (
+        os.environ.get("AGENT_POLICY_CACHE_DIR", "").strip()
+        or os.environ.get("AGENT_BATCH_DIR", "").strip()
+    )
+    if not value:
+        return None
+    return Path(value).resolve() / "agentspec_rules.batch-cache.json"
+
+
+def _cache_key(cfg: AppConfig, input_payload: dict[str, Any]) -> str:
+    llm = _generator_llm_config(cfg)
+    material = {
+        "version": _CACHE_VERSION,
+        "input": input_payload,
+        "llm": {
+            "provider": llm.provider,
+            "model": llm.model,
+            "temperature": llm.temperature,
+            "base_url": llm.base_url,
+        },
+    }
+    return hashlib.sha256(
+        json.dumps(
+            material, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _load_cached_raw(path: Path | None, cache_key: str) -> str | None:
+    if path is None or not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if (
+        payload.get("version") != _CACHE_VERSION
+        or payload.get("cache_key") != cache_key
+    ):
+        return None
+    raw = payload.get("raw_response")
+    return str(raw) if isinstance(raw, str) and raw else None
 
 
 def _generator_llm_config(cfg: AppConfig) -> LLMConfig:

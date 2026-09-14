@@ -9,6 +9,7 @@ from __future__ import annotations
 import hmac
 import importlib
 import json
+import os
 import secrets
 import sys
 import threading
@@ -189,12 +190,13 @@ class BenchmarkBridge:
             return self.session.evaluate(final_output)
 
 
-def _service_process(cfg, connection, journal):
+def _service_process(cfg, connection, journal, policy_cache_dir):
     """Keep benchmark code and potentially blocking tools in a killable process."""
     import contextlib
     import os
 
     os.setsid()
+    os.environ["AGENT_POLICY_CACHE_DIR"] = str(policy_cache_dir)
     with (
         journal.with_name("service.log").open("w") as log,
         contextlib.redirect_stdout(log),
@@ -260,8 +262,18 @@ class BenchmarkService:
 
         self._context = multiprocessing.get_context("spawn")
         self._parent, self._child = self._context.Pipe()
+        configured_cache = (
+            os.environ.get("AGENT_POLICY_CACHE_DIR", "").strip()
+            or os.environ.get("AGENT_BATCH_DIR", "").strip()
+        )
+        policy_cache_dir = (
+            Path(configured_cache).resolve()
+            if configured_cache
+            else journal.parent.parent.resolve()
+        )
         self._process = self._context.Process(
-            target=_service_process, args=(cfg, self._child, journal)
+            target=_service_process,
+            args=(cfg, self._child, journal, policy_cache_dir),
         )
         self.timeout = timeout
         self.calls = []

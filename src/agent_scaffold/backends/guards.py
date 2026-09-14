@@ -135,6 +135,7 @@ class GuardController:
             for t in payload["tools"]
         ]
         self.task = payload.get("task", self.task)
+        generation_task = payload.get("generation_task", self.task)
         self.state["_toolsafe_user_request"] = self.task
         self.state["_agentspec_user_request"] = self.task
         for compiler in (
@@ -142,7 +143,9 @@ class GuardController:
             compile_agentspec_rules,
             compile_agentguard_scenario,
         ):
-            result = compiler(self.cfg, self.task, self.directory, user_input="")
+            result = compiler(
+                self.cfg, generation_task, self.directory, user_input=""
+            )
             if result.enabled:
                 self.state["trace"].append(
                     {"step": compiler.__name__, "output": result.to_trace()}

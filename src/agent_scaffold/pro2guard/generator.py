@@ -208,7 +208,10 @@ def compile_pro2guard_policy(
 
 
 def _batch_cache_path() -> Path | None:
-    value = os.environ.get("AGENT_BATCH_DIR", "").strip()
+    value = (
+        os.environ.get("AGENT_POLICY_CACHE_DIR", "").strip()
+        or os.environ.get("AGENT_BATCH_DIR", "").strip()
+    )
     if not value:
         return None
     return Path(value) / "pro2guard_policy.batch-cache.json"
