@@ -14,6 +14,7 @@ class HermesConfig:
     api_mode: str = "auto"
     max_iterations: int = 30
     timeout_seconds: float = 300
+    defense_mode: str = "inline"
 
 
 @dataclass
@@ -48,6 +49,8 @@ def parse_execution(raw: dict, config_dir: Path) -> ExecutionConfig:
         raise ValueError(
             "Hermes api_mode must be auto, chat_completions, or codex_responses"
         )
+    if hermes.defense_mode not in {"inline", "replay"}:
+        raise ValueError("Hermes defense_mode must be inline or replay")
     if type(hermes.max_iterations) is not int or hermes.max_iterations < 1:
         raise ValueError("Hermes max_iterations must be a positive integer")
     if (

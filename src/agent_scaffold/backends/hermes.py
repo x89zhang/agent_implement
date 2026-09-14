@@ -257,6 +257,7 @@ def _run_phase(
             "memory_enabled": enabled_memory,
             "skills": skills,
             "guard_url": bridge.url,
+            "defense_mode": settings.defense_mode,
             "tool_count": len(tools),
             "tool_names": [tool["name"] for tool in tools],
         }
@@ -326,6 +327,15 @@ def _run_phase(
                 {"status": "evaluation_failed", "error": str(exc)},
             )
             raise
+        if settings.defense_mode == "replay":
+            try:
+                bridge.replay_guards()
+            except Exception as exc:
+                dump(
+                    directory / "failure.json",
+                    {"status": "defense_replay_failed", "error": str(exc)},
+                )
+                raise
     events_path = directory / "events.jsonl"
     events = (
         [json.loads(line) for line in events_path.read_text().splitlines()]

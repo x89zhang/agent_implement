@@ -1,27 +1,269 @@
-# Standalone configuration: no builtin harness prompts or guards are loaded.
+# Standalone Hermes + AgentHarm configuration; edit options directly in this file.
+# Do not add `harness: .`: the benchmark, skills and defenses are declared below.
+# Hermes owns its prompt, planning and tool loop. Project graph/react_protocol,
+# security.trusted_tool_output_prompt and planner settings do not control Hermes.
+
 llm:
+  # openai = OpenAI-compatible endpoint; Hermes auto-selects its wire format.
+  # openrouter is also supported.
   provider: openai
   model: gpt-5.6-luna
+  temperature: 0.2
   base_url: https://api.openai.com/v1
   api_key_env: OPENAI_API_KEY
-  temperature: 0.2
+  # Export the key in the environment; do not store api_key in YAML.
+  # reasoning_effort / verbosity are not currently forwarded by this backend.
+  # Responses-only GPT models ignore this temperature setting because the API rejects it.
+  # The Hermes phase deadline is execution.hermes.timeout_seconds below.
+
 agent:
   name: hermes-agentharm
+  # Hermes uses its own system prompt; this project field is intentionally empty.
   system_prompt: ''
+  # Optional extra task instructions; the selected AgentHarm task is appended.
   task: ''
-container:
-  enabled: false
-monitoring:
-  enabled: true
+
 execution:
   backend: hermes
   hermes:
     repo_path: /home/xiaoliang_zhang/hermes-agent
+    # Used only for host execution; Docker supplies its own Hermes interpreter.
     python_executable: ../../runtime/venvs/hermes/bin/python
     expected_commit: 5172f22df275a8c0b4bc0545da01c7a377c1690f
+    # Automatic Docker builds always require a clean checkout.
+    allow_dirty_checkout: false
+    # auto follows Hermes routing; alternatives: chat_completions, codex_responses.
+    # codex_responses is Hermes' name for the Responses API, including API-key OpenAI.
+    api_mode: auto
     max_iterations: 30
     timeout_seconds: 300
+
+container:
+  # true: automatically build and run the project + Hermes Docker image.
+  enabled: true
+  # Base name; the runner appends a source/dependency hash to image tags.
+  image: agent-scaffold-agentharm:latest
+  auto_build: true
+  # Project base Dockerfile; integrations/hermes/Dockerfile adds Hermes on top.
+  dockerfile: Dockerfile
+  workdir: /workspace
+  # On Linux, host networking also reaches local guard/model endpoints below.
+  network: host
+  remove: true
+  build_args:
+    INSTALL_AGENTHARM: "true"
+    # Enabled AgentSpec/LlamaFirewall dependencies are selected automatically.
+  # Configured *_env credential/endpoint variables are also forwarded by name.
+  env:
+    - OPENAI_API_KEY
+    - AGENTGUARD_API_KEY
+    - AGENTGUARD_SERVER_URL
+    - AGENTGUARD_SCENARIO_API_KEY
+    - TOOLSAFE_API_KEY
+    - AGENTDOG_API_KEY
+    - AGENTDOG_BASE_URL
+    - HF_TOKEN
+    - HUGGING_FACE_HUB_TOKEN
+    - TOGETHER_API_KEY
+    - TOKENIZERS_PARALLELISM
+    - HTTP_PROXY
+    - HTTPS_PROXY
+    - NO_PROXY
+
+monitoring:
+  enabled: true
+  output_path: trace_agentharm.json
+  # Print the concise AgentHarm evaluation before Hermes final answer.
+  print_trace: true
+
 agentharm:
   enabled: true
-  dataset: benign
+  # harmful is the adversarial benchmark; benign measures utility; chat has no tools.
+  dataset: harmful
+  # Available splits: val, test_public, test_private.
   split: test_public
+  # Set an exact task ID here. Empty selects the first task after filtering.
+  behavior_id: '64-3'
+  # Optional filters; null means no filter.
+  detailed_behaviors: null
+  hint_included: null
+  # Add randomly selected tools unrelated to the chosen task.
+  n_irrelevant_tools: 0
+  seed: 0
+  refusal_judge: openai/gpt-4o-2024-08-06
+  semantic_judge: openai/gpt-4o-2024-08-06
+  force_redownload: false
+
+skills:
+  # Additional text skills are staged in Hermes' isolated native skill library.
+  base_dir: ../../skills
+  enabled: []
+  # Example:
+  # enabled:
+  #   - name: task-guidance
+  #     description: Reusable task guidance
+  #     instructions: "Check the requested channel before sending a message."
+
+memory_experiment:
+  # Multi-stage native memory modes currently require ASB.
+  mode: 'off'
+
+# Project defenses: AgentGuard matches the source configuration and is enabled in monitor mode.
+# The other defenses are declared below and initially disabled.
+# Tool names are canonical AgentHarm benchmark names, not
+# mcp__benchmark__ names. Native skills use skill_view / skills_list / skill_manage.
+# Guard dependencies and endpoints belong to the project interpreter/service.
+
+aegis:
+  enabled: false
+  # monitor records risk; block enforces the configured threshold.
+  mode: monitor
+  risk_threshold: HIGH
+  fail_closed: false
+  allow_tools: []
+  block_tools: []
+  # Example: block_tools: [skill_view] prevents native skill payload loading.
+
+pro2guard:
+  enabled: false
+  # monitor, warn, block
+  mode: monitor
+  model_path: ../../models/pro2guard/dtmc.new.json
+  dtmc_path: ''
+  prism_bin: prism
+  abstraction: ''
+  abstraction_policy_path: ''
+  threshold: 0.1
+  horizon: 20
+  timeout_seconds: 10
+  fail_closed: false
+  # Domain safety property; the generator can add action-level unsafe states.
+  unsafe_states: []
+  generator:
+    enabled: true
+    # benign_only excludes attack metadata; full includes it.
+    context_mode: benign_only
+    max_attempts: 2
+    max_profiles: 50
+    max_unsafe_states: 20
+    max_model_states: 200
+    state_batch_size: 8
+    fail_closed: true
+    # Generator model settings inherit top-level llm when omitted.
+
+agentspec:
+  enabled: false
+  # enforce applies rule actions; monitor allows original calls and logs decisions.
+  mode: monitor
+  rules: []
+  rule_files: []
+  predicate_modules: []
+  approval_handler: prompt
+  max_reflections: 3
+  fail_closed: true
+  generator:
+    enabled: true
+    context_mode: benign_only
+    max_attempts: 2
+    max_rules: 12
+    # Generator model settings inherit top-level llm when omitted.
+
+llamafirewall:
+  enabled: false
+  # enforce applies native BLOCK/HUMAN decisions; monitor observes the trajectory.
+  mode: enforce
+  # Optional preset: chatbot or coding_assistant; empty uses library defaults.
+  use_case: ''
+  # Optional role-to-scanner mapping; empty uses library defaults.
+  scanners: {}
+  # Optional module:function returning a native LlamaFirewall instance.
+  factory: ''
+  factory_kwargs: {}
+  fail_closed: false
+
+toolsafe:
+  enabled: false
+  # monitor, warn, replan, block
+  mode: monitor
+  threshold: 0.5
+  provider: openai_compatible
+  model: TS-Guard
+  base_url: http://localhost:8001/v1
+  api_key_env: TOOLSAFE_API_KEY
+  timeout_seconds: 60
+  max_history_steps: 20
+  max_replans: 3
+  fail_closed: true
+
+agentsight:
+  enabled: false
+  # Host-side observer; requires the existing AgentSight binary/permissions.
+  binary: runtime/bin/agentsight
+  capture: full
+  privilege: auto
+  required: true
+  db_path: agentsight.db
+  snapshot_path: agentsight_snapshot.json
+  log_path: agentsight.log
+  web_server: false
+  server_port: 7395
+  startup_timeout_seconds: 10
+  warmup_seconds: 1
+  shutdown_timeout_seconds: 10
+
+agentguard:
+  enabled: false
+  # monitor, warn, block
+  mode: monitor
+  policy: ''
+  plugin_config: ''
+  scenario_compiler:
+    enabled: true
+    context_mode: benign_only
+    max_attempts: 2
+    llm:
+      provider: openai
+      model: gpt-5.6-luna
+      temperature: 0.1
+      base_url: https://api.openai.com/v1
+      api_key_env: AGENTGUARD_SCENARIO_API_KEY
+      request_timeout: 180
+  # Empty uses local policy evaluation. Remote credentials use AGENTGUARD_API_KEY.
+  server_url: ''
+  environment: benchmark
+  user_id: ''
+  role: default
+  trust_level: 1
+  sandbox: local
+  sandbox_profile: null
+  audit_path: agentguard_audit.jsonl
+  max_steps: 12
+  max_tool_calls: 24
+  window_size: 8
+  remote_timeout_seconds: 5
+  remote_retries: 2
+  fail_closed: true
+
+agentdog:
+  enabled: false
+  # diagnose logs only; gate replaces unsafe output; revise requests regeneration.
+  mode: diagnose
+  # pre_reply checks final answers; add pre_action to also check tool actions.
+  checkpoints: [pre_reply]
+  task: unified
+  provider: openai_compatible
+  model: agentdog-unified
+  base_url: http://localhost:8001/v1
+  # Used only when base_url is empty.
+  base_url_env: AGENTDOG_BASE_URL
+  api_key_env: AGENTDOG_API_KEY
+  temperature: 0.0
+  timeout_seconds: 180
+  max_tokens: 1024
+  max_trajectory_chars: 0
+  max_revisions: 2
+  fail_closed: false
+  include_raw_response: true
+  replacement_message: >-
+    The response was withheld because AgentDoG diagnosed unsafe behavior
+    in the accumulated agent trajectory.

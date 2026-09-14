@@ -283,3 +283,166 @@ class DefensePlugin:
                 raise GuardStopped(
                     f"Defense tool adapter failed: {exc}", failed=True
                 ) from exc
+
+
+class ReplayRecorderPlugin:
+    """Record an immutable guard lifecycle while leaving Hermes untouched."""
+
+    def __init__(self, agent, request, mapping, event, path):
+        self.agent, self.request, self.mapping, self.event = (
+            agent,
+            request,
+            mapping,
+            event,
+        )
+        self.path = path
+        self.lock = threading.Lock()
+        self.sequence = 0
+        self.messages = []
+        self.handles = []
+
+    def _append(self, op, **payload):
+        with self.lock:
+            entry = {"sequence": self.sequence, "op": op, **payload}
+            self.sequence += 1
+            with self.path.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+
+    def _emit(self, kind, payload):
+        try:
+            self.event(kind, payload)
+        except Exception:
+            pass
+
+    def _record_error(self, op, exc):
+        self._emit(
+            "defense_replay_record_error",
+            {"op": op, "error": f"{type(exc).__name__}: {exc}"},
+        )
+
+    def _record(self, op, **payload):
+        try:
+            self._append(op, **payload)
+        except Exception as exc:
+            self._record_error(op, exc)
+
+    def _messages(self, messages):
+        result = json.loads(json.dumps(messages, default=str))
+        for message in result:
+            for call in message.get("tool_calls") or []:
+                fn = call.get("function", {})
+                fn["name"] = self.mapping.get(fn.get("name"), fn.get("name"))
+            if message.get("name"):
+                message["name"] = self.mapping.get(message["name"], message["name"])
+        return result
+
+    def install(self):
+        from hermes_cli.plugins import PluginContext, PluginManifest, get_plugin_manager
+
+        ctx = PluginContext(
+            PluginManifest(name="project-defense-replay-recorder"),
+            get_plugin_manager(),
+        )
+        tools = [
+            {
+                "name": self.mapping.get(t["function"]["name"], t["function"]["name"]),
+                "description": t["function"].get("description", ""),
+            }
+            for t in self.agent.tools
+        ]
+        self._record("initialize", tools=tools, task=self.request["prompt"])
+        self.handles = [
+            ctx.register_middleware("llm_execution", self.model),
+            ctx.register_middleware("tool_execution", self.tool),
+        ]
+
+    def model(self, request, next_call, **context):
+        responses = (
+            context.get("api_mode", getattr(self.agent, "api_mode", ""))
+            == "codex_responses"
+        )
+        try:
+            if responses:
+                from responses_wire import guard_messages
+
+                self.messages = guard_messages(request)
+            else:
+                self.messages = request.get("messages", [])
+            self._record("model_input", messages=self._messages(self.messages))
+        except Exception as exc:
+            self._record_error("model_input", exc)
+        response = next_call(request)
+        try:
+            if responses:
+                from responses_wire import response_view
+
+                choice = response_view(self.agent, response)
+            else:
+                choice = response.choices[0]
+            message = choice.message
+            calls = []
+            for call in message.tool_calls or []:
+                raw_arguments = call.function.arguments
+                try:
+                    arguments = json.loads(raw_arguments)
+                except (TypeError, ValueError):
+                    arguments = raw_arguments
+                calls.append(
+                    {
+                        "id": call.id,
+                        "name": self.mapping.get(
+                            call.function.name, call.function.name
+                        ),
+                        "arguments": arguments,
+                    }
+                )
+            self._record(
+                "model_output", content=message.content or "", tool_calls=calls
+            )
+        except Exception as exc:
+            self._record_error("model_output", exc)
+        return response
+
+    def tool(self, tool_name, args, next_call, **context):
+        canonical = self.mapping.get(tool_name, tool_name)
+        if canonical == "skill_view":
+            self._emit("skill_view_attempt", {"arguments": args})
+        self._record("before_tool", name=canonical, arguments=args)
+        try:
+            value = next_call(args)
+        except BaseException as exc:
+            self._record(
+                "after_tool",
+                name=canonical,
+                arguments=args,
+                result=str(exc),
+                failed=True,
+            )
+            raise
+        text = value if isinstance(value, str) else json.dumps(value, default=str)
+        failed = False
+        try:
+            parsed = json.loads(text)
+            failed = isinstance(parsed, dict) and bool(
+                parsed.get("error") or parsed.get("isError")
+            )
+        except ValueError:
+            pass
+        self._record(
+            "after_tool",
+            name=canonical,
+            arguments=args,
+            result=text,
+            failed=failed,
+        )
+        if canonical == "skill_view":
+            self._emit(
+                "skill_view",
+                {
+                    "arguments": args,
+                    "failed": failed,
+                    "result_allowed": True,
+                    "result_changed": False,
+                },
+            )
+        return value

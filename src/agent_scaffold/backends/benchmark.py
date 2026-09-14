@@ -204,7 +204,8 @@ def _service_process(cfg, connection, journal):
             name, session, tools, task = create_benchmark(cfg)
             from .guards import GuardController
 
-            guard = GuardController(cfg, task, journal.parent)
+            replay_mode = cfg.execution.hermes.defense_mode == "replay"
+            guard = None if replay_mode else GuardController(cfg, task, journal.parent)
             with BenchmarkBridge(session, tools, journal, guard) as bridge:
                 connection.send(
                     {
@@ -225,8 +226,21 @@ def _service_process(cfg, connection, journal):
                                 "calls": bridge.calls,
                             }
                         )
+                    elif command["op"] == "replay_guards":
+                        from .guards import replay_guards
+
+                        connection.send(
+                            {
+                                "replay": replay_guards(
+                                    cfg,
+                                    journal.parent / "guard_lifecycle.jsonl",
+                                    journal.parent,
+                                )
+                            }
+                        )
                     elif command["op"] == "close":
-                        guard.close()
+                        if guard is not None:
+                            guard.close()
                         break
                     else:
                         raise ValueError("Unknown controller operation")
@@ -287,6 +301,10 @@ class BenchmarkService:
         result = self._receive()
         self.calls = result["calls"]
         return result["evaluation"]
+
+    def replay_guards(self):
+        self._parent.send({"op": "replay_guards"})
+        return self._receive()["replay"]
 
     def __exit__(self, *args):
         import os

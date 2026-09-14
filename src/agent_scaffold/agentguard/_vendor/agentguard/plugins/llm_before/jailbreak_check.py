@@ -20,7 +20,12 @@ class JailbreakCheckPlugin(BasePlugin):
     event_types = [EventType.LLM_INPUT]
 
     def check(self, event: RuntimeEvent, context: RuntimeContext) -> CheckResult:
-        text = text_of(event.payload.messages)
+        # System/developer instructions and prior assistant output are trusted
+        # runtime context. Scanning them causes the guard's own tool-use and
+        # security instructions to trigger broad jailbreak patterns. User and
+        # tool messages are the untrusted inputs this plugin is intended to
+        # inspect.
+        text = _untrusted_input_text(event.payload.messages)
         signals: list[str] = []
         matched_templates: dict[str, list[str]] = {}
 
@@ -50,3 +55,13 @@ class JailbreakCheckPlugin(BasePlugin):
             is_final=True,
             metadata=metadata,
         )
+
+
+def _untrusted_input_text(messages: list[dict]) -> str:
+    return text_of(
+        [
+            message.get("content", "")
+            for message in messages
+            if str(message.get("role", "")).lower() in {"user", "tool"}
+        ]
+    )

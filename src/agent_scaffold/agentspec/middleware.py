@@ -219,7 +219,12 @@ class AgentSpecMiddleware(Middleware):
                     rule,
                     user_input={"input": _user_request(state)},
                     tool_name=effective_name,
-                    tool_input=tool_input,
+                    # Upstream AgentSpec predicates use string operations such
+                    # as re.search(), .find(), and .lower() on this value.
+                    # Native tool runtimes normally supply structured objects,
+                    # so serialize them at the adapter boundary while keeping
+                    # the original payload for execution and audit records.
+                    tool_input=_predicate_input(tool_input),
                     intermediate_steps=_intermediate_steps(state),
                 )
                 enforcement = evaluated.enforcement
@@ -439,6 +444,18 @@ def _tool_input(payload: dict[str, Any]) -> Any:
     if set(payload) == {"__arg"}:
         return payload["__arg"]
     return dict(payload)
+
+
+def _predicate_input(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
 
 
 def _user_request(state: dict[str, Any]) -> str:

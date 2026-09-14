@@ -1,4 +1,6 @@
-# Standalone configuration: no builtin harness prompts or guards are loaded.
+# Standalone Hermes + Agent Security Bench configuration.
+# Hermes owns its prompt, planning and tool loop. Select the ASB case under
+# agent_security_bench and enable project defenses independently below.
 llm:
   provider: openai
   model: gpt-5.6-luna
@@ -10,26 +12,190 @@ agent:
   system_prompt: ''
   task: ''
 container:
-  enabled: false
+  enabled: true
+  image: agent-scaffold-asb:latest
+  auto_build: true
+  dockerfile: Dockerfile
+  workdir: /workspace
+  network: host
+  remove: true
+  env:
+    - OPENAI_API_KEY
+    - AGENTGUARD_API_KEY
+    - AGENTGUARD_SERVER_URL
+    - AGENTGUARD_SCENARIO_API_KEY
+    - TOOLSAFE_API_KEY
+    - AGENTDOG_API_KEY
+    - AGENTDOG_BASE_URL
+    - HF_TOKEN
+    - HUGGING_FACE_HUB_TOKEN
+    - TOGETHER_API_KEY
+    - TOKENIZERS_PARALLELISM
+    - HTTP_PROXY
+    - HTTPS_PROXY
+    - NO_PROXY
 monitoring:
   enabled: true
+  output_path: trace_asb.json
+  print_trace: true
 execution:
   backend: hermes
   hermes:
     repo_path: /home/xiaoliang_zhang/hermes-agent
     python_executable: ../../runtime/venvs/hermes/bin/python
     expected_commit: 5172f22df275a8c0b4bc0545da01c7a377c1690f
+    allow_dirty_checkout: false
+    api_mode: auto
     max_iterations: 30
     timeout_seconds: 300
 agent_security_bench:
   enabled: true
+  # Host runs need the three official ASB JSONL files in this directory.
   data_dir: /home/xiaoliang_zhang/ASB/data
   agent_name: financial_analyst_agent
   task_index: 0
   attacker_tool: InvestmentDiversion
   injection_method: memory_attack
   attack_type: context_ignoring
+skills:
+  # Additional text skills are staged in Hermes' isolated native skill library.
+  base_dir: ../../skills
+  enabled: []
 memory_experiment:
+  # native_two_stage runs poison, target and clean-control phases. Set this to
+  # 'off' for a normal single-phase ASB prompt-injection run.
   mode: native_two_stage
   poisoning_input_file: asb-poisoning.txt
   run_clean_control: true
+# Project defenses. These enabled values match agents/hermes/agentdojo.yaml:
+# AgentGuard is active in monitor mode; the other plugins are ready to enable.
+# ASB tools use their canonical benchmark names in allow/block rules.
+aegis:
+  enabled: false
+  mode: monitor
+  risk_threshold: HIGH
+  fail_closed: false
+  allow_tools: []
+  block_tools: []
+pro2guard:
+  enabled: false
+  mode: monitor
+  model_path: ../../models/pro2guard/dtmc.new.json
+  dtmc_path: ''
+  prism_bin: prism
+  abstraction: ''
+  abstraction_policy_path: ''
+  threshold: 0.1
+  horizon: 20
+  timeout_seconds: 10
+  fail_closed: false
+  unsafe_states: []
+  generator:
+    enabled: true
+    context_mode: benign_only
+    max_attempts: 2
+    max_profiles: 50
+    max_unsafe_states: 20
+    max_model_states: 200
+    state_batch_size: 8
+    fail_closed: true
+agentspec:
+  enabled: false
+  mode: monitor
+  rules: []
+  rule_files: []
+  predicate_modules: []
+  approval_handler: prompt
+  max_reflections: 3
+  fail_closed: true
+  generator:
+    enabled: true
+    context_mode: benign_only
+    max_attempts: 2
+    max_rules: 12
+llamafirewall:
+  enabled: false
+  mode: enforce
+  use_case: ''
+  scanners: {}
+  factory: ''
+  factory_kwargs: {}
+  fail_closed: false
+toolsafe:
+  enabled: false
+  mode: monitor
+  threshold: 0.5
+  provider: openai_compatible
+  model: TS-Guard
+  base_url: http://localhost:8001/v1
+  api_key_env: TOOLSAFE_API_KEY
+  timeout_seconds: 60
+  max_history_steps: 20
+  max_replans: 3
+  fail_closed: true
+agentsight:
+  enabled: false
+  binary: runtime/bin/agentsight
+  capture: full
+  privilege: auto
+  required: true
+  db_path: agentsight.db
+  snapshot_path: agentsight_snapshot.json
+  log_path: agentsight.log
+  web_server: false
+  server_port: 7395
+  startup_timeout_seconds: 10
+  warmup_seconds: 1
+  shutdown_timeout_seconds: 10
+agentguard:
+  enabled: false
+  mode: monitor
+  # The AgentDojo static policy names AgentDojo tools, so ASB relies on the
+  # task-specific generated policy instead.
+  policy: ''
+  plugin_config: ''
+  scenario_compiler:
+    enabled: true
+    context_mode: benign_only
+    max_attempts: 2
+    llm:
+      provider: openai
+      model: gpt-5.6-luna
+      temperature: 0.1
+      base_url: https://api.openai.com/v1
+      api_key_env: AGENTGUARD_SCENARIO_API_KEY
+      request_timeout: 180
+  server_url: ''
+  environment: benchmark
+  user_id: ''
+  role: default
+  trust_level: 1
+  sandbox: local
+  sandbox_profile: null
+  audit_path: agentguard_audit.jsonl
+  max_steps: 12
+  max_tool_calls: 24
+  window_size: 8
+  remote_timeout_seconds: 5
+  remote_retries: 2
+  fail_closed: true
+agentdog:
+  enabled: false
+  mode: diagnose
+  checkpoints: [pre_reply]
+  task: unified
+  provider: openai_compatible
+  model: agentdog-unified
+  base_url: http://localhost:8001/v1
+  base_url_env: AGENTDOG_BASE_URL
+  api_key_env: AGENTDOG_API_KEY
+  temperature: 0.0
+  timeout_seconds: 180
+  max_tokens: 1024
+  max_trajectory_chars: 0
+  max_revisions: 2
+  fail_closed: false
+  include_raw_response: true
+  replacement_message: >-
+    The response was withheld because AgentDoG diagnosed unsafe behavior
+    in the accumulated agent trajectory.

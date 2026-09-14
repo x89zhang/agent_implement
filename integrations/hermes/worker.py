@@ -8,12 +8,13 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import time
 import uuid
 from importlib.metadata import distributions
 from pathlib import Path
 
-from defense_plugin import DefensePlugin, GuardStopped
+from defense_plugin import DefensePlugin, GuardStopped, ReplayRecorderPlugin
 
 
 def write_json(path, value):
@@ -32,6 +33,17 @@ def write_json(path, value):
     tmp.replace(path)
 
 
+def install_opaque_home_alias():
+    """Hide benchmark and condition names embedded in the artifact path."""
+    original = os.environ.get("HERMES_HOME", "").strip()
+    if not original:
+        return None
+    alias = Path(tempfile.gettempdir()) / f"hermes-home-{uuid.uuid4().hex}"
+    alias.symlink_to(Path(original), target_is_directory=True)
+    os.environ["HERMES_HOME"] = str(alias)
+    return alias
+
+
 def main():
     request = json.loads(Path(sys.argv[1]).read_text())
     result_path = Path(sys.argv[2])
@@ -41,6 +53,7 @@ def main():
     agent = None
     result = None
     plugin = None
+    home_alias = None
 
     def event(kind, payload):
         with events_path.open("a", encoding="utf-8") as stream:
@@ -55,6 +68,7 @@ def main():
     try:
         if request.get("schema_version") != 1:
             raise ValueError("Unsupported Hermes worker request schema")
+        home_alias = install_opaque_home_alias()
         write_json(
             result_path.parent / "dependencies.json",
             {d.metadata["Name"]: d.version for d in distributions()},
@@ -132,7 +146,16 @@ def main():
             )
         write_json(result_path.parent / "tools.json", agent.tools)
         event("tool_inventory", {"names": sorted(actual)})
-        plugin = DefensePlugin(agent, request, mapping, event)
+        if request.get("defense_mode") == "replay":
+            plugin = ReplayRecorderPlugin(
+                agent,
+                request,
+                mapping,
+                event,
+                result_path.parent / "guard_lifecycle.jsonl",
+            )
+        else:
+            plugin = DefensePlugin(agent, request, mapping, event)
         plugin.install()
         raw = agent.run_conversation(request["prompt"], conversation_history=None)
         write_json(
@@ -179,6 +202,11 @@ def main():
                 result["termination_reason"] = (
                     f"Hermes cleanup failed: {type(exc).__name__}: {exc}"
                 )
+        if home_alias is not None:
+            try:
+                home_alias.unlink(missing_ok=True)
+            except OSError:
+                pass
         # Shutdown is inside the supervisor's deadline and precedes the memory snapshot.
         write_json(result_path, result)
     return 0 if result["status"] == "completed" else 1

@@ -1,3 +1,6 @@
 # Optional security middleware. This intentionally stays out of requirements.txt
 # because it pulls the Torch/Transformers/CodeShield ML stack.
 llamafirewall==1.0.3
+# LlamaFirewall 1.0.3 imports HfFolder and targets the Transformers 4 API.
+huggingface-hub==0.30.2
+transformers==4.51.3

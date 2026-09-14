@@ -7,6 +7,7 @@ import json
 import threading
 import time
 from dataclasses import asdict
+from pathlib import Path
 
 from ..agentdojo_adapter import redact_config_snapshot
 from ..config import ToolConfig
@@ -21,6 +22,79 @@ GUARDS = (
     "agentdog",
     "agentguard",
 )
+
+
+def replay_guards(cfg, lifecycle_path, directory):
+    """Replay one immutable Hermes lifecycle through isolated guard controllers."""
+    lifecycle_path, directory = Path(lifecycle_path), Path(directory)
+    entries = [
+        json.loads(line)
+        for line in lifecycle_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    if not entries or entries[0].get("op") != "initialize":
+        raise ValueError("Guard lifecycle must start with initialize")
+    sequences = [entry.get("sequence") for entry in entries]
+    if sequences != list(range(len(entries))):
+        raise ValueError("Guard lifecycle sequence is incomplete or out of order")
+
+    root = directory / "defense_replay"
+    root.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "mode": "replay",
+        "source": str(lifecycle_path),
+        "event_count": len(entries),
+        "enabled": [],
+        "trace": [],
+        "harness": {},
+        "methods": {},
+    }
+    for name in GUARDS:
+        if not getattr(cfg, name).enabled:
+            continue
+        method_cfg = copy.deepcopy(cfg)
+        for other in GUARDS:
+            getattr(method_cfg, other).enabled = other == name
+        method_dir = root / name
+        method_dir.mkdir(exist_ok=False)
+        controller = None
+        status = {"status": "completed", "directory": str(method_dir)}
+        try:
+            controller = GuardController(
+                method_cfg, entries[0].get("task", ""), method_dir
+            )
+            for entry in entries:
+                controller.dispatch(copy.deepcopy(entry))
+        except Exception as exc:
+            # A broken detector must not discard the capture or stop its peers.
+            status = {
+                "status": "failed",
+                "directory": str(method_dir),
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        finally:
+            if controller is not None:
+                try:
+                    controller.close()
+                except Exception as exc:  # cleanup belongs to this detector only
+                    status = {
+                        "status": "failed",
+                        "directory": str(method_dir),
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+        manifest["enabled"].append(name)
+        manifest["methods"][name] = status
+        method_output = method_dir / "defenses.json"
+        if method_output.exists():
+            defense = json.loads(method_output.read_text(encoding="utf-8"))
+            manifest["trace"].extend(defense.get("trace", []))
+            manifest["harness"].update(defense.get("harness", {}))
+
+    output = directory / "defenses.json"
+    temporary = output.with_suffix(".tmp")
+    temporary.write_text(json.dumps(manifest, indent=2, default=str))
+    temporary.replace(output)
+    return manifest
 
 
 class GuardController:
@@ -86,8 +160,24 @@ class GuardController:
             else:
                 if self.manager is None:
                     raise RuntimeError("Defense controller not initialized")
+                # `_last_*` values describe one lifecycle operation. Leaving
+                # them in shared state makes a decision appear again on every
+                # later event, inflating alarm counts and obscuring its phase.
+                for key in tuple(self.state):
+                    if key.startswith("_last_"):
+                        self.state.pop(key, None)
                 result = self._dispatch(op, payload)
-            entry = {"step": op, "timestamp": time.time(), "output": result}
+            current_decisions = {
+                key: value
+                for key, value in self.state.items()
+                if key.startswith("_last_")
+            }
+            entry = {
+                "step": op,
+                "timestamp": time.time(),
+                "output": result,
+                "decisions": current_decisions,
+            }
             with (self.directory / "defense_events.jsonl").open("a") as stream:
                 stream.write(
                     json.dumps(redact_config_snapshot(entry), default=str) + "\n"
@@ -96,9 +186,6 @@ class GuardController:
                 {
                     **entry,
                     "step": "defense_" + op,
-                    "decisions": {
-                        k: v for k, v in self.state.items() if k.startswith("_last_")
-                    },
                 }
             )
             self.persist()

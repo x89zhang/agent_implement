@@ -37,4 +37,6 @@ runtime/venvs/
 !integrations/hermes/README.md
 !docs/hermes-integration-plan.md
 !agents/hermes/asb-poisoning.txt
+!agents/hermes/AGENTHARM_TASK_IDS.md
 !tests/test_hermes_backend.py
+!tests/test_hermes_replay.py
