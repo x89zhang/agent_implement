@@ -51,7 +51,7 @@ def print_result_evaluation(result: dict) -> None:
     harness = result.get("harness", {})
     if not isinstance(harness, dict):
         return
-    for name in ("agentdojo", "agentharm", "agent_security_bench"):
+    for name in ("agentdojo", "agentharm", "agent_security_bench", "privacylens_live"):
         evaluation = harness.get(name)
         if isinstance(evaluation, dict):
             print_evaluation(name, evaluation)
@@ -519,7 +519,7 @@ def run_hermes(
             }
         output = Path(
             cfg.monitoring.output_path
-            or f"trace_{next(n for n in ('agentdojo', 'agentharm', 'agent_security_bench') if getattr(cfg, n).enabled)}.json"
+            or f"trace_{next(n for n in ('agentdojo', 'agentharm', 'agent_security_bench', 'privacylens_live') if getattr(cfg, n).enabled)}.json"
         )
         if not output.is_absolute():
             output = Path(run_dir) / output

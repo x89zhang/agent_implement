@@ -1,0 +1,70 @@
+# Standalone Hermes + PrivacyLens-Live configuration. The benchmark state is
+# simulated locally; no Gmail or Notion credentials are used.
+llm:
+  provider: openai
+  model: gpt-5.6-luna
+  base_url: https://api.openai.com/v1
+  api_key_env: OPENAI_API_KEY
+  temperature: 0.2
+agent:
+  name: hermes-privacylens-live
+  system_prompt: ''
+  task: ''
+container:
+  enabled: true
+  image: agent-scaffold-privacylens-live:latest
+  auto_build: true
+  dockerfile: Dockerfile
+  workdir: /workspace
+  network: host
+  remove: true
+  build_args:
+    INSTALL_PRIVACYLENS_LIVE: "true"
+  env:
+    - OPENAI_API_KEY
+    - TOOLSAFE_API_KEY
+    - AGENTDOG_API_KEY
+    - AGENTDOG_BASE_URL
+    - HTTP_PROXY
+    - HTTPS_PROXY
+    - NO_PROXY
+monitoring:
+  enabled: true
+  output_path: trace_privacylens_live.json
+  print_trace: true
+execution:
+  backend: hermes
+  hermes:
+    repo_path: /home/xiaoliang_zhang/hermes-agent
+    python_executable: ../../runtime/venvs/hermes/bin/python
+    expected_commit: 5172f22df275a8c0b4bc0545da01c7a377c1690f
+    allow_dirty_checkout: false
+    api_mode: auto
+    max_iterations: 30
+    timeout_seconds: 300
+privacylens_live:
+  enabled: true
+  case: item64
+  data_path: ''
+  leakage_threshold: 0.6
+skills:
+  base_dir: ../../skills
+  enabled: []
+memory_experiment:
+  mode: 'off'
+aegis:
+  enabled: false
+pro2guard:
+  enabled: false
+agentspec:
+  enabled: false
+llamafirewall:
+  enabled: false
+toolsafe:
+  enabled: false
+agentsight:
+  enabled: false
+agentguard:
+  enabled: false
+agentdog:
+  enabled: false

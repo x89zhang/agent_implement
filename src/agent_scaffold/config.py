@@ -317,6 +317,14 @@ class AgentHarmConfig:
 
 
 @dataclass
+class PrivacyLensLiveConfig:
+    enabled: bool = False
+    data_path: str = ""
+    case: str = "item1"
+    leakage_threshold: float = 0.6
+
+
+@dataclass
 class ContainerConfig:
     enabled: bool = True
     image: str = "agent-scaffold:latest"
@@ -370,6 +378,9 @@ class AppConfig:
         default_factory=AgentSecurityBenchConfig
     )
     agentharm: AgentHarmConfig = field(default_factory=AgentHarmConfig)
+    privacylens_live: PrivacyLensLiveConfig = field(
+        default_factory=PrivacyLensLiveConfig
+    )
     container: ContainerConfig = field(default_factory=ContainerConfig)
     trip: dict[str, Any] = field(default_factory=dict)
     research: dict[str, Any] = field(default_factory=dict)
@@ -566,6 +577,7 @@ def load_config(path: str | Path) -> AppConfig:
     agentdojo_raw = raw.get("agentdojo", {}) or {}
     agent_security_bench_raw = raw.get("agent_security_bench", {}) or {}
     agentharm_raw = raw.get("agentharm", {}) or {}
+    privacylens_live_raw = raw.get("privacylens_live", {}) or {}
 
     llm_provider = str(_require(llm_raw, "provider"))
     default_api_key_env = (
@@ -727,12 +739,30 @@ def load_config(path: str | Path) -> AppConfig:
     else:
         agentharm = AgentHarmConfig()
 
+    if isinstance(privacylens_live_raw, dict):
+        leakage_threshold = float(
+            privacylens_live_raw.get("leakage_threshold", 0.6)
+        )
+        if not 0.0 <= leakage_threshold <= 1.0:
+            raise ValueError(
+                "privacylens_live.leakage_threshold must be between 0 and 1"
+            )
+        privacylens_live = PrivacyLensLiveConfig(
+            enabled=bool(privacylens_live_raw.get("enabled", False)),
+            data_path=str(privacylens_live_raw.get("data_path", "") or ""),
+            case=str(privacylens_live_raw.get("case", "item1") or "item1"),
+            leakage_threshold=leakage_threshold,
+        )
+    else:
+        privacylens_live = PrivacyLensLiveConfig()
+
     enabled_benchmarks = [
         name
         for name, enabled in (
             ("agentdojo", agentdojo.enabled),
             ("agent_security_bench", agent_security_bench.enabled),
             ("agentharm", agentharm.enabled),
+            ("privacylens_live", privacylens_live.enabled),
         )
         if enabled
     ]
@@ -748,6 +778,7 @@ def load_config(path: str | Path) -> AppConfig:
             "agentdojo": "agentdojo_adapter",
             "agent_security_bench": "agent_security_bench_adapter",
             "agentharm": "agentharm_adapter",
+            "privacylens_live": "privacylens_live_adapter",
         }[benchmark_name]
         module_name = (
             f"{__package__}.{adapter_module}"
@@ -759,6 +790,7 @@ def load_config(path: str | Path) -> AppConfig:
             "agentdojo": agentdojo,
             "agent_security_bench": agent_security_bench,
             "agentharm": agentharm,
+            "privacylens_live": privacylens_live,
         }[benchmark_name]
         tools = [
             ToolConfig(name=name, import_path=import_path, description=description)
@@ -1459,6 +1491,7 @@ def load_config(path: str | Path) -> AppConfig:
         agentdojo=agentdojo,
         agent_security_bench=agent_security_bench,
         agentharm=agentharm,
+        privacylens_live=privacylens_live,
         container=container,
         trip=trip,
         research=research,

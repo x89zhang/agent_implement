@@ -122,7 +122,7 @@ llamafirewall:
   factory_kwargs: {}
   fail_closed: false
 toolsafe:
-  enabled: false
+  enabled: true
   mode: monitor
   threshold: 0.5
   provider: openai_compatible

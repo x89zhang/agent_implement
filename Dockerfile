@@ -37,6 +37,12 @@ RUN if [ "$INSTALL_AGENT_SECURITY_BENCH" = "true" ]; then \
       python /tmp/install_asb_data.py /opt/agent-security-bench/data; \
     fi
 
+ARG INSTALL_PRIVACYLENS_LIVE=false
+COPY scripts/install_privacylens_live_data.py /tmp/install_privacylens_live_data.py
+RUN if [ "$INSTALL_PRIVACYLENS_LIVE" = "true" ]; then \
+      python /tmp/install_privacylens_live_data.py /opt/privacylens-live/data; \
+    fi
+
 ARG INSTALL_AGENTHARM=false
 COPY requirements-agentharm.txt /tmp/requirements-agentharm.txt
 RUN if [ "$INSTALL_AGENTHARM" = "true" ]; then \

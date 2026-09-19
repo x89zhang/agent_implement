@@ -41,6 +41,7 @@ def ensure_hermes_image(cfg, workspace):
     for section, argument in (
         ("agentdojo", "INSTALL_AGENTDOJO"),
         ("agentharm", "INSTALL_AGENTHARM"),
+        ("privacylens_live", "INSTALL_PRIVACYLENS_LIVE"),
         ("llamafirewall", "INSTALL_LLAMA_FIREWALL"),
         ("agentspec", "INSTALL_AGENTSPEC"),
     ):

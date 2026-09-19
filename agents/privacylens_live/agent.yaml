@@ -1,0 +1,32 @@
+harness: .
+llm:
+  provider: vllm_openai
+  model: qwen3.6-35b
+  temperature: 0.2
+  base_url: http://localhost:8000/v1
+  api_key_env: OPENAI_API_KEY
+  request_timeout: 120
+agent:
+  name: privacylens-live-agent
+  task: ''
+graph:
+  type: langchain_react
+  max_iters: 12
+  react_prompt: ''
+  react_protocol: action_only
+  openai_transport: responses
+  openai_use_previous_response_id: true
+  react_max_iterations: 20
+  react_max_execution_time: 180
+container:
+  image: agent-scaffold-privacylens-live:latest
+  build_args:
+    INSTALL_PRIVACYLENS_LIVE: "true"
+monitoring:
+  enabled: true
+  output_path: trace_privacylens_live.json
+  print_trace: true
+toolsafe:
+  enabled: false
+agentdog:
+  enabled: false

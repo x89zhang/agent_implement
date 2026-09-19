@@ -25,6 +25,10 @@ ADAPTERS = {
         "agent_security_bench_adapter",
         "AgentSecurityBenchSession",
     ),
+    "privacylens_live": (
+        "privacylens_live_adapter",
+        "PrivacyLensLiveSession",
+    ),
 }
 
 
@@ -39,7 +43,10 @@ def create_benchmark(cfg):
     module.build_tool_configs(config)
     session = getattr(module, class_name)(config)
     tools = []
-    if name == "agentdojo":
+    if hasattr(module, "build_mcp_tools"):
+        tools = module.build_mcp_tools(config)
+        definitions = []
+    elif name == "agentdojo":
         definitions = session.suite.tools
     elif name == "agentharm":
         definitions = session.tools.values()

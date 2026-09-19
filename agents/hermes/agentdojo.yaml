@@ -84,7 +84,7 @@ agentdojo:
   # Benign-only example: user_task_3; attack example: user_task_3_injection_3.
   case: user_task_15_injection_5
   # false disables both attack carriers while retaining the selected case.
-  injection_enabled: true
+  injection_enabled: false
   # Tool-output attack and native-skill attack can be toggled independently.
   # Skill-only: standard_injection_enabled: false, skill_injection_enabled: true.
   standard_injection_enabled: false
@@ -193,7 +193,7 @@ llamafirewall:
   fail_closed: false
 
 toolsafe:
-  enabled: false
+  enabled: true
   # monitor, warn, replan, block
   mode: monitor
   threshold: 0.5
@@ -223,7 +223,7 @@ agentsight:
   shutdown_timeout_seconds: 10
 
 agentguard:
-  enabled: true
+  enabled: false
   # monitor, warn, block
   mode: monitor
   policy: ../../rules/agentguard/agentdojo_policy.rules

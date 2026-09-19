@@ -4,13 +4,12 @@
 # security.trusted_tool_output_prompt and planner settings do not control Hermes.
 
 llm:
-  # openai = OpenAI-compatible endpoint; Hermes auto-selects its wire format.
-  # openrouter is also supported.
   provider: openai
-  model: gpt-5.6-luna
+  model: qwen3.6-35b
   temperature: 0.2
-  base_url: https://api.openai.com/v1
+  base_url: http://localhost:8000/v1
   api_key_env: OPENAI_API_KEY
+  request_timeout: 120
   # Export the key in the environment; do not store api_key in YAML.
   # reasoning_effort / verbosity are not currently forwarded by this backend.
   # Responses-only GPT models ignore this temperature setting because the API rejects it.
@@ -34,7 +33,7 @@ execution:
     allow_dirty_checkout: false
     # auto follows Hermes routing; alternatives: chat_completions, codex_responses.
     # codex_responses is Hermes' name for the Responses API, including API-key OpenAI.
-    api_mode: auto
+    api_mode: chat_completions
     max_iterations: 30
     timeout_seconds: 300
 
@@ -83,7 +82,7 @@ agentharm:
   # Available splits: val, test_public, test_private.
   split: test_public
   # Set an exact task ID here. Empty selects the first task after filtering.
-  behavior_id: '64-3'
+  behavior_id: '46-2'
   # Optional filters; null means no filter.
   detailed_behaviors: null
   hint_included: null

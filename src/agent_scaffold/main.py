@@ -36,6 +36,12 @@ try:
     from .agentharm_adapter import augment_task as augment_task_with_agentharm_context
     from .agentharm_adapter import evaluate_last_session as evaluate_agentharm_session
     from .agentharm_adapter import reset_session as reset_agentharm_session
+    from .privacylens_live_adapter import (
+        aggregate_leakage as aggregate_privacylens_live_leakage,
+        augment_task as augment_task_with_privacylens_live_context,
+        evaluate_last_session as evaluate_privacylens_live_session,
+        reset_session as reset_privacylens_live_session,
+    )
     from .agentguard import close_agentguard_session
     from .agentguard.scenario import compile_agentguard_scenario
     from .agentsight import AgentSightObserver, wait_for_start_gate
@@ -85,6 +91,12 @@ except ImportError:  # Fallback when executed as a script
     )
     from agent_scaffold.agentharm_adapter import (
         reset_session as reset_agentharm_session,
+    )
+    from agent_scaffold.privacylens_live_adapter import (
+        aggregate_leakage as aggregate_privacylens_live_leakage,
+        augment_task as augment_task_with_privacylens_live_context,
+        evaluate_last_session as evaluate_privacylens_live_session,
+        reset_session as reset_privacylens_live_session,
     )
     from agent_scaffold.agentguard import close_agentguard_session
     from agent_scaffold.agentguard.scenario import compile_agentguard_scenario
@@ -312,6 +324,7 @@ def run_once(
     reset_agentdojo_session(cfg.agentdojo)
     reset_agent_security_bench_session(cfg.agent_security_bench)
     reset_agentharm_session(cfg.agentharm)
+    reset_privacylens_live_session(cfg.privacylens_live)
     task = augment_task_with_trip_context(cfg.agent.task.strip(), cfg.trip)
     task = augment_task_with_research_context(task, cfg.research)
     task = augment_task_with_agentdojo_context(task, cfg.agentdojo)
@@ -319,6 +332,7 @@ def run_once(
         task, cfg.agent_security_bench
     )
     task = augment_task_with_agentharm_context(task, cfg.agentharm)
+    task = augment_task_with_privacylens_live_context(task, cfg.privacylens_live)
     pro2guard_generation = compile_pro2guard_policy(
         cfg,
         task,
@@ -560,6 +574,11 @@ def run_once(
             evaluate_agent_security_bench_session,
         ),
         ("agentharm", cfg.agentharm, evaluate_agentharm_session),
+        (
+            "privacylens_live",
+            cfg.privacylens_live,
+            evaluate_privacylens_live_session,
+        ),
     )
     for benchmark_name, benchmark_cfg, evaluator in benchmark_evaluations:
         evaluation = evaluator(benchmark_cfg, final_output)
@@ -721,6 +740,10 @@ def _run_repeated(
                 if agentdojo_asr is not None:
                     summary["agentdojo"] = agentdojo_asr
                     summary["asr"] = agentdojo_asr["asr"]
+                privacy_summary = aggregate_privacylens_live_leakage(summary["items"])
+                if privacy_summary is not None:
+                    summary["privacylens_live"] = privacy_summary
+                    summary["leakage_rate"] = privacy_summary["leakage_rate"]
                 summary["completed_at"] = time.time()
                 (batch_dir / "summary.json").write_text(
                     json.dumps(
@@ -837,6 +860,7 @@ def main() -> None:
         or cfg.agentdojo.enabled
         or cfg.agent_security_bench.enabled
         or cfg.agentharm.enabled
+        or cfg.privacylens_live.enabled
     ):
         result = run_once(
             args.config,
