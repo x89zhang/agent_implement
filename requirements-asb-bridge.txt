@@ -1,0 +1,6 @@
+# Kept in a dedicated /opt/asb-venv so ASB's retrieval stack cannot alter the
+# project or Hermes dependency graph.
+chromadb==0.5.23
+langchain-chroma==0.2.2
+langchain-openai==0.3.7
+openai==1.65.2

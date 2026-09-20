@@ -211,6 +211,23 @@ def _service_process(cfg, connection, journal, policy_cache_dir):
     ):
         try:
             name, session, tools, task = create_benchmark(cfg)
+            module_name, _ = ADAPTERS[name]
+            module = importlib.import_module(f"agent_scaffold.{module_name}")
+            benchmark_config = getattr(cfg, name)
+            conversation_history = (
+                module.build_conversation_history(benchmark_config)
+                if cfg.execution.memory.mode == "official_asb"
+                and hasattr(module, "build_conversation_history")
+                else []
+            )
+            context = (
+                module.official_context(
+                    benchmark_config,
+                    retrieve_memory=cfg.execution.memory.mode == "official_asb",
+                )
+                if hasattr(module, "official_context")
+                else {}
+            )
             from .guards import GuardController
 
             replay_mode = cfg.execution.hermes.defense_mode == "replay"
@@ -221,6 +238,8 @@ def _service_process(cfg, connection, journal, policy_cache_dir):
                         "name": name,
                         "tools": tools,
                         "task": task,
+                        "conversation_history": conversation_history,
+                        "context": context,
                         "url": bridge.url,
                         "token": bridge.token,
                         "guard_token": bridge.guard_token,
@@ -308,6 +327,8 @@ class BenchmarkService:
                 ready["tools"],
                 ready["task"],
             )
+            self.conversation_history = ready.get("conversation_history", [])
+            self.context = ready.get("context", {})
             self.url, self.token = ready["url"], ready["token"]
             self.guard_token = ready["guard_token"]
             return self

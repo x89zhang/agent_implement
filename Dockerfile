@@ -42,8 +42,13 @@ RUN if [ "$INSTALL_AGENTDOJO" = "true" ]; then \
 
 ARG INSTALL_AGENT_SECURITY_BENCH=false
 COPY scripts/install_asb_data.py /tmp/install_asb_data.py
+COPY scripts/install_asb_source.py /tmp/install_asb_source.py
+COPY requirements-asb-bridge.txt /tmp/requirements-asb-bridge.txt
+ARG ASB_REVISION=eac7bcf38c116f42b46e6d480e56e599b99e73c2
 RUN if [ "$INSTALL_AGENT_SECURITY_BENCH" = "true" ]; then \
-      python /tmp/install_asb_data.py /opt/agent-security-bench/data; \
+      python /tmp/install_asb_source.py "$ASB_REVISION" /opt/agent-security-bench \
+      && python -m venv /opt/asb-venv \
+      && /opt/asb-venv/bin/pip install --no-cache-dir -r /tmp/requirements-asb-bridge.txt; \
     fi
 
 ARG INSTALL_PRIVACYLENS_LIVE=false

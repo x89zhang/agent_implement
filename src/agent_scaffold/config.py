@@ -311,7 +311,14 @@ class AgentDojoConfig:
 @dataclass
 class AgentSecurityBenchConfig:
     enabled: bool = False
+    implementation: str = "adapter"
+    source_dir: str = ""
+    revision: str = ""
     data_dir: str = ""
+    memory_db_dir: str = ""
+    memory_embedding_model: str = "text-embedding-ada-002"
+    official_python: str = "/opt/asb-venv/bin/python"
+    official_memory_enabled: bool = True
     agent_name: str = "financial_analyst_agent"
     task_index: int = 0
     attacker_tool: str = ""
@@ -715,7 +722,28 @@ def load_config(path: str | Path) -> AppConfig:
     if isinstance(agent_security_bench_raw, dict):
         agent_security_bench = AgentSecurityBenchConfig(
             enabled=bool(agent_security_bench_raw.get("enabled", False)),
+            implementation=str(
+                agent_security_bench_raw.get("implementation", "adapter")
+            ),
+            source_dir=str(agent_security_bench_raw.get("source_dir", "") or ""),
+            revision=str(agent_security_bench_raw.get("revision", "") or ""),
             data_dir=str(agent_security_bench_raw.get("data_dir", "") or ""),
+            memory_db_dir=str(
+                agent_security_bench_raw.get("memory_db_dir", "") or ""
+            ),
+            memory_embedding_model=str(
+                agent_security_bench_raw.get(
+                    "memory_embedding_model", "text-embedding-ada-002"
+                )
+            ),
+            official_python=str(
+                agent_security_bench_raw.get(
+                    "official_python", "/opt/asb-venv/bin/python"
+                )
+            ),
+            official_memory_enabled=bool(
+                agent_security_bench_raw.get("official_memory_enabled", True)
+            ),
             agent_name=str(
                 agent_security_bench_raw.get("agent_name", "financial_analyst_agent")
             ),

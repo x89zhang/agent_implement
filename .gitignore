@@ -7,6 +7,7 @@
 !requirements-agentspec.txt
 !requirements-agentharm.txt
 !requirements-hermes-bridge.txt
+!requirements-asb-bridge.txt
 !requirements-progent.txt
 !agents/hermes/asb-poisoning.txt
 *.md

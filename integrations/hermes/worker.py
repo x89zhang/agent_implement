@@ -95,6 +95,14 @@ def main():
             toolsets.append("memory")
         if request.get("skills"):
             toolsets.append("skills")
+        ephemeral_parts = []
+        if request.get("benchmark_system_prompt"):
+            ephemeral_parts.append(request["benchmark_system_prompt"])
+        if request.get("skills"):
+            ephemeral_parts.append(
+                "Use skill_view to read the following task skills before acting: "
+                + ", ".join(s["name"] for s in request["skills"])
+            )
         agent = AIAgent(
             model=request["model"],
             provider=request["provider"],
@@ -114,12 +122,7 @@ def main():
             skip_memory=not request["memory_enabled"],
             skip_background_review=True,
             event_callback=event,
-            ephemeral_system_prompt=(
-                "Use skill_view to read the following task skills before acting: "
-                + ", ".join(s["name"] for s in request["skills"])
-            )
-            if request.get("skills")
-            else None,
+            ephemeral_system_prompt="\n\n".join(ephemeral_parts) or None,
             # Hermes resolves ``api_mode: auto`` during construction. Responses-only GPT
             # models reject Chat Completions sampling fields; apply temperature after routing.
             request_overrides={},
@@ -157,7 +160,10 @@ def main():
         else:
             plugin = DefensePlugin(agent, request, mapping, event)
         plugin.install()
-        raw = agent.run_conversation(request["prompt"], conversation_history=None)
+        raw = agent.run_conversation(
+            request["prompt"],
+            conversation_history=request.get("conversation_history") or None,
+        )
         write_json(
             result_path.parent / "system_prompt.json",
             {"system_prompt": getattr(agent, "_cached_system_prompt", None)},

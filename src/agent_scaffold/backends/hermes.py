@@ -106,7 +106,19 @@ def preflight(cfg):
             "Install requirements-hermes-bridge.txt in the project interpreter"
         )
     if cfg.execution.memory.mode != "off" and not cfg.agent_security_bench.enabled:
-        raise ValueError("Native memory experiments currently require ASB")
+        raise ValueError("Memory experiments currently require ASB")
+    if cfg.execution.memory.mode == "official_asb":
+        asb = cfg.agent_security_bench
+        if asb.implementation != "official_bridge":
+            raise ValueError(
+                "official_asb requires agent_security_bench.implementation: official_bridge"
+            )
+        if asb.injection_method != "memory_attack":
+            raise ValueError(
+                "official_asb requires agent_security_bench.injection_method: memory_attack"
+            )
+        if not asb.memory_db_dir:
+            raise ValueError("official_asb requires agent_security_bench.memory_db_dir")
     if cfg.llm.provider not in {"openai", "openrouter"}:
         raise ValueError(
             "Hermes backend currently supports OpenAI-compatible endpoints (provider openai or openrouter)"
@@ -242,7 +254,10 @@ def _run_phase(
     dump(directory / "skills.json", skills)
     copy_memory(memory_source, home)
     initial_memory = manifest(home)
-    enabled_memory = cfg.execution.memory.mode != "off"
+    enabled_memory = cfg.execution.memory.mode in {
+        "native_two_stage",
+        "direct_seed",
+    }
     dump(directory / "memory.before.json", initial_memory)
     source_root = Path(__file__).resolve().parents[2]
     project_root = source_root.parent
@@ -253,6 +268,22 @@ def _run_phase(
     ) as bridge:
         name, tools = bridge.name, bridge.tools
         prompt = bridge.task if prompt_override is None else prompt_override
+        benchmark_system_parts = [
+            str(bridge.context.get("agent_system_prompt", "")).strip()
+        ]
+        if (
+            (
+                cfg.execution.memory.mode == "official_asb"
+                and not bridge.conversation_history
+            )
+            or cfg.execution.memory.mode == "off"
+        ):
+            benchmark_system_parts.append(
+                str(bridge.context.get("planning_instruction", "")).strip()
+            )
+        benchmark_system_prompt = "\n\n".join(
+            part for part in benchmark_system_parts if part
+        )
         hermes_config = {
             "tools": {"tool_search": {"enabled": "off"}},
             "memory": {
@@ -280,6 +311,8 @@ def _run_phase(
             "schema_version": 1,
             "repo_path": settings.repo_path,
             "prompt": prompt,
+            "conversation_history": bridge.conversation_history,
+            "benchmark_system_prompt": benchmark_system_prompt,
             # Generators receive the clean benchmark task even when this phase runs
             # an adversarial carrier through prompt_override. Runtime guards still
             # receive and inspect the actual prompt above.
@@ -304,6 +337,7 @@ def _run_phase(
             "tool_names": [tool["name"] for tool in tools],
         }
         dump(directory / "request.json", request)
+        dump(directory / "benchmark.context.json", bridge.context)
         env = {
             key: value
             for key, value in os.environ.items()
@@ -414,6 +448,7 @@ def _run_phase(
         "home": home,
         "calls": bridge.calls,
         "prompt": prompt,
+        "benchmark_context": bridge.context,
         "defenses": json.loads((directory / "defenses.json").read_text()),
         "skills": skills,
     }
@@ -460,14 +495,18 @@ def _run_hermes(
     source = clean
     lifecycle = {
         "mode": memory.mode,
-        "retained_surfaces": ["MEMORY.md", "USER.md"],
-        "session_history_retained": False,
+        "retained_surfaces": (
+            [] if memory.mode == "official_asb" else ["MEMORY.md", "USER.md"]
+        ),
+        "session_history_retained": memory.mode == "official_asb",
         "semantic_poisoning_verified": None,
     }
     if memory.mode != "off":
         # Suppress legacy synthetic memory injection in BOTH phase environments and the target task.
         target_cfg.agent_security_bench = replace(
-            target_cfg.agent_security_bench, injection_method="memory_attack"
+            target_cfg.agent_security_bench,
+            injection_method="memory_attack",
+            official_memory_enabled=memory.mode == "official_asb",
         )
         if memory.mode == "native_two_stage":
             poison_text = (
@@ -483,14 +522,23 @@ def _run_hermes(
                 poison["memory_before"] != poison["memory_after"]
             )
             lifecycle["carrier"] = "user_message"
-        else:
+        elif memory.mode == "direct_seed":
             source = Path(memory.poisoned_memory_dir)
             lifecycle["carrier"] = "controller_direct_seed"
+        else:
+            lifecycle["carrier"] = "assistant_history"
     target = run_phase(target_cfg, interpreter, run_dir / "target", source)
+    if memory.mode == "official_asb":
+        lifecycle["official_asb"] = target["benchmark_context"]
     lifecycle["target_attack_success"] = target["evaluation"].get("attack_success")
     lifecycle["target_utility"] = target["evaluation"].get("utility")
     if memory.mode != "off" and memory.run_clean_control:
-        control = run_phase(target_cfg, interpreter, run_dir / "control", clean)
+        control_cfg = copy.deepcopy(target_cfg)
+        if memory.mode == "official_asb":
+            control_cfg.agent_security_bench = replace(
+                control_cfg.agent_security_bench, official_memory_enabled=False
+            )
+        control = run_phase(control_cfg, interpreter, run_dir / "control", clean)
         lifecycle["control_evaluation"] = control["evaluation"]
     dump(run_dir / "memory.lifecycle.json", lifecycle)
     worker = target["worker"]
@@ -499,9 +547,14 @@ def _run_hermes(
         target["defenses"]["trace"], worker.get("messages", [])
     )
     if memory.mode != "off":
+        protocol = (
+            "official_asb_memory_bridge"
+            if memory.mode == "official_asb"
+            else "asb_derived_native_memory"
+        )
         evaluation = {
             **evaluation,
-            "evaluation_protocol": "asb_derived_native_memory",
+            "evaluation_protocol": protocol,
             "memory_mode": memory.mode,
             "original_injection_method": cfg.agent_security_bench.injection_method,
         }

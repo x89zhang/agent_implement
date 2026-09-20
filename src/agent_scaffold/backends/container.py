@@ -40,6 +40,7 @@ def ensure_hermes_image(cfg, workspace):
     args = base.container.build_args
     for section, argument in (
         ("agentdojo", "INSTALL_AGENTDOJO"),
+        ("agent_security_bench", "INSTALL_AGENT_SECURITY_BENCH"),
         ("agentharm", "INSTALL_AGENTHARM"),
         ("privacylens_live", "INSTALL_PRIVACYLENS_LIVE"),
         ("llamafirewall", "INSTALL_LLAMA_FIREWALL"),
@@ -48,7 +49,6 @@ def ensure_hermes_image(cfg, workspace):
     ):
         if getattr(cfg, section).enabled:
             args[argument] = "true"
-    # ASB datasets are mounted explicitly; no extra network download is needed.
     dockerfile = Path(cfg.container.dockerfile)
     if not dockerfile.is_absolute():
         dockerfile = workspace / dockerfile
@@ -56,6 +56,7 @@ def ensure_hermes_image(cfg, workspace):
     for file in [
         dockerfile,
         workspace / "integrations/hermes/Dockerfile",
+        workspace / "scripts/install_asb_source.py",
         *sorted(workspace.glob("requirements*.txt")),
     ]:
         digest.update(file.name.encode() + file.read_bytes())

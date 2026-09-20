@@ -65,7 +65,7 @@ def parse_execution(raw: dict, config_dir: Path) -> ExecutionConfig:
         or type(memory.run_clean_control) is not bool
     ):
         raise ValueError("allow_dirty_checkout and run_clean_control must be booleans")
-    if memory.mode not in {"off", "native_two_stage", "direct_seed"}:
+    if memory.mode not in {"off", "native_two_stage", "direct_seed", "official_asb"}:
         raise ValueError("Unknown memory_experiment.mode")
     if memory.mode != "off" and backend != "hermes":
         raise ValueError("memory_experiment requires execution.backend: hermes")

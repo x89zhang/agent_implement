@@ -50,8 +50,17 @@ execution:
     timeout_seconds: 300
 agent_security_bench:
   enabled: true
+  # The pinned ASB source and its Chroma retrieval dependencies are installed
+  # into the container. Hermes remains the agent and guards stay in its loop.
+  implementation: official_bridge
+  source_dir: /opt/agent-security-bench
+  revision: eac7bcf38c116f42b46e6d480e56e599b99e73c2
+  official_python: /opt/asb-venv/bin/python
   # Host runs need the three official ASB JSONL files in this directory.
   data_dir: /home/xiaoliang_zhang/ASB/data
+  # ASB selects <memory_db_dir>/<attack_type>_gpt-4o-mini.
+  memory_db_dir: /home/xiaoliang_zhang/ASB/memory_db/direct_prompt_injection
+  memory_embedding_model: text-embedding-ada-002
   agent_name: financial_analyst_agent
   task_index: 0
   attacker_tool: DataFabrication
@@ -62,10 +71,9 @@ skills:
   base_dir: ../../skills
   enabled: []
 memory_experiment:
-  # native_two_stage runs poison, target and clean-control phases. Set this to
-  # 'off' for a normal single-phase ASB prompt-injection run.
-  mode: native_two_stage
-  poisoning_input_file: asb-poisoning.txt
+  # official_asb injects the workflow retrieved from ASB's Chroma database as
+  # assistant history. native_two_stage remains available for Hermes MEMORY.md.
+  mode: official_asb
   run_clean_control: true
 # Project defenses. These enabled values match agents/hermes/agentdojo.yaml:
 # AgentGuard is active in monitor mode; the other plugins are ready to enable.
