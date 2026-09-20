@@ -96,6 +96,26 @@ class AegisConfig:
 
 
 @dataclass
+class ProgentConfig:
+    enabled: bool = False
+    mode: str = "block"
+    fail_closed: bool = True
+    generate_policy: bool = True
+    update_after_tool: bool = False
+    only_allow_narrow: bool = True
+    policy: dict[str, list[Any]] = field(default_factory=dict)
+    always_allow_tools: list[str] = field(default_factory=list)
+    always_block_tools: list[str] = field(default_factory=list)
+    provider: str = ""
+    model: str = ""
+    temperature: float | None = None
+    base_url: str = ""
+    api_key: str = ""
+    api_key_env: str = ""
+    request_timeout: int | None = None
+
+
+@dataclass
 class Pro2GuardGeneratorConfig:
     enabled: bool = True
     context_mode: str = "benign_only"
@@ -366,6 +386,7 @@ class AppConfig:
     middleware: MiddlewareConfig = field(default_factory=MiddlewareConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     aegis: AegisConfig = field(default_factory=AegisConfig)
+    progent: ProgentConfig = field(default_factory=ProgentConfig)
     pro2guard: Pro2GuardConfig = field(default_factory=Pro2GuardConfig)
     agentspec: AgentSpecConfig = field(default_factory=AgentSpecConfig)
     llamafirewall: LlamaFirewallConfig = field(default_factory=LlamaFirewallConfig)
@@ -919,6 +940,75 @@ def load_config(path: str | Path) -> AppConfig:
         )
     else:
         aegis = AegisConfig()
+
+    progent_raw = raw.get("progent", {}) or {}
+    if isinstance(progent_raw, bool):
+        progent = ProgentConfig(enabled=progent_raw)
+    elif isinstance(progent_raw, dict):
+        policy_raw = progent_raw.get("policy", {}) or {}
+        if not isinstance(policy_raw, dict):
+            raise TypeError("progent.policy must be a mapping")
+        policy: dict[str, list[Any]] = {}
+        for tool_name, entries in policy_raw.items():
+            if not isinstance(entries, list):
+                raise TypeError(f"progent.policy.{tool_name} must be a list")
+            normalized_entries = []
+            for entry in entries:
+                if not isinstance(entry, (list, tuple)) or len(entry) not in {4, 5}:
+                    raise ValueError(
+                        f"progent.policy.{tool_name} entries must have 4 or 5 values"
+                    )
+                normalized_entries.append(tuple(entry))
+            policy[str(tool_name)] = normalized_entries
+        progent_llm_raw = progent_raw.get("llm", {}) or {}
+        if not isinstance(progent_llm_raw, dict):
+            raise TypeError("progent.llm must be a mapping")
+        inline_progent_key = str(progent_llm_raw.get("api_key", "") or "")
+        if inline_progent_key:
+            raise ValueError(
+                "progent.llm.api_key must not be stored in YAML; set api_key_env instead"
+            )
+        progent_api_key_env = str(progent_llm_raw.get("api_key_env", "") or "")
+        progent = ProgentConfig(
+            enabled=bool(progent_raw.get("enabled", False)),
+            mode=str(progent_raw.get("mode", "block")).lower(),
+            fail_closed=bool(progent_raw.get("fail_closed", True)),
+            generate_policy=bool(
+                progent_raw.get("generate_policy", progent_raw.get("generator", True))
+            ),
+            update_after_tool=bool(progent_raw.get("update_after_tool", False)),
+            only_allow_narrow=bool(progent_raw.get("only_allow_narrow", True)),
+            policy=policy,
+            always_allow_tools=[
+                str(item)
+                for item in (progent_raw.get("always_allow_tools", []) or [])
+            ],
+            always_block_tools=[
+                str(item)
+                for item in (progent_raw.get("always_block_tools", []) or [])
+            ],
+            provider=str(progent_llm_raw.get("provider", "")).lower(),
+            model=str(progent_llm_raw.get("model", "")),
+            temperature=(
+                float(progent_llm_raw["temperature"])
+                if "temperature" in progent_llm_raw
+                else None
+            ),
+            base_url=str(progent_llm_raw.get("base_url", "")),
+            api_key=(
+                os.environ.get(progent_api_key_env, "")
+                if progent_api_key_env
+                else ""
+            ),
+            api_key_env=progent_api_key_env,
+            request_timeout=_optional_int(
+                progent_llm_raw.get("request_timeout"), None
+            ),
+        )
+        if progent.mode not in {"block", "warn", "monitor"}:
+            raise ValueError("progent.mode must be one of: block, warn, monitor")
+    else:
+        progent = ProgentConfig()
 
     pro2guard_raw = raw.get("pro2guard", {}) or {}
     if isinstance(pro2guard_raw, bool):
@@ -1481,6 +1571,7 @@ def load_config(path: str | Path) -> AppConfig:
         middleware=middleware,
         security=security,
         aegis=aegis,
+        progent=progent,
         pro2guard=pro2guard,
         agentspec=agentspec,
         llamafirewall=llamafirewall,

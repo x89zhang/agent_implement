@@ -44,6 +44,7 @@ def ensure_hermes_image(cfg, workspace):
         ("privacylens_live", "INSTALL_PRIVACYLENS_LIVE"),
         ("llamafirewall", "INSTALL_LLAMA_FIREWALL"),
         ("agentspec", "INSTALL_AGENTSPEC"),
+        ("progent", "INSTALL_PROGENT"),
     ):
         if getattr(cfg, section).enabled:
             args[argument] = "true"

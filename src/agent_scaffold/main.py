@@ -408,6 +408,9 @@ def run_once(
 
     state = {
         "messages": state_messages,
+        "_progent_user_request": "\n\n".join(
+            part for part in (task, user_input or "") if part
+        ),
         "_toolsafe_user_request": "\n\n".join(
             part for part in (task, user_input or "") if part
         ),
@@ -422,6 +425,12 @@ def run_once(
         "plan": plan,
         "tool_errors": [],
         "harness": {
+            "progent": {
+                "enabled": bool(cfg.progent.enabled),
+                "mode": cfg.progent.mode,
+                "status": "pending" if cfg.progent.enabled else "disabled",
+                "event_count": 0,
+            },
             "agentsight": {
                 "enabled": bool(cfg.agentsight.enabled),
                 "status": "managed_by_host"

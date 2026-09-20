@@ -23,6 +23,15 @@ RUN if [ "$INSTALL_AGENTSPEC" = "true" ]; then \
       && pip install --no-cache-dir -r /tmp/requirements-agentspec.txt; \
     fi
 
+ARG INSTALL_PROGENT=false
+COPY requirements-progent.txt /tmp/requirements-progent.txt
+RUN if [ "$INSTALL_PROGENT" = "true" ]; then \
+      apt-get update \
+      && apt-get install -y --no-install-recommends git ca-certificates \
+      && rm -rf /var/lib/apt/lists/* \
+      && pip install --no-cache-dir -r /tmp/requirements-progent.txt; \
+    fi
+
 # Optional benchmark extras. Set --build-arg INSTALL_AGENTDOJO=true if the
 # `agentdojo` package is available from your configured Python package index,
 # or use container.image to point at a custom image that already includes it.

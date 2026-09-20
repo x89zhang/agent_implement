@@ -246,6 +246,11 @@ def run_once_in_container(
     llm_api_key_env = str(getattr(cfg.llm, "api_key_env", "") or "")
     if llm_api_key_env and llm_api_key_env not in env_names:
         env_names.append(llm_api_key_env)
+    progent_api_key_env = str(
+        getattr(getattr(cfg, "progent", None), "api_key_env", "") or ""
+    )
+    if progent_api_key_env and progent_api_key_env not in env_names:
+        env_names.append(progent_api_key_env)
     scenario_api_key_env = str(
         getattr(cfg.agentguard.scenario_compiler, "api_key_env", "") or ""
     )

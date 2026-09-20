@@ -1,0 +1,2 @@
+# Progent has no tagged release yet; keep the reviewed upstream revision pinned.
+secagent @ git+https://github.com/sunblaze-ucb/progent.git@8a8eb894b9d568a32b4e58252fea85b47f789c77
