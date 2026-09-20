@@ -54,9 +54,9 @@ agent_security_bench:
   data_dir: /home/xiaoliang_zhang/ASB/data
   agent_name: financial_analyst_agent
   task_index: 0
-  attacker_tool: InvestmentDiversion
+  attacker_tool: DataFabrication
   injection_method: memory_attack
-  attack_type: context_ignoring
+  attack_type: naive
 skills:
   # Additional text skills are staged in Hermes' isolated native skill library.
   base_dir: ../../skills
@@ -122,7 +122,7 @@ llamafirewall:
   factory_kwargs: {}
   fail_closed: false
 toolsafe:
-  enabled: true
+  enabled: false
   mode: monitor
   threshold: 0.5
   provider: openai_compatible

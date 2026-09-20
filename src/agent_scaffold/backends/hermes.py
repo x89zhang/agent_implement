@@ -58,6 +58,44 @@ def print_result_evaluation(result: dict) -> None:
             return
 
 
+def _message_reasoning(message: dict) -> str:
+    """Return model-provided reasoning text without exposing opaque payloads."""
+    for key in ("reasoning_content", "reasoning"):
+        value = message.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    summaries = []
+    for item in message.get("codex_reasoning_items") or []:
+        if not isinstance(item, dict):
+            continue
+        for summary in item.get("summary") or []:
+            if not isinstance(summary, dict):
+                continue
+            text = summary.get("text")
+            if isinstance(text, str) and text.strip():
+                summaries.append(text.strip())
+    return "\n\n".join(summaries)
+
+
+def _attach_model_reasoning(trace: list[dict], messages: list[dict]) -> list[dict]:
+    """Attach visible reasoning to matching model-output trace events by turn."""
+    result = copy.deepcopy(trace)
+    assistant_messages = [
+        message
+        for message in messages
+        if isinstance(message, dict) and message.get("role") == "assistant"
+    ]
+    model_outputs = [
+        event for event in result if event.get("step") == "defense_model_output"
+    ]
+    for event, message in zip(model_outputs, assistant_messages):
+        reasoning = _message_reasoning(message)
+        if reasoning:
+            event.setdefault("output", {})["reasoning"] = reasoning
+    return result
+
+
 def preflight(cfg):
     config = cfg.execution.hermes
     if any(
@@ -457,6 +495,9 @@ def _run_hermes(
     dump(run_dir / "memory.lifecycle.json", lifecycle)
     worker = target["worker"]
     evaluation = target["evaluation"]
+    defense_trace = _attach_model_reasoning(
+        target["defenses"]["trace"], worker.get("messages", [])
+    )
     if memory.mode != "off":
         evaluation = {
             **evaluation,
@@ -472,7 +513,7 @@ def _run_hermes(
             {"role": "assistant", "content": worker["final_output"]},
         ],
         "trace_messages": worker["messages"],
-        "trace": target["defenses"]["trace"]
+        "trace": defense_trace
         + target["calls"]
         + [{"step": target["benchmark"] + "_eval", "output": evaluation}],
         "trace_stats": {"api_calls": worker.get("api_calls")},
