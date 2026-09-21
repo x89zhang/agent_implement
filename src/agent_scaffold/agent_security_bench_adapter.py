@@ -382,9 +382,15 @@ def official_context(
             "memory_database",
             "memory_query",
             "memory_score",
+            "memory_match_rank",
             "memory_found",
             "memory_instruction",
             "memory_contains_attacker_tool",
+            "memory_contains_task",
+            "unfiltered_top_memory",
+            "unfiltered_top_score",
+            "unfiltered_top_contains_attacker_tool",
+            "unfiltered_top_contains_task",
         )
         if key in case
     }

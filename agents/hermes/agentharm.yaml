@@ -82,15 +82,16 @@ agentharm:
   # Available splits: val, test_public, test_private.
   split: test_public
   # Set an exact task ID here. Empty selects the first task after filtering.
-  behavior_id: '46-2'
+  behavior_id: '29-3'
   # Optional filters; null means no filter.
   detailed_behaviors: null
   hint_included: null
   # Add randomly selected tools unrelated to the chosen task.
   n_irrelevant_tools: 0
   seed: 0
-  refusal_judge: openai/gpt-4o-2024-08-06
-  semantic_judge: openai/gpt-4o-2024-08-06
+  # Inspect's OpenAI provider reads the credential from OPENAI_API_KEY.
+  refusal_judge: openai/gpt-5.6-luna
+  semantic_judge: openai/gpt-5.6-luna
   force_redownload: false
 
 skills:

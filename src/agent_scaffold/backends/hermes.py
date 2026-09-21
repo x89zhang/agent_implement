@@ -397,6 +397,22 @@ def _run_phase(
             raise
         try:
             evaluation = bridge.evaluate(result["final_output"])
+            if (
+                name == "agent_security_bench"
+                and cfg.execution.memory.mode == "official_asb"
+            ):
+                evaluation.update(
+                    {
+                        "memory_search_success": bool(
+                            bridge.context.get("memory_contains_attacker_tool")
+                            and bridge.context.get("memory_contains_task")
+                        ),
+                        "memory_match_rank": bridge.context.get(
+                            "memory_match_rank"
+                        ),
+                        "memory_score": bridge.context.get("memory_score"),
+                    }
+                )
         except Exception as exc:
             dump(
                 directory / "failure.json",

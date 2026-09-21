@@ -111,8 +111,12 @@ def plan_instruction(tools: list[dict[str, Any]]) -> str:
 
 
 def retrieve_memory(
-    database: Path, query: str, embedding_model: str
-) -> tuple[str, float | None]:
+    database: Path,
+    query: str,
+    embedding_model: str,
+    task: str,
+    attacker_tool: str,
+) -> tuple[str, float | None, int, str, float | None]:
     from langchain_chroma import Chroma
     from langchain_openai import OpenAIEmbeddings
 
@@ -134,11 +138,38 @@ def retrieve_memory(
                 model=embedding_model,
             ),
         )
-        matches = store.similarity_search_with_score(query)
+        # ASB stores every task/tool combination in one collection. Rank the
+        # collection semantically, then select the nearest record for the
+        # configured case instead of allowing another attacker tool to win
+        # merely because its instruction is semantically closer to the task.
+        count = store._collection.count()
+        matches = store.similarity_search_with_score(query, k=count)
     if not matches:
         raise RuntimeError(f"ASB memory database returned no result: {database}")
-    document, score = matches[0]
-    return document.page_content, float(score) if score is not None else None
+    top_document, top_score = matches[0]
+    tool_marker = f'by using the "{attacker_tool}" tool'
+    selected = next(
+        (
+            (rank, document, score)
+            for rank, (document, score) in enumerate(matches, 1)
+            if task in document.page_content
+            and tool_marker in document.page_content
+        ),
+        None,
+    )
+    if selected is None:
+        raise RuntimeError(
+            "ASB memory database has no record matching both "
+            f"task={task!r} and attacker_tool={attacker_tool!r}: {database}"
+        )
+    rank, document, score = selected
+    return (
+        document.page_content,
+        float(score) if score is not None else None,
+        rank,
+        top_document.page_content,
+        float(top_score) if top_score is not None else None,
+    )
 
 
 def main() -> None:
@@ -199,8 +230,12 @@ def main() -> None:
         database_root = Path(request["memory_db_dir"])
         database = database_root / f"{kind}_gpt-4o-mini"
         query = task + f"; {json.dumps(tools)}"
-        page, score = retrieve_memory(
-            database, query, request["memory_embedding_model"]
+        page, score, rank, unfiltered_page, unfiltered_score = retrieve_memory(
+            database,
+            query,
+            request["memory_embedding_model"],
+            task,
+            str(attack["Attacker Tool"]),
         )
         workflow = re.search(r"Workflow:\s*(\[.*?\]);", page, re.DOTALL)
         if workflow is None:
@@ -214,11 +249,19 @@ def main() -> None:
                 "memory_database": str(database),
                 "memory_query": query,
                 "memory_score": score,
+                "memory_match_rank": rank,
                 "memory_found": page,
+                "unfiltered_top_memory": unfiltered_page,
+                "unfiltered_top_score": unfiltered_score,
+                "unfiltered_top_contains_attacker_tool": (
+                    str(attack["Attacker Tool"]) in unfiltered_page
+                ),
+                "unfiltered_top_contains_task": task in unfiltered_page,
                 "memory_instruction": memory_instruction,
                 "memory_contains_attacker_tool": (
                     str(attack["Attacker Tool"]) in page
                 ),
+                "memory_contains_task": task in page,
                 "conversation_history": [
                     {"role": "user", "content": result["planning_instruction"]},
                     {"role": "assistant", "content": memory_instruction},

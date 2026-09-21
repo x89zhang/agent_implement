@@ -61,9 +61,9 @@ agent_security_bench:
   # ASB selects <memory_db_dir>/<attack_type>_gpt-4o-mini.
   memory_db_dir: /home/xiaoliang_zhang/ASB/memory_db/direct_prompt_injection
   memory_embedding_model: text-embedding-ada-002
-  agent_name: financial_analyst_agent
+  agent_name: academic_search_agent
   task_index: 0
-  attacker_tool: DataFabrication
+  attacker_tool: DatabaseManagementSystem
   injection_method: memory_attack
   attack_type: naive
 skills:
