@@ -52,9 +52,14 @@ RUN if [ "$INSTALL_AGENT_SECURITY_BENCH" = "true" ]; then \
     fi
 
 ARG INSTALL_PRIVACYLENS_LIVE=false
-COPY scripts/install_privacylens_live_data.py /tmp/install_privacylens_live_data.py
+COPY scripts/install_privacylens_live_source.py /tmp/install_privacylens_live_source.py
+COPY scripts/install_privacylens_evaluator_source.py /tmp/install_privacylens_evaluator_source.py
+ARG PRIVACYLENS_LIVE_REVISION=994ac15db6fff8a5131bbf5a26e84e352e676796
+ARG PRIVACYLENS_EVALUATOR_REVISION=9c2ee07b080dc54ed4924af11d9751e81753c94d
 RUN if [ "$INSTALL_PRIVACYLENS_LIVE" = "true" ]; then \
-      python /tmp/install_privacylens_live_data.py /opt/privacylens-live/data; \
+      python /tmp/install_privacylens_live_source.py "$PRIVACYLENS_LIVE_REVISION" /opt/privacylens-live \
+      && python /tmp/install_privacylens_evaluator_source.py "$PRIVACYLENS_EVALUATOR_REVISION" /opt/privacylens-evaluator \
+      && python -m venv /opt/privacylens-live-venv; \
     fi
 
 ARG INSTALL_AGENTHARM=false

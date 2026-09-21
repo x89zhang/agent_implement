@@ -44,8 +44,19 @@ execution:
     timeout_seconds: 300
 privacylens_live:
   enabled: true
+  implementation: official_bridge
+  source_dir: /opt/privacylens-live
+  revision: 994ac15db6fff8a5131bbf5a26e84e352e676796
+  official_python: /opt/privacylens-live-venv/bin/python
   case: item64
   data_path: ''
+  # Sends synthetic benchmark facts and generated email to the configured judge.
+  evaluation_mode: privacylens_official_protocol
+  evaluator_source_dir: /opt/privacylens-evaluator
+  evaluator_revision: 9c2ee07b080dc54ed4924af11d9751e81753c94d
+  judge_model: gpt-5.6-luna
+  judge_base_url: https://api.openai.com/v1
+  judge_api_key_env: OPENAI_API_KEY
   leakage_threshold: 0.6
 skills:
   base_dir: ../../skills

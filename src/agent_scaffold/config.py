@@ -346,9 +346,20 @@ class AgentHarmConfig:
 @dataclass
 class PrivacyLensLiveConfig:
     enabled: bool = False
+    implementation: str = "adapter"
+    source_dir: str = ""
+    revision: str = "994ac15db6fff8a5131bbf5a26e84e352e676796"
+    official_python: str = ""
+    evaluator_source_dir: str = "/opt/privacylens-evaluator"
+    evaluator_revision: str = "9c2ee07b080dc54ed4924af11d9751e81753c94d"
     data_path: str = ""
     case: str = "item1"
+    evaluation_mode: str = "lexical"
     leakage_threshold: float = 0.6
+    judge_model: str = "gpt-5.6-luna"
+    judge_base_url: str = "https://api.openai.com/v1"
+    judge_api_key_env: str = "OPENAI_API_KEY"
+    judge_timeout_seconds: float = 120.0
 
 
 @dataclass
@@ -789,18 +800,63 @@ def load_config(path: str | Path) -> AppConfig:
         agentharm = AgentHarmConfig()
 
     if isinstance(privacylens_live_raw, dict):
-        leakage_threshold = float(
-            privacylens_live_raw.get("leakage_threshold", 0.6)
-        )
+        leakage_threshold = float(privacylens_live_raw.get("leakage_threshold", 0.6))
         if not 0.0 <= leakage_threshold <= 1.0:
             raise ValueError(
                 "privacylens_live.leakage_threshold must be between 0 and 1"
             )
+        privacy_implementation = str(
+            privacylens_live_raw.get("implementation", "adapter")
+        )
+        if privacy_implementation not in {"adapter", "official_bridge"}:
+            raise ValueError(
+                "privacylens_live.implementation must be adapter or official_bridge"
+            )
+        privacy_evaluation = str(privacylens_live_raw.get("evaluation_mode", "lexical"))
+        if privacy_evaluation not in {
+            "lexical",
+            "semantic_judge",
+            "privacylens_official_protocol",
+        }:
+            raise ValueError(
+                "privacylens_live.evaluation_mode must be lexical, semantic_judge, or privacylens_official_protocol"
+            )
+        if (
+            privacy_evaluation in {"semantic_judge", "privacylens_official_protocol"}
+            and privacy_implementation != "official_bridge"
+        ):
+            raise ValueError("PrivacyLens semantic evaluation requires official_bridge")
         privacylens_live = PrivacyLensLiveConfig(
             enabled=bool(privacylens_live_raw.get("enabled", False)),
+            implementation=privacy_implementation,
+            source_dir=str(privacylens_live_raw.get("source_dir", "") or ""),
+            revision=str(privacylens_live_raw.get("revision", "") or ""),
+            official_python=str(privacylens_live_raw.get("official_python", "") or ""),
+            evaluator_source_dir=str(
+                privacylens_live_raw.get(
+                    "evaluator_source_dir", "/opt/privacylens-evaluator"
+                )
+            ),
+            evaluator_revision=str(
+                privacylens_live_raw.get(
+                    "evaluator_revision",
+                    "9c2ee07b080dc54ed4924af11d9751e81753c94d",
+                )
+            ),
             data_path=str(privacylens_live_raw.get("data_path", "") or ""),
             case=str(privacylens_live_raw.get("case", "item1") or "item1"),
+            evaluation_mode=privacy_evaluation,
             leakage_threshold=leakage_threshold,
+            judge_model=str(privacylens_live_raw.get("judge_model", "gpt-5.6-luna")),
+            judge_base_url=str(
+                privacylens_live_raw.get("judge_base_url", "https://api.openai.com/v1")
+            ),
+            judge_api_key_env=str(
+                privacylens_live_raw.get("judge_api_key_env", "OPENAI_API_KEY")
+            ),
+            judge_timeout_seconds=float(
+                privacylens_live_raw.get("judge_timeout_seconds", 120)
+            ),
         )
     else:
         privacylens_live = PrivacyLensLiveConfig()

@@ -1,11 +1,19 @@
 privacylens_live:
   enabled: true
+  implementation: official_bridge
+  source_dir: /opt/privacylens-live
+  revision: 994ac15db6fff8a5131bbf5a26e84e352e676796
+  official_python: /opt/privacylens-live-venv/bin/python
   # Official MCP-2Tools baseline subset contains item1 through item150.
   case: item1
-  # Host-only runs may point this at filtered_data.json or its containing folder.
-  # Containers use /opt/privacylens-live/data/filtered_data.json by default.
   data_path: ''
-  # Deterministic lexical scorer threshold in [0, 1].
+  # Sends synthetic benchmark facts and generated email to the configured judge.
+  evaluation_mode: privacylens_official_protocol
+  evaluator_source_dir: /opt/privacylens-evaluator
+  evaluator_revision: 9c2ee07b080dc54ed4924af11d9751e81753c94d
+  judge_model: gpt-5.6-luna
+  judge_base_url: https://api.openai.com/v1
+  judge_api_key_env: OPENAI_API_KEY
   leakage_threshold: 0.6
 
 security:

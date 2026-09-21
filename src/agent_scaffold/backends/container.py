@@ -57,6 +57,8 @@ def ensure_hermes_image(cfg, workspace):
         dockerfile,
         workspace / "integrations/hermes/Dockerfile",
         workspace / "scripts/install_asb_source.py",
+        workspace / "scripts/install_privacylens_live_source.py",
+        workspace / "scripts/install_privacylens_evaluator_source.py",
         *sorted(workspace.glob("requirements*.txt")),
     ]:
         digest.update(file.name.encode() + file.read_bytes())
