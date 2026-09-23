@@ -16,6 +16,7 @@ from ..middleware import build_middleware_manager, output_revision_limit
 GUARDS = (
     "aegis",
     "progent",
+    "airguard",
     "clawsentry",
     "janus",
     "stepguard",
@@ -124,6 +125,7 @@ class GuardController:
             "_toolsafe_user_request": task,
             "_agentspec_user_request": task,
             "_progent_user_request": task,
+            "_airguard_user_request": task,
             "_clawsentry_user_request": task,
             "_janus_user_request": task,
             "_stepguard_user_request": task,
@@ -136,6 +138,7 @@ class GuardController:
         }
 
     def initialize(self, payload):
+        from ..airguard.generator import compile_airguard_authority
         from ..agentguard.scenario import compile_agentguard_scenario
         from ..agentspec.generator import compile_agentspec_rules
         from ..pro2guard.generator import compile_pro2guard_policy
@@ -151,6 +154,7 @@ class GuardController:
         generation_task = payload.get("generation_task", self.task)
         self.state["_progent_tools"] = copy.deepcopy(payload["tools"])
         self.state["_progent_user_request"] = generation_task
+        self.state["_airguard_user_request"] = generation_task
         self.state["_clawsentry_user_request"] = generation_task
         self.state["_janus_user_request"] = generation_task
         self.state["_stepguard_user_request"] = generation_task
@@ -160,6 +164,14 @@ class GuardController:
         self.state["_adr_user_request"] = generation_task
         self.state["_toolsafe_user_request"] = self.task
         self.state["_agentspec_user_request"] = self.task
+        airguard_generation = compile_airguard_authority(
+            self.cfg, generation_task, self.directory
+        )
+        if airguard_generation.enabled:
+            self.state["trace"].append({
+                "step": "airguard_authority_generate",
+                "output": airguard_generation.to_trace(),
+            })
         for compiler in (
             compile_pro2guard_policy,
             compile_agentspec_rules,

@@ -116,6 +116,48 @@ class ProgentConfig:
 
 
 @dataclass
+class AIRGuardGeneratorConfig:
+    enabled: bool = True
+    context_mode: str = "benign_only"
+    max_attempts: int = 2
+    fail_closed: bool = False
+    max_authority_allow: list[str] = field(
+        default_factory=lambda: ["read", "write", "exec", "network", "respond"]
+    )
+    provider: str = ""
+    model: str = ""
+    temperature: float | None = None
+    base_url: str = ""
+    api_key: str = ""
+    api_key_env: str = ""
+    request_timeout: int | None = None
+
+
+@dataclass
+class AIRGuardConfig:
+    enabled: bool = False
+    mode: str = "block"
+    fail_closed: bool = True
+    source_root: str = "/opt/airguard/src"
+    authority_allow: list[str] = field(default_factory=lambda: ["read", "write", "respond"])
+    default_tool_publisher: str = "unknown_web"
+    tool_publishers: dict[str, str] = field(default_factory=dict)
+    use_llm: bool = True
+    provider: str = ""
+    model: str = ""
+    base_url: str = ""
+    api_key: str = ""
+    api_key_env: str = ""
+    timeout_seconds: float = 30.0
+    check_final_output: bool = True
+    redact_credentials: bool = True
+    max_content_chars: int = 4000
+    generator: AIRGuardGeneratorConfig = field(default_factory=AIRGuardGeneratorConfig)
+    authority_source: str = "static"
+    configured_authority_allow: list[str] | None = None
+
+
+@dataclass
 class ClawSentryConfig:
     enabled: bool = False
     auto_start: bool = True
@@ -507,6 +549,7 @@ class AppConfig:
     security: SecurityConfig = field(default_factory=SecurityConfig)
     aegis: AegisConfig = field(default_factory=AegisConfig)
     progent: ProgentConfig = field(default_factory=ProgentConfig)
+    airguard: AIRGuardConfig = field(default_factory=AIRGuardConfig)
     clawsentry: ClawSentryConfig = field(default_factory=ClawSentryConfig)
     janus: JanusConfig = field(default_factory=JanusConfig)
     stepguard: StepGuardConfig = field(default_factory=StepGuardConfig)
@@ -1200,6 +1243,92 @@ def load_config(path: str | Path) -> AppConfig:
             raise ValueError("progent.mode must be one of: block, warn, monitor")
     else:
         progent = ProgentConfig()
+
+    airguard_raw = raw.get("airguard", {}) or {}
+    if isinstance(airguard_raw, bool):
+        airguard = AIRGuardConfig(enabled=airguard_raw)
+    elif isinstance(airguard_raw, dict):
+        llm_raw = airguard_raw.get("llm", {}) or {}
+        if not isinstance(llm_raw, dict):
+            raise TypeError("airguard.llm must be a mapping")
+        if llm_raw.get("api_key"):
+            raise ValueError("airguard.llm.api_key must not be stored in YAML; set api_key_env")
+        allow = airguard_raw.get("authority_allow", ["read", "write", "respond"])
+        publishers = airguard_raw.get("tool_publishers", {}) or {}
+        if not isinstance(allow, list) or not all(isinstance(v, str) for v in allow):
+            raise TypeError("airguard.authority_allow must be a list of strings")
+        if not isinstance(publishers, dict):
+            raise TypeError("airguard.tool_publishers must be a mapping")
+        generator_raw = airguard_raw.get("generator", {})
+        if isinstance(generator_raw, bool):
+            generator_raw = {"enabled": generator_raw}
+        if not isinstance(generator_raw, dict):
+            raise TypeError("airguard.generator must be a boolean or mapping")
+        generator_llm_raw = generator_raw.get("llm", {}) or {}
+        if not isinstance(generator_llm_raw, dict):
+            raise TypeError("airguard.generator.llm must be a mapping")
+        if generator_llm_raw.get("api_key"):
+            raise ValueError("airguard.generator.llm.api_key must not be stored in YAML; set api_key_env")
+        max_allow = generator_raw.get(
+            "max_authority_allow", ["read", "write", "exec", "network", "respond"]
+        )
+        capabilities = {"read", "write", "exec", "network", "respond"}
+        if not isinstance(max_allow, list) or any(v not in capabilities for v in max_allow):
+            raise ValueError("airguard.generator.max_authority_allow must contain AIRGuard capabilities")
+        if any(v not in capabilities for v in allow):
+            raise ValueError("airguard.authority_allow must contain AIRGuard capabilities")
+        generator_api_key_env = str(generator_llm_raw.get("api_key_env", "") or "")
+        generator = AIRGuardGeneratorConfig(
+            enabled=bool(generator_raw.get("enabled", True)),
+            context_mode=str(generator_raw.get("context_mode", "benign_only")),
+            max_attempts=int(generator_raw.get("max_attempts", 2)),
+            fail_closed=bool(generator_raw.get("fail_closed", False)),
+            max_authority_allow=list(dict.fromkeys(max_allow)),
+            provider=str(generator_llm_raw.get("provider", "")).lower(),
+            model=str(generator_llm_raw.get("model", "")),
+            temperature=(float(generator_llm_raw["temperature"]) if "temperature" in generator_llm_raw else None),
+            base_url=str(generator_llm_raw.get("base_url", "")),
+            api_key=os.environ.get(generator_api_key_env, "") if generator_api_key_env else "",
+            api_key_env=generator_api_key_env,
+            request_timeout=_optional_int(generator_llm_raw.get("request_timeout"), None),
+        )
+        if generator.context_mode != "benign_only":
+            raise ValueError("airguard.generator.context_mode must be benign_only")
+        if generator.max_attempts < 1:
+            raise ValueError("airguard.generator.max_attempts must be positive")
+        if "respond" not in generator.max_authority_allow:
+            raise ValueError("airguard.generator.max_authority_allow must include respond")
+        if any(value not in generator.max_authority_allow for value in allow):
+            raise ValueError("airguard.authority_allow must fit within generator.max_authority_allow")
+        airguard = AIRGuardConfig(
+            enabled=bool(airguard_raw.get("enabled", False)),
+            mode=str(airguard_raw.get("mode", "block")).lower(),
+            fail_closed=bool(airguard_raw.get("fail_closed", True)),
+            source_root=str(airguard_raw.get("source_root", "/opt/airguard/src")),
+            authority_allow=allow,
+            default_tool_publisher=str(airguard_raw.get("default_tool_publisher", "unknown_web")),
+            tool_publishers={str(k): str(v) for k, v in publishers.items()},
+            use_llm=bool(airguard_raw.get("use_llm", True)),
+            provider=str(llm_raw.get("provider", "")).lower(),
+            model=str(llm_raw.get("model", "")),
+            base_url=str(llm_raw.get("base_url", "")),
+            api_key=os.environ.get(str(llm_raw.get("api_key_env", "")), "") if llm_raw.get("api_key_env") else "",
+            api_key_env=str(llm_raw.get("api_key_env", "")),
+            timeout_seconds=float(llm_raw.get("timeout_seconds", 30.0)),
+            check_final_output=bool(airguard_raw.get("check_final_output", True)),
+            redact_credentials=bool(airguard_raw.get("redact_credentials", True)),
+            max_content_chars=int(airguard_raw.get("max_content_chars", 4000)),
+            generator=generator,
+        )
+        if airguard.mode not in {"block", "warn", "monitor"}:
+            raise ValueError("airguard.mode must be one of: block, warn, monitor")
+        if airguard.timeout_seconds <= 0 or airguard.max_content_chars <= 0:
+            raise ValueError("airguard timeout_seconds and max_content_chars must be positive")
+        valid_publishers = {"user", "system", "org_policy", "verified_repo", "popular_package", "unknown_web", "generated_code", "tool_output"}
+        if airguard.default_tool_publisher not in valid_publishers or any(v not in valid_publishers for v in airguard.tool_publishers.values()):
+            raise ValueError("airguard publisher must be a known AIRGuard publisher")
+    else:
+        raise TypeError("airguard must be a boolean or mapping")
 
     clawsentry_raw = raw.get("clawsentry", {}) or {}
     if isinstance(clawsentry_raw, bool):
@@ -1953,6 +2082,7 @@ def load_config(path: str | Path) -> AppConfig:
         security=security,
         aegis=aegis,
         progent=progent,
+        airguard=airguard,
         clawsentry=clawsentry,
         janus=janus,
         stepguard=stepguard,

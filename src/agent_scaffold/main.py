@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import contextlib
 import io
 import json
@@ -44,6 +45,7 @@ try:
     )
     from .agentguard import close_agentguard_session
     from .agentguard.scenario import compile_agentguard_scenario
+    from .airguard.generator import compile_airguard_authority
     from .agentsight import AgentSightObserver, wait_for_start_gate
     from .agentspec.generator import compile_agentspec_rules
     from .config import load_config
@@ -101,6 +103,7 @@ except ImportError:  # Fallback when executed as a script
     )
     from agent_scaffold.agentguard import close_agentguard_session
     from agent_scaffold.agentguard.scenario import compile_agentguard_scenario
+    from agent_scaffold.airguard.generator import compile_airguard_authority
     from agent_scaffold.agentsight import AgentSightObserver, wait_for_start_gate
     from agent_scaffold.agentspec.generator import compile_agentspec_rules
     from agent_scaffold.config import load_config
@@ -330,11 +333,27 @@ def run_once(
     task = augment_task_with_trip_context(cfg.agent.task.strip(), cfg.trip)
     task = augment_task_with_research_context(task, cfg.research)
     task = augment_task_with_agentdojo_context(task, cfg.agentdojo)
+    generate_airguard = cfg.airguard.enabled and cfg.airguard.generator.enabled
+    benign_task = task if generate_airguard else ""
     task = augment_task_with_agent_security_bench_context(
         task, cfg.agent_security_bench
     )
+    if generate_airguard:
+        clean_asb = copy.copy(cfg.agent_security_bench)
+        clean_asb.injection_method = "clean"
+        clean_asb.defense_type = ""
+        benign_task = augment_task_with_agent_security_bench_context(
+            benign_task, clean_asb
+        )
     task = augment_task_with_agentharm_context(task, cfg.agentharm)
+    if generate_airguard:
+        benign_task = augment_task_with_agentharm_context(benign_task, cfg.agentharm)
     task = augment_task_with_privacylens_live_context(task, cfg.privacylens_live)
+    if generate_airguard:
+        benign_task = augment_task_with_privacylens_live_context(
+            benign_task, cfg.privacylens_live
+        )
+    airguard_generation = compile_airguard_authority(cfg, benign_task, run_dir)
     pro2guard_generation = compile_pro2guard_policy(
         cfg,
         task,
@@ -390,6 +409,7 @@ def run_once(
             output_path = run_dir / f"trace_{Path(cfg_path).stem}.json"
     startup_trace: list[dict[str, Any]] = []
     generation_steps = (
+        ("airguard_authority_generate", airguard_generation),
         ("pro2guard_policy_generate", pro2guard_generation),
         ("agentspec_rule_generate", agentspec_generation),
         ("agentguard_scenario_compile", agentguard_scenario),
@@ -418,6 +438,9 @@ def run_once(
     state = {
         "messages": state_messages,
         "_progent_user_request": "\n\n".join(
+            part for part in (task, user_input or "") if part
+        ),
+        "_airguard_user_request": "\n\n".join(
             part for part in (task, user_input or "") if part
         ),
         "_clawsentry_user_request": "\n\n".join(
@@ -449,6 +472,14 @@ def run_once(
         "plan": plan,
         "tool_errors": [],
         "harness": {
+            "airguard": {
+                "enabled": bool(cfg.airguard.enabled),
+                "mode": cfg.airguard.mode,
+                "authority_allow": list(cfg.airguard.authority_allow),
+                "authority_source": cfg.airguard.authority_source,
+                "status": "pending" if cfg.airguard.enabled else "disabled",
+                "event_count": 0,
+            },
             "progent": {
                 "enabled": bool(cfg.progent.enabled),
                 "mode": cfg.progent.mode,

@@ -1,6 +1,16 @@
 *.json
 !/simulated_envs/virtual_mailbox.json
 *.pyc
+.env
+.env.*
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+*.log
+*.sqlite*
+*.db
 *.txt
 !requirements.txt
 !requirements-llamafirewall.txt
@@ -30,5 +40,7 @@ src/agent_scaffold/safeagent/*.example.yaml
 src/agent_scaffold/safeagent/test_*.py
 src/agent_scaffold/clawsentry/README.rst
 src/agent_scaffold/clawsentry/test_*.py
+src/agent_scaffold/airguard/README.rst
+src/agent_scaffold/airguard/test_*.py
 logs_other_proj/
 runtime/venvs/

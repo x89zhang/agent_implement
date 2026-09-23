@@ -351,6 +351,11 @@ def build_middleware_manager(cfg: AppConfig) -> MiddlewareManager:
 
         # Enforce the Core's decision on the effective values from earlier guards.
         middlewares.append(SafeAgentMiddleware(cfg))
+    if cfg.airguard.enabled:
+        from .airguard import AIRGuardMiddleware
+
+        # Last so credential redaction applies to the effective tool/model output.
+        middlewares.append(AIRGuardMiddleware(cfg))
     return MiddlewareManager(middlewares)
 
 

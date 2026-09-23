@@ -94,6 +94,18 @@ def _image_has_adr(image: str, workspace_root: Path) -> bool:
     return probe.returncode == 0
 
 
+def _image_has_airguard(image: str, workspace_root: Path) -> bool:
+    probe = _run_checked(
+        [
+            "docker", "run", "--rm", "--network", "none", "--entrypoint", "python",
+            image, "-c",
+            "import sys; sys.path.insert(0, '/opt/airguard/src'); import airguard.guard",
+        ],
+        workspace_root,
+    )
+    return probe.returncode == 0
+
+
 def _image_has_safeagent(image: str, workspace_root: Path) -> bool:
     probe = _run_checked(
         ["docker", "run", "--rm", "--network", "none", "--entrypoint", "python",
@@ -126,6 +138,8 @@ def _effective_build_args(cfg: Any) -> dict[str, str]:
         build_args["INSTALL_AGENTSPEC"] = "true"
     if getattr(getattr(cfg, "adr", None), "enabled", False):
         build_args["INSTALL_ADR"] = "true"
+    if getattr(getattr(cfg, "airguard", None), "enabled", False):
+        build_args["INSTALL_AIRGUARD"] = "true"
     if getattr(getattr(cfg, "safeagent", None), "enabled", False):
         build_args["INSTALL_SAFEAGENT"] = "true"
     if _clawsentry_managed(cfg):
@@ -147,6 +161,11 @@ def _ensure_image(cfg: Any, workspace_root: Path) -> None:
         and getattr(getattr(cfg, "adr", None), "enabled", False)
         and not _image_has_adr(image, workspace_root)
     )
+    airguard_missing = (
+        image_exists
+        and getattr(getattr(cfg, "airguard", None), "enabled", False)
+        and not _image_has_airguard(image, workspace_root)
+    )
     safeagent_missing = (
         image_exists
         and getattr(getattr(cfg, "safeagent", None), "enabled", False)
@@ -156,7 +175,7 @@ def _ensure_image(cfg: Any, workspace_root: Path) -> None:
         image_exists and _clawsentry_managed(cfg)
         and not _image_has_clawsentry(image, workspace_root)
     )
-    if image_exists and not any((agentspec_missing, adr_missing, safeagent_missing, clawsentry_missing)):
+    if image_exists and not any((agentspec_missing, adr_missing, airguard_missing, safeagent_missing, clawsentry_missing)):
         return
     if not bool(cfg.container.auto_build):
         if agentspec_missing:
@@ -170,6 +189,11 @@ def _ensure_image(cfg: Any, workspace_root: Path) -> None:
                 f"Container image {image!r} does not include the enabled ADR "
                 "runtime and container.auto_build is disabled. Build it with "
                 "--build-arg INSTALL_ADR=true or use a compatible image."
+            )
+        if airguard_missing:
+            raise RuntimeError(
+                f"Container image {image!r} lacks AIRGuard source. "
+                "Build it with --build-arg INSTALL_AIRGUARD=true."
             )
         if safeagent_missing:
             raise RuntimeError(
@@ -211,6 +235,11 @@ def _ensure_image(cfg: Any, workspace_root: Path) -> None:
             f"Container image {image!r} was built without a working ADR "
             "runtime. Ensure its Dockerfile honors INSTALL_ADR=true."
         )
+    if getattr(getattr(cfg, "airguard", None), "enabled", False) and not _image_has_airguard(image, workspace_root):
+        raise RuntimeError(
+            f"Container image {image!r} was built without AIRGuard source. "
+            "Ensure its Dockerfile honors INSTALL_AIRGUARD=true."
+        )
     if _clawsentry_managed(cfg) and not _image_has_clawsentry(image, workspace_root):
         raise RuntimeError(
             f"Container image {image!r} was built without ClawSentry 0.8.7. "
@@ -235,6 +264,21 @@ def _prepare_adr_container_config(cfg_path: str, run_dir: Path) -> str:
     adr["python_executable"] = "/opt/adr-venv/bin/python"
     raw["adr"] = adr
     path = run_dir / "adr.container.yaml"
+    path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    path.chmod(0o600)
+    return str(path)
+
+
+def _prepare_airguard_container_config(cfg_path: str, run_dir: Path) -> str:
+    raw = load_config_mapping(cfg_path)
+    settings = raw.get("airguard", {})
+    if isinstance(settings, bool):
+        settings = {"enabled": settings}
+    if not isinstance(settings, dict):
+        raise TypeError("airguard must be a boolean or mapping")
+    settings["source_root"] = "/opt/airguard/src"
+    raw["airguard"] = settings
+    path = run_dir / "airguard.container.yaml"
     path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
     path.chmod(0o600)
     return str(path)
@@ -315,6 +359,8 @@ def run_once_in_container(
 
     if getattr(getattr(cfg, "adr", None), "enabled", False):
         cfg_path = _prepare_adr_container_config(cfg_path, run_dir)
+    if getattr(getattr(cfg, "airguard", None), "enabled", False):
+        cfg_path = _prepare_airguard_container_config(cfg_path, run_dir)
 
     container_workdir = str(cfg.container.workdir).rstrip("/") or "/workspace"
     config_in_container = _workspace_container_path(Path(cfg_path), workspace_root, container_workdir)
@@ -378,6 +424,16 @@ def run_once_in_container(
     )
     if progent_api_key_env and progent_api_key_env not in env_names:
         env_names.append(progent_api_key_env)
+    airguard_api_key_env = str(
+        getattr(getattr(cfg, "airguard", None), "api_key_env", "") or ""
+    )
+    if airguard_api_key_env and airguard_api_key_env not in env_names:
+        env_names.append(airguard_api_key_env)
+    airguard_generator_key_env = str(
+        getattr(getattr(getattr(cfg, "airguard", None), "generator", None), "api_key_env", "") or ""
+    )
+    if airguard_generator_key_env and airguard_generator_key_env not in env_names:
+        env_names.append(airguard_generator_key_env)
     clawsentry_api_key_env = str(
         getattr(getattr(cfg, "clawsentry", None), "api_key_env", "") or ""
     )

@@ -38,6 +38,15 @@ RUN if [ "$INSTALL_PROGENT" = "true" ]; then \
       && pip install --no-cache-dir -r /tmp/requirements-progent.txt; \
     fi
 
+# AIRGuard is source-only; pin its guard package without installing demo extras.
+ARG INSTALL_AIRGUARD=false
+ARG AIRGUARD_REVISION=3def7bff3afbfb890e224131190a988bd3e4faba
+COPY scripts/install_airguard_source.py /tmp/install_airguard_source.py
+RUN if [ "$INSTALL_AIRGUARD" = "true" ]; then \
+      python /tmp/install_airguard_source.py "$AIRGUARD_REVISION" /opt/airguard/src \
+      && python -c "import sys; sys.path.insert(0, '/opt/airguard/src'); import airguard.guard"; \
+    fi
+
 ARG INSTALL_CLAWSENTRY=false
 COPY requirements-clawsentry.txt /tmp/requirements-clawsentry.txt
 RUN if [ "$INSTALL_CLAWSENTRY" = "true" ]; then \

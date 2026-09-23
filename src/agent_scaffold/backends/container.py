@@ -14,7 +14,7 @@ import yaml
 
 from ..config import load_config_mapping
 from ..container_runtime import (
-    _clawsentry_managed, _ensure_image, _image_has_clawsentry,
+    _clawsentry_managed, _ensure_image, _image_has_airguard, _image_has_clawsentry,
     _run_checked, run_once_in_container,
 )
 from ..skills import load_enabled_skills
@@ -49,6 +49,7 @@ def ensure_hermes_image(cfg, workspace):
         ("llamafirewall", "INSTALL_LLAMA_FIREWALL"),
         ("agentspec", "INSTALL_AGENTSPEC"),
         ("progent", "INSTALL_PROGENT"),
+        ("airguard", "INSTALL_AIRGUARD"),
         ("adr", "INSTALL_ADR"),
     ):
         if getattr(cfg, section).enabled:
@@ -64,6 +65,7 @@ def ensure_hermes_image(cfg, workspace):
         workspace / "integrations/hermes/Dockerfile",
         workspace / "scripts/install_asb_source.py",
         workspace / "scripts/install_adr_source.py",
+        workspace / "scripts/install_airguard_source.py",
         workspace / "scripts/install_privacylens_live_source.py",
         workspace / "scripts/install_privacylens_evaluator_source.py",
         *sorted(workspace.glob("requirements*.txt")),
@@ -74,7 +76,10 @@ def ensure_hermes_image(cfg, workspace):
     digest.update(commit.encode())
     image = cfg.container.image + "-hermes-" + digest.hexdigest()[:12]
     if _run_checked(["docker", "image", "inspect", image], workspace).returncode == 0:
-        if not _clawsentry_managed(cfg) or _image_has_clawsentry(image, workspace):
+        if (
+            (not _clawsentry_managed(cfg) or _image_has_clawsentry(image, workspace))
+            and (not cfg.airguard.enabled or _image_has_airguard(image, workspace))
+        ):
             return image
     if not cfg.container.auto_build:
         raise RuntimeError(
@@ -177,6 +182,8 @@ def prepare_container_config(cfg, cfg_path, workspace, run_dir):
         # These paths belong to the image, not to the host-path remapper.
         raw["adr"]["detection_root"] = ""
         raw["adr"]["python_executable"] = ""
+    if isinstance(raw.get("airguard"), dict) and raw["airguard"].get("enabled"):
+        raw["airguard"]["source_root"] = ""
     raw["execution"]["hermes"].update(
         repo_path="/opt/hermes-agent", python_executable="/opt/hermes-venv/bin/python"
     )
@@ -195,6 +202,8 @@ def prepare_container_config(cfg, cfg_path, workspace, run_dir):
     if isinstance(raw.get("adr"), dict) and raw["adr"].get("enabled"):
         raw["adr"]["detection_root"] = "/opt/adr/Detection"
         raw["adr"]["python_executable"] = "/opt/adr-venv/bin/python"
+    if isinstance(raw.get("airguard"), dict) and raw["airguard"].get("enabled"):
+        raw["airguard"]["source_root"] = "/opt/airguard/src"
     raw["execution"]["hermes"].update(
         repo_path="/opt/hermes-agent", python_executable="/opt/hermes-venv/bin/python"
     )
