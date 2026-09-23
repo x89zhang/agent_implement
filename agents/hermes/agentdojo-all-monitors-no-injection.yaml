@@ -83,10 +83,10 @@ monitoring:
 agentdojo:
   enabled: true
   benchmark_version: v1.2.2
-  suite: slack
+  suite: banking
   # Change both tasks through a single combined case id.
   # Benign-only example: user_task_3; attack example: user_task_3_injection_3.
-  case: user_task_15_injection_5
+  case: user_task_2_injection_4
   # false disables both attack carriers while retaining the selected case.
   injection_enabled: false
   # Tool-output attack and native-skill attack can be toggled independently.
@@ -138,6 +138,14 @@ aegis:
   allow_tools: []
   block_tools: []
   # Example: block_tools: [skill_view] prevents native skill payload loading.
+
+progent:
+  enabled: true
+  mode: monitor
+  generate_policy: true
+  update_after_tool: false
+  fail_closed: false
+  # Policy generation inherits the top-level llm and OPENAI_API_KEY.
 
 pro2guard:
   enabled: true

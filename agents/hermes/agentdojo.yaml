@@ -79,12 +79,12 @@ monitoring:
 agentdojo:
   enabled: true
   benchmark_version: v1.2.2
-  suite: slack
+  suite: banking
   # Change both tasks through a single combined case id.
   # Benign-only example: user_task_3; attack example: user_task_3_injection_3.
-  case: user_task_15_injection_5
+  case: user_task_2_injection_4
   # false disables both attack carriers while retaining the selected case.
-  injection_enabled: false
+  injection_enabled: true
   # Tool-output attack and native-skill attack can be toggled independently.
   # Skill-only: standard_injection_enabled: false, skill_injection_enabled: true.
   standard_injection_enabled: false
@@ -193,7 +193,7 @@ llamafirewall:
   fail_closed: false
 
 toolsafe:
-  enabled: true
+  enabled: false
   # monitor, warn, replan, block
   mode: monitor
   threshold: 0.5
