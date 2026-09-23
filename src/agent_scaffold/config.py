@@ -116,6 +116,30 @@ class ProgentConfig:
 
 
 @dataclass
+class RopeConfig:
+    enabled: bool = False
+    mode: str = "block"
+    fail_closed: bool = True
+    suite: str = ""
+    floor_path: str = ""
+    floor_generation: str = "llm"
+    router: str = "live"
+    cached_router: str = "opus"
+    scope: dict[str, Any] = field(default_factory=dict)
+    scope_path: str = ""
+    clamp: bool = False
+    trusted_origin_tools: list[str] = field(default_factory=list)
+    trusted_facts: str = ""
+    provider: str = ""
+    model: str = ""
+    temperature: float | None = None
+    base_url: str = ""
+    api_key: str = ""
+    api_key_env: str = ""
+    request_timeout: int | None = None
+
+
+@dataclass
 class AIRGuardGeneratorConfig:
     enabled: bool = True
     context_mode: str = "benign_only"
@@ -549,6 +573,7 @@ class AppConfig:
     security: SecurityConfig = field(default_factory=SecurityConfig)
     aegis: AegisConfig = field(default_factory=AegisConfig)
     progent: ProgentConfig = field(default_factory=ProgentConfig)
+    rope: RopeConfig = field(default_factory=RopeConfig)
     airguard: AIRGuardConfig = field(default_factory=AIRGuardConfig)
     clawsentry: ClawSentryConfig = field(default_factory=ClawSentryConfig)
     janus: JanusConfig = field(default_factory=JanusConfig)
@@ -1243,6 +1268,60 @@ def load_config(path: str | Path) -> AppConfig:
             raise ValueError("progent.mode must be one of: block, warn, monitor")
     else:
         progent = ProgentConfig()
+
+    rope_raw = raw.get("rope", {}) or {}
+    if isinstance(rope_raw, bool):
+        rope = RopeConfig(enabled=rope_raw)
+    elif isinstance(rope_raw, dict):
+        rope_llm_raw = rope_raw.get("llm", {}) or {}
+        if not isinstance(rope_llm_raw, dict):
+            raise TypeError("rope.llm must be a mapping")
+        if rope_llm_raw.get("api_key"):
+            raise ValueError("rope.llm.api_key must not be stored in YAML; use api_key_env")
+        rope_scope = rope_raw.get("scope", {}) or {}
+        if not isinstance(rope_scope, dict):
+            raise TypeError("rope.scope must be a mapping")
+        rope_sources = rope_raw.get("trusted_origin_tools", []) or []
+        if not isinstance(rope_sources, list) or not all(
+            isinstance(item, str) for item in rope_sources
+        ):
+            raise TypeError("rope.trusted_origin_tools must be a list of tool names")
+        rope_key_env = str(rope_llm_raw.get("api_key_env", "") or "")
+        rope = RopeConfig(
+            enabled=bool(rope_raw.get("enabled", False)),
+            mode=str(rope_raw.get("mode", "block")).lower(),
+            fail_closed=bool(rope_raw.get("fail_closed", True)),
+            suite=str(rope_raw.get("suite", "") or ""),
+            floor_path=str(rope_raw.get("floor_path", "") or ""),
+            floor_generation=str(rope_raw.get("floor_generation", "llm") or "llm").lower(),
+            router=str(rope_raw.get("router", "live")).lower(),
+            cached_router=str(rope_raw.get("cached_router", "opus")),
+            scope=dict(rope_scope),
+            scope_path=str(rope_raw.get("scope_path", "") or ""),
+            clamp=bool(rope_raw.get("clamp", False)),
+            trusted_origin_tools=list(rope_sources),
+            trusted_facts=str(rope_raw.get("trusted_facts", "") or ""),
+            provider=str(rope_llm_raw.get("provider", "") or "").lower(),
+            model=str(rope_llm_raw.get("model", "") or ""),
+            temperature=(
+                float(rope_llm_raw["temperature"])
+                if "temperature" in rope_llm_raw else None
+            ),
+            base_url=str(rope_llm_raw.get("base_url", "") or ""),
+            api_key=os.environ.get(rope_key_env, "") if rope_key_env else "",
+            api_key_env=rope_key_env,
+            request_timeout=_optional_int(rope_llm_raw.get("request_timeout"), None),
+        )
+        if rope.mode not in {"block", "warn", "monitor"}:
+            raise ValueError("rope.mode must be one of: block, warn, monitor")
+        if rope.router not in {"live", "cached", "static"}:
+            raise ValueError("rope.router must be one of: live, cached, static")
+        if rope.floor_generation not in {"llm", "audited_only"}:
+            raise ValueError("rope.floor_generation must be one of: llm, audited_only")
+        if rope.scope and rope.scope_path:
+            raise ValueError("rope.scope and rope.scope_path cannot both be set")
+    else:
+        rope = RopeConfig()
 
     airguard_raw = raw.get("airguard", {}) or {}
     if isinstance(airguard_raw, bool):
@@ -2082,6 +2161,7 @@ def load_config(path: str | Path) -> AppConfig:
         security=security,
         aegis=aegis,
         progent=progent,
+        rope=rope,
         airguard=airguard,
         clawsentry=clawsentry,
         janus=janus,

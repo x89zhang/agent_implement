@@ -1,5 +1,8 @@
 *.json
 !/simulated_envs/virtual_mailbox.json
+!src/agent_scaffold/rope/_upstream/scopes/
+!src/agent_scaffold/rope/_upstream/scopes/**/
+!src/agent_scaffold/rope/_upstream/scopes/**/*.json
 *.pyc
 .env
 .env.*
@@ -19,6 +22,7 @@ __pycache__/
 !requirements-hermes-bridge.txt
 !requirements-asb-bridge.txt
 !requirements-progent.txt
+!requirements-rope.txt
 !requirements-clawsentry.txt
 !requirements-safeagent.txt
 !requirements-adr.txt
@@ -42,5 +46,7 @@ src/agent_scaffold/clawsentry/README.rst
 src/agent_scaffold/clawsentry/test_*.py
 src/agent_scaffold/airguard/README.rst
 src/agent_scaffold/airguard/test_*.py
+src/agent_scaffold/rope/README.rst
+src/agent_scaffold/rope/test_*.py
 logs_other_proj/
 runtime/venvs/

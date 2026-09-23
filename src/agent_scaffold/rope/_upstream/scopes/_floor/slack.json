@@ -1,0 +1,21 @@
+{
+  "add_user_to_channel": {
+    "user": "SOURCED"
+  },
+  "get_webpage": {
+    "url": "SOURCED"
+  },
+  "invite_user_to_slack": {
+    "user": "SOURCED"
+  },
+  "post_webpage": {
+    "url": "SOURCED"
+  },
+  "remove_user_from_slack": {
+    "user": "EXPLICIT"
+  },
+  "send_direct_message": {
+    "recipient": "SOURCED"
+  }
+}
+

@@ -38,6 +38,12 @@ RUN if [ "$INSTALL_PROGENT" = "true" ]; then \
       && pip install --no-cache-dir -r /tmp/requirements-progent.txt; \
     fi
 
+ARG INSTALL_ROPE=false
+COPY requirements-rope.txt /tmp/requirements-rope.txt
+RUN if [ "$INSTALL_ROPE" = "true" ]; then \
+      pip install --no-cache-dir -r /tmp/requirements-rope.txt; \
+    fi
+
 # AIRGuard is source-only; pin its guard package without installing demo extras.
 ARG INSTALL_AIRGUARD=false
 ARG AIRGUARD_REVISION=3def7bff3afbfb890e224131190a988bd3e4faba

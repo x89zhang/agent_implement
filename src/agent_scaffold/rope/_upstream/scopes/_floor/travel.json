@@ -1,0 +1,22 @@
+{
+  "cancel_calendar_event": {
+    "event_id": "EXPLICIT"
+  },
+  "create_calendar_event": {
+    "participants": "SOURCED",
+    "title": "EXPLICIT"
+  },
+  "reserve_car_rental": {
+    "company": "EXPLICIT"
+  },
+  "reserve_hotel": {
+    "hotel": "EXPLICIT"
+  },
+  "reserve_restaurant": {
+    "restaurant": "EXPLICIT"
+  },
+  "send_email": {
+    "recipients": "SOURCED"
+  }
+}
+

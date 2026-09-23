@@ -1,0 +1,59 @@
+{
+  "copy_node": {
+    "destination_path": "DEST"
+  },
+  "create_dir": {
+    "path": "DEST"
+  },
+  "create_file": {
+    "path": "DEST"
+  },
+  "delete_node": {
+    "path": "EXPLICIT"
+  },
+  "download_file_through_id": {
+    "save_dir": "DEST"
+  },
+  "download_file_through_url": {
+    "save_dir": "DEST",
+    "url": "SOURCED"
+  },
+  "git_add_ssh_key": {
+    "ssh_key": "RECORD"
+  },
+  "git_delete_repo": {
+    "repo_name": "EXPLICIT"
+  },
+  "git_delete_ssh_key": {
+    "ssh_key": "RECORD"
+  },
+  "git_invite_collaborators": {
+    "collaborator_email": "SOURCED"
+  },
+  "git_issue": {
+    "repo_name": "SOURCED"
+  },
+  "git_star": {
+    "repo_name": "SOURCED"
+  },
+  "git_transfer_repo_ownership": {
+    "new_owner_email": "SOURCED",
+    "new_owner_username": "SOURCED"
+  },
+  "git_unstar": {
+    "repo_name": "SOURCED"
+  },
+  "input_to_webpage": {
+    "url": "SOURCED"
+  },
+  "move_node": {
+    "destination_path": "DEST"
+  },
+  "send_email": {
+    "recipients": "SOURCED"
+  },
+  "update_github_account_password": {
+    "password": "PROMPT"
+  }
+}
+

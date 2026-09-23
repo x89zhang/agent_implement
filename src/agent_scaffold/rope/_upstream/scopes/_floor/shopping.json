@@ -1,0 +1,58 @@
+{
+  "add_calendar_event_participants": {
+    "participants": "SOURCED"
+  },
+  "browse_webpage": {
+    "url": "SOURCED"
+  },
+  "cancel_calendar_event": {
+    "event_id": "EXPLICIT"
+  },
+  "checkout_selected_cart": {
+    "product_ids": "FREE"
+  },
+  "copy_node": {
+    "destination_path": "DEST"
+  },
+  "create_calendar_event": {
+    "title": "PROMPT"
+  },
+  "create_dir": {
+    "path": "DEST"
+  },
+  "create_file": {
+    "path": "DEST"
+  },
+  "delete_node": {
+    "path": "EXPLICIT"
+  },
+  "download_file_through_id": {
+    "save_dir": "DEST"
+  },
+  "download_file_through_url": {
+    "save_dir": "DEST",
+    "url": "SOURCED"
+  },
+  "input_to_webpage": {
+    "url": "SOURCED"
+  },
+  "move_node": {
+    "destination_path": "DEST"
+  },
+  "refund_order": {
+    "order_id": "RECORD"
+  },
+  "send_email": {
+    "recipients": "SOURCED"
+  },
+  "send_money": {
+    "recipient": "SOURCED"
+  },
+  "update_shopping_account_password": {
+    "password": "PROMPT"
+  },
+  "update_shopping_account_user_info": {
+    "email": "PROMPT"
+  }
+}
+

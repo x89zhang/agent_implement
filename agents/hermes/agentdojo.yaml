@@ -135,6 +135,43 @@ aegis:
   block_tools: []
   # Example: block_tools: [skill_view] prevents native skill payload loading.
 
+progent:
+  enabled: false
+  mode: monitor
+  generate_policy: true
+  update_after_tool: false
+  fail_closed: false
+
+clawsentry:
+  enabled: false
+  auto_start: true
+  mode: block
+  fail_closed: true
+  base_url: http://127.0.0.1:8080
+  api_key_env: CS_AUTH_TOKEN
+  timeout_seconds: 5
+  decision_tier: L1
+  observe_tool_result: true
+
+airguard:
+  enabled: false
+  mode: block
+  fail_closed: true
+  generator:
+    enabled: true
+    context_mode: benign_only
+    fail_closed: false
+
+rope:
+  enabled: false
+  mode: block
+  fail_closed: true
+  # Audited suite rules take priority; LLM generates rules for uncovered tools.
+  floor_generation: llm
+  router: live
+  clamp: true
+  trusted_origin_tools: []
+
 pro2guard:
   enabled: false
   # monitor, warn, block

@@ -322,6 +322,7 @@ def tool_node(
         requested_name, requested_payload = call
         state.pop("_last_aegis_decision", None)
         state.pop("_last_progent_decision", None)
+        state.pop("_last_rope_decision", None)
         state.pop("_last_airguard_decision", None)
         state.pop("_last_clawsentry_decision", None)
         state.pop("_last_janus_decision", None)
@@ -338,6 +339,7 @@ def tool_node(
             state["_terminate_after_tool"] = True
         aegis_decision = state.pop("_last_aegis_decision", None)
         progent_decision = state.pop("_last_progent_decision", None)
+        rope_decision = state.pop("_last_rope_decision", None)
         airguard_decision = state.pop("_last_airguard_decision", None)
         clawsentry_decision = state.pop("_last_clawsentry_decision", None)
         janus_decision = state.pop("_last_janus_decision", None)
@@ -373,6 +375,7 @@ def tool_node(
         agentguard_after = state.get("_last_agentguard_decision")
         agentguard_decision = {"before": agentguard_decision, "after": agentguard_after}
         progent_after = state.pop("_last_progent_decision", None)
+        rope_after = state.pop("_last_rope_decision", None)
         airguard_after = state.pop("_last_airguard_decision", None)
         clawsentry_after = state.pop("_last_clawsentry_decision", None)
         safeagent_after = state.pop("_last_safeagent_decision", None)
@@ -381,6 +384,8 @@ def tool_node(
         adr_decision = state.pop("_last_adr_decision", None)
         if progent_after is not None:
             progent_decision = {"before": progent_decision, "after": progent_after}
+        if rope_after is not None:
+            rope_decision = {"before": rope_decision, "after": rope_after}
         if airguard_after is not None:
             airguard_decision = {"before": airguard_decision, "after": airguard_after}
         if clawsentry_after is not None:
@@ -408,6 +413,7 @@ def tool_node(
                 "usage": usage,
                 "aegis": aegis_decision,
                 "progent": progent_decision,
+                "rope": rope_decision,
                 "airguard": airguard_decision,
                 "clawsentry": clawsentry_decision,
                 "janus": janus_decision,
@@ -434,6 +440,7 @@ def tool_node(
                 "usage": usage,
                 "aegis": aegis_decision,
                 "progent": progent_decision,
+                "rope": rope_decision,
                 "airguard": airguard_decision,
                 "clawsentry": clawsentry_decision,
                 "janus": janus_decision,

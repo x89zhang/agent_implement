@@ -140,12 +140,32 @@ aegis:
   # Example: block_tools: [skill_view] prevents native skill payload loading.
 
 progent:
-  enabled: true
+  enabled: false
   mode: monitor
   generate_policy: true
   update_after_tool: false
   fail_closed: false
   # Policy generation inherits the top-level llm and OPENAI_API_KEY.
+
+clawsentry:
+  enabled: false
+  auto_start: true
+  mode: block
+  fail_closed: true
+  base_url: http://127.0.0.1:8080
+  api_key_env: CS_AUTH_TOKEN
+  timeout_seconds: 5
+  decision_tier: L1
+  observe_tool_result: true
+
+airguard:
+  enabled: false
+  mode: block
+  fail_closed: true
+  generator:
+    enabled: true
+    context_mode: benign_only
+    fail_closed: false
 
 pro2guard:
   enabled: true

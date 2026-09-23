@@ -301,6 +301,10 @@ def build_middleware_manager(cfg: AppConfig) -> MiddlewareManager:
         from .progent import ProgentMiddleware
 
         middlewares.append(ProgentMiddleware(cfg))
+    if cfg.rope.enabled:
+        from .rope import RopeMiddleware
+
+        middlewares.append(RopeMiddleware(cfg))
     if cfg.clawsentry.enabled:
         from .clawsentry import ClawSentryMiddleware
 

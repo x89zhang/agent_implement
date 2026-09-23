@@ -1,0 +1,19 @@
+{
+  "schedule_transaction": {
+    "recipient": "SOURCED"
+  },
+  "send_money": {
+    "recipient": "SOURCED"
+  },
+  "update_password": {
+    "password": "PROMPT"
+  },
+  "update_scheduled_transaction": {
+    "recipient": "SOURCED"
+  },
+  "update_user_info": {
+    "city": "PROMPT",
+    "street": "PROMPT"
+  }
+}
+

@@ -440,6 +440,9 @@ def run_once(
         "_progent_user_request": "\n\n".join(
             part for part in (task, user_input or "") if part
         ),
+        "_rope_user_request": "\n\n".join(
+            part for part in (task, user_input or "") if part
+        ),
         "_airguard_user_request": "\n\n".join(
             part for part in (task, user_input or "") if part
         ),
@@ -484,6 +487,12 @@ def run_once(
                 "enabled": bool(cfg.progent.enabled),
                 "mode": cfg.progent.mode,
                 "status": "pending" if cfg.progent.enabled else "disabled",
+                "event_count": 0,
+            },
+            "rope": {
+                "enabled": bool(cfg.rope.enabled),
+                "mode": cfg.rope.mode,
+                "status": "pending" if cfg.rope.enabled else "disabled",
                 "event_count": 0,
             },
             "clawsentry": {

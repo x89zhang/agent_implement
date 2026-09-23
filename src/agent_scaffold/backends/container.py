@@ -49,6 +49,7 @@ def ensure_hermes_image(cfg, workspace):
         ("llamafirewall", "INSTALL_LLAMA_FIREWALL"),
         ("agentspec", "INSTALL_AGENTSPEC"),
         ("progent", "INSTALL_PROGENT"),
+        ("rope", "INSTALL_ROPE"),
         ("airguard", "INSTALL_AIRGUARD"),
         ("adr", "INSTALL_ADR"),
     ):

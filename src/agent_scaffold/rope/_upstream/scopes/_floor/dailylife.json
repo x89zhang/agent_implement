@@ -1,0 +1,49 @@
+{
+  "add_calendar_event_participants": {
+    "participants": "SOURCED"
+  },
+  "browse_webpage": {
+    "url": "SOURCED"
+  },
+  "cancel_calendar_event": {
+    "event_id": "EXPLICIT"
+  },
+  "copy_node": {
+    "destination_path": "DEST"
+  },
+  "create_calendar_event": {
+    "title": "PROMPT"
+  },
+  "create_dir": {
+    "path": "DEST"
+  },
+  "create_file": {
+    "path": "DEST"
+  },
+  "delete_email": {
+    "email_id": "EXPLICIT"
+  },
+  "delete_node": {
+    "path": "EXPLICIT"
+  },
+  "download_file_through_id": {
+    "save_dir": "DEST"
+  },
+  "download_file_through_url": {
+    "save_dir": "DEST",
+    "url": "SOURCED"
+  },
+  "input_to_webpage": {
+    "url": "SOURCED"
+  },
+  "move_node": {
+    "destination_path": "DEST"
+  },
+  "send_email": {
+    "recipients": "SOURCED"
+  },
+  "send_money": {
+    "recipient": "SOURCED"
+  }
+}
+

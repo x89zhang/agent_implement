@@ -424,6 +424,9 @@ def run_once_in_container(
     )
     if progent_api_key_env and progent_api_key_env not in env_names:
         env_names.append(progent_api_key_env)
+    rope_api_key_env = str(getattr(getattr(cfg, "rope", None), "api_key_env", "") or "")
+    if rope_api_key_env and rope_api_key_env not in env_names:
+        env_names.append(rope_api_key_env)
     airguard_api_key_env = str(
         getattr(getattr(cfg, "airguard", None), "api_key_env", "") or ""
     )
