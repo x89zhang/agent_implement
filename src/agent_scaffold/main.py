@@ -411,6 +411,12 @@ def run_once(
         "_progent_user_request": "\n\n".join(
             part for part in (task, user_input or "") if part
         ),
+        "_janus_user_request": "\n\n".join(
+            part for part in (task, user_input or "") if part
+        ),
+        "_adr_user_request": "\n\n".join(
+            part for part in (task, user_input or "") if part
+        ),
         "_toolsafe_user_request": "\n\n".join(
             part for part in (task, user_input or "") if part
         ),
@@ -429,6 +435,18 @@ def run_once(
                 "enabled": bool(cfg.progent.enabled),
                 "mode": cfg.progent.mode,
                 "status": "pending" if cfg.progent.enabled else "disabled",
+                "event_count": 0,
+            },
+            "janus": {
+                "enabled": bool(cfg.janus.enabled),
+                "mode": cfg.janus.mode,
+                "status": "pending" if cfg.janus.enabled else "disabled",
+                "event_count": 0,
+            },
+            "adr": {
+                "enabled": bool(cfg.adr.enabled),
+                "mode": cfg.adr.mode,
+                "status": "pending" if cfg.adr.enabled else "disabled",
                 "event_count": 0,
             },
             "agentsight": {

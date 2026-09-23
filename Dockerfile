@@ -32,6 +32,26 @@ RUN if [ "$INSTALL_PROGENT" = "true" ]; then \
       && pip install --no-cache-dir -r /tmp/requirements-progent.txt; \
     fi
 
+# ADR Detection is a research artifact; install only its detector runtime in
+# an isolated environment, never its full benchmark dependency set.
+ARG INSTALL_ADR=false
+ARG ADR_REVISION=1c8ecd631e5ed19afc4d61ec1c309a94445476f8
+COPY scripts/install_adr_source.py /tmp/install_adr_source.py
+COPY requirements-adr.txt /tmp/requirements-adr.txt
+RUN if [ "$INSTALL_ADR" = "true" ]; then \
+      apt-get update \
+      && apt-get install -y --no-install-recommends nodejs npm ca-certificates \
+      && rm -rf /var/lib/apt/lists/* \
+      && python /tmp/install_adr_source.py "$ADR_REVISION" /opt/adr/Detection \
+      && mkdir -p /opt/adr/Detection/ads_reasoning_workspace_agentdojo /opt/adr/Detection/ads_reasoning_workspace \
+      && chmod 1777 /opt/adr/Detection/ads_reasoning_workspace_agentdojo /opt/adr/Detection/ads_reasoning_workspace \
+      && python -m venv /opt/adr-venv \
+      && /opt/adr-venv/bin/pip install --no-cache-dir -r /tmp/requirements-adr.txt \
+      && npm install -g @anthropic-ai/claude-code \
+      && /opt/adr-venv/bin/python -c "import openai, mcp, yaml; import sys; sys.path.insert(0, '/opt/adr/Detection'); from guardrail.adr_agent.adr_baseline import ADRBaseline" \
+      && claude --version; \
+    fi
+
 # Optional benchmark extras. Set --build-arg INSTALL_AGENTDOJO=true if the
 # `agentdojo` package is available from your configured Python package index,
 # or use container.image to point at a custom image that already includes it.

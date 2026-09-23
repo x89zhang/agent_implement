@@ -688,6 +688,8 @@ def _record_react_runtime_step(state: dict[str, Any], result: str) -> None:
             "usage": {},
             "aegis": event.get("aegis"),
             "progent": event.get("progent"),
+            "janus": event.get("janus"),
+            "adr": event.get("adr"),
             "pro2guard": event.get("pro2guard"),
             "agentspec": event.get("agentspec"),
             "toolsafe": event.get("toolsafe"),
@@ -707,6 +709,8 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
         if isinstance(state, dict):
             state.pop("_last_aegis_decision", None)
             state.pop("_last_progent_decision", None)
+            state.pop("_last_janus_decision", None)
+            state.pop("_last_adr_decision", None)
             state.pop("_last_pro2guard_decision", None)
             state.pop("_last_agentspec_decision", None)
             state.pop("_last_toolsafe_decision", None)
@@ -715,6 +719,8 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
         decision = middleware.before_tool(state if isinstance(state, dict) else {}, name, payload)
         aegis_decision = None
         progent_decision = None
+        janus_decision = None
+        adr_decision = None
         pro2guard_decision = None
         agentspec_decision = None
         toolsafe_decision = None
@@ -723,6 +729,8 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
         if isinstance(state, dict):
             aegis_decision = state.pop("_last_aegis_decision", None)
             progent_decision = state.pop("_last_progent_decision", None)
+            janus_decision = state.pop("_last_janus_decision", None)
+            state.pop("_last_adr_decision", None)
             pro2guard_decision = state.pop("_last_pro2guard_decision", None)
             agentspec_decision = state.pop("_last_agentspec_decision", None)
             toolsafe_decision = state.pop("_last_toolsafe_decision", None)
@@ -745,6 +753,8 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
                     "tool_input": rendered_input,
                     "aegis": aegis_decision,
                     "progent": {"before": progent_decision, "after": state.pop("_last_progent_decision", None)},
+                    "janus": janus_decision,
+                    "adr": state.pop("_last_adr_decision", None),
                     "pro2guard": pro2guard_decision,
                     "agentspec": agentspec_decision,
                     "toolsafe": toolsafe_decision,
@@ -788,6 +798,8 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
                     "tool_input": rendered_input,
                     "aegis": aegis_decision,
                     "progent": {"before": progent_decision, "after": state.pop("_last_progent_decision", None)},
+                    "janus": janus_decision,
+                    "adr": state.pop("_last_adr_decision", None),
                     "pro2guard": pro2guard_decision,
                     "agentspec": agentspec_decision,
                     "toolsafe": toolsafe_decision,
@@ -806,6 +818,8 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
                 "tool_input": rendered_input,
                 "aegis": aegis_decision,
                 "progent": {"before": progent_decision, "after": state.pop("_last_progent_decision", None)},
+                "janus": janus_decision,
+                "adr": state.pop("_last_adr_decision", None),
                 "pro2guard": pro2guard_decision,
                 "agentspec": agentspec_decision,
                 "toolsafe": toolsafe_decision,
@@ -1436,6 +1450,8 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             if idx < len(guard_events):
                 step["aegis"] = guard_events[idx].get("aegis")
                 step["progent"] = guard_events[idx].get("progent")
+                step["janus"] = guard_events[idx].get("janus")
+                step["adr"] = guard_events[idx].get("adr")
                 step["pro2guard"] = guard_events[idx].get("pro2guard")
                 step["agentspec"] = guard_events[idx].get("agentspec")
                 step["toolsafe"] = guard_events[idx].get("toolsafe")
@@ -1451,6 +1467,8 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             tool_usage = step.get("usage", {})
             aegis_decision = step.get("aegis")
             progent_decision = step.get("progent")
+            janus_decision = step.get("janus")
+            adr_decision = step.get("adr")
             pro2guard_decision = step.get("pro2guard")
             agentspec_decision = step.get("agentspec")
             toolsafe_decision = step.get("toolsafe")
@@ -1490,6 +1508,8 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                         "usage": tool_usage,
                         "aegis": aegis_decision,
                         "progent": progent_decision,
+                        "janus": janus_decision,
+                        "adr": adr_decision,
                         "pro2guard": pro2guard_decision,
                         "agentspec": agentspec_decision,
                         "toolsafe": toolsafe_decision,
@@ -1513,6 +1533,8 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                         "usage": tool_usage,
                         "aegis": aegis_decision,
                         "progent": progent_decision,
+                        "janus": janus_decision,
+                        "adr": adr_decision,
                         "pro2guard": pro2guard_decision,
                         "agentspec": agentspec_decision,
                         "toolsafe": toolsafe_decision,

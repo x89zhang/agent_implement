@@ -46,6 +46,7 @@ def ensure_hermes_image(cfg, workspace):
         ("llamafirewall", "INSTALL_LLAMA_FIREWALL"),
         ("agentspec", "INSTALL_AGENTSPEC"),
         ("progent", "INSTALL_PROGENT"),
+        ("adr", "INSTALL_ADR"),
     ):
         if getattr(cfg, section).enabled:
             args[argument] = "true"
@@ -57,6 +58,7 @@ def ensure_hermes_image(cfg, workspace):
         dockerfile,
         workspace / "integrations/hermes/Dockerfile",
         workspace / "scripts/install_asb_source.py",
+        workspace / "scripts/install_adr_source.py",
         workspace / "scripts/install_privacylens_live_source.py",
         workspace / "scripts/install_privacylens_evaluator_source.py",
         *sorted(workspace.glob("requirements*.txt")),
@@ -144,6 +146,7 @@ def prepare_container_config(cfg, cfg_path, workspace, run_dir):
             "plugin_config",
             "model_path",
             "dtmc_path",
+            "detection_root",
         }
         if not candidate.is_absolute():
             if not is_path:
@@ -164,6 +167,10 @@ def prepare_container_config(cfg, cfg_path, workspace, run_dir):
 
     # Model/interpreter are supplied by the image, never mounted from host venvs.
     raw.setdefault("execution", {}).setdefault("hermes", {})
+    if isinstance(raw.get("adr"), dict) and raw["adr"].get("enabled"):
+        # These paths belong to the image, not to the host-path remapper.
+        raw["adr"]["detection_root"] = ""
+        raw["adr"]["python_executable"] = ""
     raw["execution"]["hermes"].update(
         repo_path="/opt/hermes-agent", python_executable="/opt/hermes-venv/bin/python"
     )
@@ -179,6 +186,9 @@ def prepare_container_config(cfg, cfg_path, workspace, run_dir):
         if skill.path != "agentdojo://skill-injection"
     ]
     raw = remap(raw)
+    if isinstance(raw.get("adr"), dict) and raw["adr"].get("enabled"):
+        raw["adr"]["detection_root"] = "/opt/adr/Detection"
+        raw["adr"]["python_executable"] = "/opt/adr-venv/bin/python"
     raw["execution"]["hermes"].update(
         repo_path="/opt/hermes-agent", python_executable="/opt/hermes-venv/bin/python"
     )

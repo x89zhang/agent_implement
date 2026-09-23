@@ -116,6 +116,46 @@ class ProgentConfig:
 
 
 @dataclass
+class JanusConfig:
+    enabled: bool = False
+    mode: str = "block"
+    strict: bool = False
+    fail_closed: bool = True
+    base_url: str = ""
+    model: str = ""
+    api_key: str = ""
+    api_key_env: str = "JANUS_API_KEY"
+    timeout_seconds: float = 60.0
+    max_tokens: int = 512
+    temperature: float = 0.0
+    max_input_chars: int = 50000
+    max_history_steps: int = 30
+    extra_body: dict[str, Any] = field(default_factory=lambda: {
+        "chat_template_kwargs": {"enable_thinking": False},
+    })
+
+
+@dataclass
+class ADRConfig:
+    enabled: bool = False
+    mode: str = "monitor"
+    fail_closed: bool = False
+    threshold: float = 0.8
+    detection_root: str = "/opt/adr/Detection"
+    python_executable: str = "/opt/adr-venv/bin/python"
+    benchmark_type: str = "agentdojo"
+    enable_triage: bool = True
+    triage_model: str = "gpt-4o"
+    reasoning_model: str = "claude-sonnet-4-6"
+    timeout_seconds: int = 360
+    reasoning_timeout_seconds: int = 300
+    max_turns: int = 8
+    enable_threat_intelligence: bool = True
+    enable_source_code: bool = True
+    enable_policy: bool = True
+
+
+@dataclass
 class Pro2GuardGeneratorConfig:
     enabled: bool = True
     context_mode: str = "benign_only"
@@ -405,6 +445,8 @@ class AppConfig:
     security: SecurityConfig = field(default_factory=SecurityConfig)
     aegis: AegisConfig = field(default_factory=AegisConfig)
     progent: ProgentConfig = field(default_factory=ProgentConfig)
+    janus: JanusConfig = field(default_factory=JanusConfig)
+    adr: ADRConfig = field(default_factory=ADRConfig)
     pro2guard: Pro2GuardConfig = field(default_factory=Pro2GuardConfig)
     agentspec: AgentSpecConfig = field(default_factory=AgentSpecConfig)
     llamafirewall: LlamaFirewallConfig = field(default_factory=LlamaFirewallConfig)
@@ -1094,6 +1136,77 @@ def load_config(path: str | Path) -> AppConfig:
     else:
         progent = ProgentConfig()
 
+    janus_raw = raw.get("janus", {}) or {}
+    if isinstance(janus_raw, bool):
+        janus = JanusConfig(enabled=janus_raw)
+    elif isinstance(janus_raw, dict):
+        if str(janus_raw.get("api_key", "") or ""):
+            raise ValueError("janus.api_key must not be stored in YAML; use api_key_env")
+        janus = JanusConfig(
+            enabled=bool(janus_raw.get("enabled", False)),
+            mode=str(janus_raw.get("mode", "block")).lower(),
+            strict=bool(janus_raw.get("strict", False)),
+            fail_closed=bool(janus_raw.get("fail_closed", True)),
+            base_url=str(janus_raw.get("base_url", "")),
+            model=str(janus_raw.get("model", "")),
+            api_key_env=str(janus_raw.get("api_key_env", "JANUS_API_KEY")),
+            timeout_seconds=float(janus_raw.get("timeout_seconds", 60.0)),
+            max_tokens=int(janus_raw.get("max_tokens", 512)),
+            temperature=float(janus_raw.get("temperature", 0.0)),
+            max_input_chars=int(janus_raw.get("max_input_chars", 50000)),
+            max_history_steps=int(janus_raw.get("max_history_steps", 30)),
+            extra_body=janus_raw.get("extra_body", {
+                "chat_template_kwargs": {"enable_thinking": False},
+            }),
+        )
+        if janus.mode not in {"block", "warn", "monitor"}:
+            raise ValueError("janus.mode must be one of: block, warn, monitor")
+        if min(janus.timeout_seconds, janus.max_tokens, janus.max_input_chars, janus.max_history_steps) <= 0:
+            raise ValueError("JANUS timeout and size limits must be positive")
+        if not isinstance(janus.extra_body, dict):
+            raise ValueError("janus.extra_body must be a mapping")
+    else:
+        janus = JanusConfig()
+
+    adr_raw = raw.get("adr", {}) or {}
+    if isinstance(adr_raw, bool):
+        adr = ADRConfig(enabled=adr_raw)
+    elif isinstance(adr_raw, dict):
+        adr = ADRConfig(
+            enabled=bool(adr_raw.get("enabled", False)),
+            mode=str(adr_raw.get("mode", "monitor")).lower(),
+            fail_closed=bool(adr_raw.get("fail_closed", False)),
+            threshold=float(adr_raw.get("threshold", 0.8)),
+            detection_root=str(adr_raw.get("detection_root", "/opt/adr/Detection")),
+            python_executable=str(adr_raw.get("python_executable", "/opt/adr-venv/bin/python")),
+            benchmark_type=str(adr_raw.get("benchmark_type", "agentdojo")),
+            enable_triage=bool(adr_raw.get("enable_triage", True)),
+            triage_model=str(adr_raw.get("triage_model", "gpt-4o")),
+            reasoning_model=str(adr_raw.get("reasoning_model", "claude-sonnet-4-6")),
+            timeout_seconds=int(adr_raw.get("timeout_seconds", 360)),
+            reasoning_timeout_seconds=int(adr_raw.get("reasoning_timeout_seconds", 300)),
+            max_turns=int(adr_raw.get("max_turns", 8)),
+            enable_threat_intelligence=bool(adr_raw.get("enable_threat_intelligence", True)),
+            enable_source_code=bool(adr_raw.get("enable_source_code", True)),
+            enable_policy=bool(adr_raw.get("enable_policy", True)),
+        )
+        if adr.mode not in {"monitor", "warn", "block"}:
+            raise ValueError("adr.mode must be one of: monitor, warn, block")
+        if not 0 <= adr.threshold <= 1:
+            raise ValueError("adr.threshold must be between 0 and 1")
+        if adr.timeout_seconds < 1 or adr.reasoning_timeout_seconds < 1:
+            raise ValueError("ADR timeouts must be positive")
+        if adr.max_turns < 1:
+            raise ValueError("adr.max_turns must be positive")
+    else:
+        raise TypeError("adr must be a boolean or mapping")
+    if adr.enabled and (not adr.detection_root or not adr.python_executable):
+        raise ValueError("adr.detection_root and adr.python_executable are required")
+    if adr.detection_root and not Path(adr.detection_root).is_absolute():
+        adr.detection_root = str((config_path.parent / adr.detection_root).resolve())
+    if adr.python_executable and not Path(adr.python_executable).is_absolute():
+        adr.python_executable = str((config_path.parent / adr.python_executable).absolute())
+
     pro2guard_raw = raw.get("pro2guard", {}) or {}
     if isinstance(pro2guard_raw, bool):
         pro2guard = Pro2GuardConfig(enabled=pro2guard_raw)
@@ -1656,6 +1769,8 @@ def load_config(path: str | Path) -> AppConfig:
         security=security,
         aegis=aegis,
         progent=progent,
+        janus=janus,
+        adr=adr,
         pro2guard=pro2guard,
         agentspec=agentspec,
         llamafirewall=llamafirewall,

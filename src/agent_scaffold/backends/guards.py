@@ -16,6 +16,8 @@ from ..middleware import build_middleware_manager, output_revision_limit
 GUARDS = (
     "aegis",
     "progent",
+    "janus",
+    "adr",
     "pro2guard",
     "agentspec",
     "llamafirewall",
@@ -119,6 +121,8 @@ class GuardController:
             "_toolsafe_user_request": task,
             "_agentspec_user_request": task,
             "_progent_user_request": task,
+            "_janus_user_request": task,
+            "_adr_user_request": task,
             "_trace_persist": {
                 "output_path": str(directory / "defenses.json"),
                 "run_dir": str(directory),
@@ -140,6 +144,8 @@ class GuardController:
         generation_task = payload.get("generation_task", self.task)
         self.state["_progent_tools"] = copy.deepcopy(payload["tools"])
         self.state["_progent_user_request"] = generation_task
+        self.state["_janus_user_request"] = generation_task
+        self.state["_adr_user_request"] = generation_task
         self.state["_toolsafe_user_request"] = self.task
         self.state["_agentspec_user_request"] = self.task
         for compiler in (

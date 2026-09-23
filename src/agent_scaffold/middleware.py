@@ -301,6 +301,14 @@ def build_middleware_manager(cfg: AppConfig) -> MiddlewareManager:
         from .progent import ProgentMiddleware
 
         middlewares.append(ProgentMiddleware(cfg))
+    if cfg.janus.enabled:
+        from .janus import JanusMiddleware
+
+        middlewares.append(JanusMiddleware(cfg))
+    if cfg.adr.enabled:
+        from .adr import ADRMiddleware
+
+        middlewares.append(ADRMiddleware(cfg))
     if cfg.middleware.enabled:
         middlewares.append(HarnessMiddleware(cfg))
     if cfg.pro2guard.enabled:

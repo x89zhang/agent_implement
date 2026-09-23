@@ -10,8 +10,11 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from .agentdojo_adapter import redact_config_snapshot
 from .agentsight import AgentSightObserver
+from .config import load_config_mapping
 
 
 def should_run_in_container(cfg: Any) -> bool:
@@ -71,6 +74,25 @@ def _image_has_agentspec(image: str, workspace_root: Path) -> bool:
     return probe.returncode == 0
 
 
+def _image_has_adr(image: str, workspace_root: Path) -> bool:
+    probe = _run_checked(
+        [
+            "docker", "run", "--rm", "--network", "none",
+            "--entrypoint", "/opt/adr-venv/bin/python", image, "-c",
+            (
+                "from pathlib import Path; import shutil, sys; "
+                "assert shutil.which('claude'); "
+                "root = Path('/opt/adr/Detection'); "
+                "assert (root / 'guardrail/adr_agent/adr_baseline.py').is_file(); "
+                "sys.path.insert(0, str(root)); "
+                "from guardrail.adr_agent.adr_baseline import ADRBaseline"
+            ),
+        ],
+        workspace_root,
+    )
+    return probe.returncode == 0
+
+
 def _effective_build_args(cfg: Any) -> dict[str, str]:
     build_args = {
         str(key): str(value)
@@ -78,6 +100,8 @@ def _effective_build_args(cfg: Any) -> dict[str, str]:
     }
     if _agentspec_required(cfg):
         build_args["INSTALL_AGENTSPEC"] = "true"
+    if getattr(getattr(cfg, "adr", None), "enabled", False):
+        build_args["INSTALL_ADR"] = "true"
     return build_args
 
 
@@ -90,7 +114,12 @@ def _ensure_image(cfg: Any, workspace_root: Path) -> None:
         and _agentspec_required(cfg)
         and not _image_has_agentspec(image, workspace_root)
     )
-    if image_exists and not agentspec_missing:
+    adr_missing = (
+        image_exists
+        and getattr(getattr(cfg, "adr", None), "enabled", False)
+        and not _image_has_adr(image, workspace_root)
+    )
+    if image_exists and not agentspec_missing and not adr_missing:
         return
     if not bool(cfg.container.auto_build):
         if agentspec_missing:
@@ -98,6 +127,12 @@ def _ensure_image(cfg: Any, workspace_root: Path) -> None:
                 f"Container image {image!r} does not include the enabled AgentSpec "
                 "runtime and container.auto_build is disabled. Build it with "
                 "--build-arg INSTALL_AGENTSPEC=true or use a compatible image."
+            )
+        if adr_missing:
+            raise RuntimeError(
+                f"Container image {image!r} does not include the enabled ADR "
+                "runtime and container.auto_build is disabled. Build it with "
+                "--build-arg INSTALL_ADR=true or use a compatible image."
             )
         raise RuntimeError(
             f"Container image {image!r} was not found and container.auto_build is disabled. "
@@ -124,12 +159,33 @@ def _ensure_image(cfg: Any, workspace_root: Path) -> None:
             f"Container image {image!r} was built without an importable AgentSpec "
             "runtime. Ensure its Dockerfile honors INSTALL_AGENTSPEC=true."
         )
+    if getattr(getattr(cfg, "adr", None), "enabled", False) and not _image_has_adr(image, workspace_root):
+        raise RuntimeError(
+            f"Container image {image!r} was built without a working ADR "
+            "runtime. Ensure its Dockerfile honors INSTALL_ADR=true."
+        )
 
 
 def _container_name(run_dir: Path) -> str:
     slug = re.sub(r"[^a-zA-Z0-9_.-]+", "-", run_dir.name).strip("-._").lower()
     slug = slug or "run"
     return f"agent-scaffold-{slug}-{os.getpid()}"[:63].rstrip("-._")
+
+
+def _prepare_adr_container_config(cfg_path: str, run_dir: Path) -> str:
+    raw = load_config_mapping(cfg_path)
+    adr = raw.get("adr", {})
+    if isinstance(adr, bool):
+        adr = {"enabled": adr}
+    if not isinstance(adr, dict):
+        raise TypeError("adr must be a boolean or mapping")
+    adr["detection_root"] = "/opt/adr/Detection"
+    adr["python_executable"] = "/opt/adr-venv/bin/python"
+    raw["adr"] = adr
+    path = run_dir / "adr.container.yaml"
+    path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    path.chmod(0o600)
+    return str(path)
 
 
 def _container_pid(name: str, workspace_root: Path) -> int:
@@ -191,6 +247,9 @@ def run_once_in_container(
     if not image_ready:
         _ensure_image(cfg, workspace_root)
 
+    if getattr(getattr(cfg, "adr", None), "enabled", False):
+        cfg_path = _prepare_adr_container_config(cfg_path, run_dir)
+
     container_workdir = str(cfg.container.workdir).rstrip("/") or "/workspace"
     config_in_container = _workspace_container_path(Path(cfg_path), workspace_root, container_workdir)
     run_dir_in_container = _workspace_container_path(run_dir, workspace_root, container_workdir)
@@ -219,6 +278,8 @@ def run_once_in_container(
 
     name = _container_name(run_dir)
     cmd = ["docker", "run", "-d", "--name", name]
+    if getattr(getattr(cfg, "adr", None), "enabled", False):
+        run_as_host_user = True
     if run_as_host_user:
         cmd.extend(["--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/tmp"])
     network = str(cfg.container.network or "").strip()
@@ -251,6 +312,15 @@ def run_once_in_container(
     )
     if progent_api_key_env and progent_api_key_env not in env_names:
         env_names.append(progent_api_key_env)
+    janus_api_key_env = str(
+        getattr(getattr(cfg, "janus", None), "api_key_env", "") or ""
+    )
+    if janus_api_key_env and janus_api_key_env not in env_names:
+        env_names.append(janus_api_key_env)
+    if getattr(getattr(cfg, "adr", None), "enabled", False):
+        for name in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
+            if name not in env_names:
+                env_names.append(name)
     scenario_api_key_env = str(
         getattr(cfg.agentguard.scenario_compiler, "api_key_env", "") or ""
     )
