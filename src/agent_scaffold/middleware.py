@@ -305,6 +305,10 @@ def build_middleware_manager(cfg: AppConfig) -> MiddlewareManager:
         from .janus import JanusMiddleware
 
         middlewares.append(JanusMiddleware(cfg))
+    if cfg.stepguard.enabled:
+        from .stepguard import StepGuardMiddleware
+
+        middlewares.append(StepGuardMiddleware(cfg))
     if cfg.adr.enabled:
         from .adr import ADRMiddleware
 
@@ -338,6 +342,11 @@ def build_middleware_manager(cfg: AppConfig) -> MiddlewareManager:
 
         # Run last so it scans the effective output and its result isolation wins.
         middlewares.append(LlamaFirewallMiddleware(cfg))
+    if cfg.safeagent.enabled:
+        from .safeagent import SafeAgentMiddleware
+
+        # Enforce the Core's decision on the effective values from earlier guards.
+        middlewares.append(SafeAgentMiddleware(cfg))
     return MiddlewareManager(middlewares)
 
 
@@ -347,4 +356,6 @@ def output_revision_limit(cfg: AppConfig) -> int:
         limits.append(max(0, cfg.agentguard.max_steps - 1))
     if cfg.agentdog.enabled and cfg.agentdog.mode == "revise":
         limits.append(cfg.agentdog.max_revisions)
+    if cfg.safeagent.enabled:
+        limits.append(cfg.safeagent.max_replans)
     return max(limits)

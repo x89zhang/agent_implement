@@ -51,6 +51,7 @@ try:
     from .nodes import _flush_trace_snapshot, build_initial_messages
     from .planner import initialize_plan
     from .pro2guard.generator import compile_pro2guard_policy
+    from .safeagent.generator import compile_safeagent_rules
     from .skills import load_enabled_skills, validate_skill_tools
     from .tools import (
         augment_task_with_research_context,
@@ -110,6 +111,7 @@ except ImportError:  # Fallback when executed as a script
     from agent_scaffold.nodes import _flush_trace_snapshot, build_initial_messages
     from agent_scaffold.planner import initialize_plan
     from agent_scaffold.pro2guard.generator import compile_pro2guard_policy
+    from agent_scaffold.safeagent.generator import compile_safeagent_rules
     from agent_scaffold.skills import load_enabled_skills, validate_skill_tools
     from agent_scaffold.tools import (
         augment_task_with_research_context,
@@ -351,6 +353,12 @@ def run_once(
         run_dir,
         user_input=user_input or "",
     )
+    safeagent_generation = compile_safeagent_rules(
+        cfg,
+        task,
+        run_dir,
+        user_input=user_input or "",
+    )
     graph = build_graph(cfg)
     initial_messages = [{"role": "user", "content": task}] if task else []
     input_messages = [{"role": "user", "content": user_input}] if user_input else []
@@ -385,6 +393,7 @@ def run_once(
         ("pro2guard_policy_generate", pro2guard_generation),
         ("agentspec_rule_generate", agentspec_generation),
         ("agentguard_scenario_compile", agentguard_scenario),
+        ("safeagent_rule_generate", safeagent_generation),
     )
     for step_name, generated in generation_steps:
         if generated.enabled:
@@ -414,6 +423,12 @@ def run_once(
         "_janus_user_request": "\n\n".join(
             part for part in (task, user_input or "") if part
         ),
+        "_stepguard_user_request": "\n\n".join(
+            part for part in (task, user_input or "") if part
+        ),
+        "_safeagent_user_request": "\n\n".join(
+            part for part in (task, user_input or "") if part
+        ),
         "_adr_user_request": "\n\n".join(
             part for part in (task, user_input or "") if part
         ),
@@ -441,6 +456,18 @@ def run_once(
                 "enabled": bool(cfg.janus.enabled),
                 "mode": cfg.janus.mode,
                 "status": "pending" if cfg.janus.enabled else "disabled",
+                "event_count": 0,
+            },
+            "stepguard": {
+                "enabled": bool(cfg.stepguard.enabled),
+                "mode": cfg.stepguard.mode,
+                "status": "pending" if cfg.stepguard.enabled else "disabled",
+                "event_count": 0,
+            },
+            "safeagent": {
+                "enabled": bool(cfg.safeagent.enabled),
+                "mode": cfg.safeagent.mode,
+                "status": "pending" if cfg.safeagent.enabled else "disabled",
                 "event_count": 0,
             },
             "adr": {

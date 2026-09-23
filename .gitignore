@@ -9,6 +9,7 @@
 !requirements-hermes-bridge.txt
 !requirements-asb-bridge.txt
 !requirements-progent.txt
+!requirements-safeagent.txt
 !requirements-adr.txt
 !agents/hermes/asb-poisoning.txt
 *.md
@@ -19,9 +20,12 @@ paper/*
 legacy/*
 jobs/*
 tests/
-!tests/
-tests/*
-!tests/test_adr.py
-!tests/test_janus.py
+src/agent_scaffold/adr/README.rst
+src/agent_scaffold/janus/README.rst
+src/agent_scaffold/stepguard/README.rst
+src/agent_scaffold/stepguard/test_stepguard.py
+src/agent_scaffold/safeagent/README.rst
+src/agent_scaffold/safeagent/*.example.yaml
+src/agent_scaffold/safeagent/test_*.py
 logs_other_proj/
 runtime/venvs/

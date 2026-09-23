@@ -93,6 +93,15 @@ def _image_has_adr(image: str, workspace_root: Path) -> bool:
     return probe.returncode == 0
 
 
+def _image_has_safeagent(image: str, workspace_root: Path) -> bool:
+    probe = _run_checked(
+        ["docker", "run", "--rm", "--network", "none", "--entrypoint", "python",
+         image, "-c", "import fastmcp"],
+        workspace_root,
+    )
+    return probe.returncode == 0
+
+
 def _effective_build_args(cfg: Any) -> dict[str, str]:
     build_args = {
         str(key): str(value)
@@ -102,6 +111,8 @@ def _effective_build_args(cfg: Any) -> dict[str, str]:
         build_args["INSTALL_AGENTSPEC"] = "true"
     if getattr(getattr(cfg, "adr", None), "enabled", False):
         build_args["INSTALL_ADR"] = "true"
+    if getattr(getattr(cfg, "safeagent", None), "enabled", False):
+        build_args["INSTALL_SAFEAGENT"] = "true"
     return build_args
 
 
@@ -119,7 +130,12 @@ def _ensure_image(cfg: Any, workspace_root: Path) -> None:
         and getattr(getattr(cfg, "adr", None), "enabled", False)
         and not _image_has_adr(image, workspace_root)
     )
-    if image_exists and not agentspec_missing and not adr_missing:
+    safeagent_missing = (
+        image_exists
+        and getattr(getattr(cfg, "safeagent", None), "enabled", False)
+        and not _image_has_safeagent(image, workspace_root)
+    )
+    if image_exists and not agentspec_missing and not adr_missing and not safeagent_missing:
         return
     if not bool(cfg.container.auto_build):
         if agentspec_missing:
@@ -133,6 +149,11 @@ def _ensure_image(cfg: Any, workspace_root: Path) -> None:
                 f"Container image {image!r} does not include the enabled ADR "
                 "runtime and container.auto_build is disabled. Build it with "
                 "--build-arg INSTALL_ADR=true or use a compatible image."
+            )
+        if safeagent_missing:
+            raise RuntimeError(
+                f"Container image {image!r} lacks the SafeAgent MCP client. "
+                "Build it with --build-arg INSTALL_SAFEAGENT=true."
             )
         raise RuntimeError(
             f"Container image {image!r} was not found and container.auto_build is disabled. "
@@ -317,6 +338,21 @@ def run_once_in_container(
     )
     if janus_api_key_env and janus_api_key_env not in env_names:
         env_names.append(janus_api_key_env)
+    stepguard_api_key_env = str(
+        getattr(getattr(cfg, "stepguard", None), "api_key_env", "") or ""
+    )
+    if stepguard_api_key_env and stepguard_api_key_env not in env_names:
+        env_names.append(stepguard_api_key_env)
+    safeagent_api_key_env = str(
+        getattr(getattr(cfg, "safeagent", None), "api_key_env", "") or ""
+    )
+    if safeagent_api_key_env and safeagent_api_key_env not in env_names:
+        env_names.append(safeagent_api_key_env)
+    safeagent_generator_key_env = str(
+        getattr(getattr(getattr(cfg, "safeagent", None), "generator", None), "api_key_env", "") or ""
+    )
+    if safeagent_generator_key_env and safeagent_generator_key_env not in env_names:
+        env_names.append(safeagent_generator_key_env)
     if getattr(getattr(cfg, "adr", None), "enabled", False):
         for name in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
             if name not in env_names:

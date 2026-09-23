@@ -136,6 +136,54 @@ class JanusConfig:
 
 
 @dataclass
+class StepGuardConfig:
+    enabled: bool = False
+    mode: str = "block"
+    fail_closed: bool = True
+    base_url: str = ""
+    model: str = "ninty-seven/StepGuard"
+    api_key: str = ""
+    api_key_env: str = "STEPGUARD_API_KEY"
+    timeout_seconds: float = 120.0
+    temperature: float = 0.0
+    max_tokens: int = 1024
+    confidence_threshold: float = 0.5
+    max_history_chars: int = 40000
+    max_replans: int = 3
+    audit_final: bool = True
+    replacement_message: str = "The response was withheld by StepGuard."
+
+
+@dataclass
+class SafeAgentGeneratorConfig:
+    enabled: bool = True
+    max_attempts: int = 2
+    max_focus_dimensions: int = 4
+    max_restricted_tools: int = 10
+    fail_closed: bool = False
+    provider: str = ""
+    model: str = ""
+    temperature: float | None = None
+    base_url: str = ""
+    api_key_env: str = ""
+    request_timeout: int | None = None
+
+
+@dataclass
+class SafeAgentConfig:
+    enabled: bool = False
+    mode: str = "block"
+    fail_closed: bool = True
+    mcp_url: str = "http://127.0.0.1:8000/mcp"
+    api_key_env: str = "SAFEAGENT_MCP_API_KEY"
+    timeout_seconds: float = 60.0
+    developer_config_path: str = ""
+    runtime_config_path: str = ""
+    max_replans: int = 1
+    generator: SafeAgentGeneratorConfig = field(default_factory=SafeAgentGeneratorConfig)
+
+
+@dataclass
 class ADRConfig:
     enabled: bool = False
     mode: str = "monitor"
@@ -446,6 +494,8 @@ class AppConfig:
     aegis: AegisConfig = field(default_factory=AegisConfig)
     progent: ProgentConfig = field(default_factory=ProgentConfig)
     janus: JanusConfig = field(default_factory=JanusConfig)
+    stepguard: StepGuardConfig = field(default_factory=StepGuardConfig)
+    safeagent: SafeAgentConfig = field(default_factory=SafeAgentConfig)
     adr: ADRConfig = field(default_factory=ADRConfig)
     pro2guard: Pro2GuardConfig = field(default_factory=Pro2GuardConfig)
     agentspec: AgentSpecConfig = field(default_factory=AgentSpecConfig)
@@ -1168,6 +1218,96 @@ def load_config(path: str | Path) -> AppConfig:
     else:
         janus = JanusConfig()
 
+    safeagent_raw = raw.get("safeagent", {}) or {}
+    if isinstance(safeagent_raw, bool):
+        if safeagent_raw:
+            raise ValueError("safeagent requires developer_config_path and runtime_config_path")
+        safeagent = SafeAgentConfig(enabled=safeagent_raw)
+    elif isinstance(safeagent_raw, dict):
+        if safeagent_raw.get("api_key"):
+            raise ValueError("safeagent.api_key must not be stored in YAML; use api_key_env")
+        generator_raw = safeagent_raw.get("generator", True)
+        if isinstance(generator_raw, bool):
+            safeagent_generator = SafeAgentGeneratorConfig(enabled=generator_raw)
+        elif isinstance(generator_raw, dict):
+            generator_llm_raw = generator_raw.get("llm", {}) or {}
+            if not isinstance(generator_llm_raw, dict):
+                raise TypeError("safeagent.generator.llm must be a mapping")
+            if generator_llm_raw.get("api_key") or generator_raw.get("api_key"):
+                raise ValueError("safeagent.generator.llm.api_key must not be stored in YAML; use api_key_env")
+            safeagent_generator = SafeAgentGeneratorConfig(
+                enabled=bool(generator_raw.get("enabled", True)),
+                max_attempts=int(generator_raw.get("max_attempts", 2)),
+                max_focus_dimensions=int(generator_raw.get("max_focus_dimensions", 4)),
+                max_restricted_tools=int(generator_raw.get("max_restricted_tools", 10)),
+                fail_closed=bool(generator_raw.get("fail_closed", False)),
+                provider=str(generator_llm_raw.get("provider", "")).lower(),
+                model=str(generator_llm_raw.get("model", "")),
+                temperature=(float(generator_llm_raw["temperature"]) if "temperature" in generator_llm_raw else None),
+                base_url=str(generator_llm_raw.get("base_url", "")),
+                api_key_env=str(generator_llm_raw.get("api_key_env", "")),
+                request_timeout=_optional_int(generator_llm_raw.get("request_timeout"), None),
+            )
+        else:
+            raise TypeError("safeagent.generator must be a boolean or mapping")
+        safeagent = SafeAgentConfig(
+            enabled=bool(safeagent_raw.get("enabled", False)),
+            mode=str(safeagent_raw.get("mode", "block")).lower(),
+            fail_closed=bool(safeagent_raw.get("fail_closed", True)),
+            mcp_url=str(safeagent_raw.get("mcp_url", "http://127.0.0.1:8000/mcp")),
+            api_key_env=str(safeagent_raw.get("api_key_env", "SAFEAGENT_MCP_API_KEY")),
+            timeout_seconds=float(safeagent_raw.get("timeout_seconds", 60.0)),
+            developer_config_path=str(safeagent_raw.get("developer_config_path", "")),
+            runtime_config_path=str(safeagent_raw.get("runtime_config_path", "")),
+            max_replans=int(safeagent_raw.get("max_replans", 1)),
+            generator=safeagent_generator,
+        )
+        if safeagent.mode not in {"block", "warn", "monitor"}:
+            raise ValueError("safeagent.mode must be one of: block, warn, monitor")
+        if safeagent.timeout_seconds <= 0 or safeagent.max_replans < 0:
+            raise ValueError("safeagent timeout must be positive and max_replans non-negative")
+        if safeagent.enabled and (not safeagent.developer_config_path or not safeagent.runtime_config_path):
+            raise ValueError("safeagent requires developer_config_path and runtime_config_path")
+        if min(safeagent.generator.max_attempts, safeagent.generator.max_focus_dimensions, safeagent.generator.max_restricted_tools) < 1:
+            raise ValueError("safeagent.generator limits must be positive")
+    else:
+        raise TypeError("safeagent must be a boolean or mapping")
+
+    stepguard_raw = raw.get("stepguard", {}) or {}
+    if isinstance(stepguard_raw, bool):
+        stepguard = StepGuardConfig(enabled=stepguard_raw)
+    elif isinstance(stepguard_raw, dict):
+        if stepguard_raw.get("api_key"):
+            raise ValueError("stepguard.api_key must not be stored in YAML; use api_key_env")
+        stepguard = StepGuardConfig(
+            enabled=bool(stepguard_raw.get("enabled", False)),
+            mode=str(stepguard_raw.get("mode", "block")).lower(),
+            fail_closed=bool(stepguard_raw.get("fail_closed", True)),
+            base_url=str(stepguard_raw.get("base_url", "")),
+            model=str(stepguard_raw.get("model", "ninty-seven/StepGuard")),
+            api_key_env=str(stepguard_raw.get("api_key_env", "STEPGUARD_API_KEY")),
+            timeout_seconds=float(stepguard_raw.get("timeout_seconds", 120.0)),
+            temperature=float(stepguard_raw.get("temperature", 0.0)),
+            max_tokens=int(stepguard_raw.get("max_tokens", 1024)),
+            confidence_threshold=float(stepguard_raw.get("confidence_threshold", 0.5)),
+            max_history_chars=int(stepguard_raw.get("max_history_chars", 40000)),
+            max_replans=int(stepguard_raw.get("max_replans", 3)),
+            audit_final=bool(stepguard_raw.get("audit_final", True)),
+            replacement_message=str(stepguard_raw.get(
+                "replacement_message", "The response was withheld by StepGuard."
+            )),
+        )
+        if stepguard.mode not in {"block", "warn", "monitor"}:
+            raise ValueError("stepguard.mode must be one of: block, warn, monitor")
+        if not 0 <= stepguard.confidence_threshold <= 1:
+            raise ValueError("stepguard.confidence_threshold must be between 0 and 1")
+        if min(stepguard.timeout_seconds, stepguard.max_tokens, stepguard.max_history_chars) <= 0:
+            raise ValueError("StepGuard timeout and size limits must be positive")
+        if stepguard.max_replans < 0:
+            raise ValueError("stepguard.max_replans must be non-negative")
+    else:
+        raise TypeError("stepguard must be a boolean or mapping")
+
     adr_raw = raw.get("adr", {}) or {}
     if isinstance(adr_raw, bool):
         adr = ADRConfig(enabled=adr_raw)
@@ -1770,6 +1910,8 @@ def load_config(path: str | Path) -> AppConfig:
         aegis=aegis,
         progent=progent,
         janus=janus,
+        stepguard=stepguard,
+        safeagent=safeagent,
         adr=adr,
         pro2guard=pro2guard,
         agentspec=agentspec,

@@ -689,6 +689,8 @@ def _record_react_runtime_step(state: dict[str, Any], result: str) -> None:
             "aegis": event.get("aegis"),
             "progent": event.get("progent"),
             "janus": event.get("janus"),
+            "stepguard": event.get("stepguard"),
+            "safeagent": event.get("safeagent"),
             "adr": event.get("adr"),
             "pro2guard": event.get("pro2guard"),
             "agentspec": event.get("agentspec"),
@@ -710,6 +712,8 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
             state.pop("_last_aegis_decision", None)
             state.pop("_last_progent_decision", None)
             state.pop("_last_janus_decision", None)
+            state.pop("_last_stepguard_decision", None)
+            state.pop("_last_safeagent_decision", None)
             state.pop("_last_adr_decision", None)
             state.pop("_last_pro2guard_decision", None)
             state.pop("_last_agentspec_decision", None)
@@ -720,6 +724,8 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
         aegis_decision = None
         progent_decision = None
         janus_decision = None
+        stepguard_decision = None
+        safeagent_decision = None
         adr_decision = None
         pro2guard_decision = None
         agentspec_decision = None
@@ -730,6 +736,8 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
             aegis_decision = state.pop("_last_aegis_decision", None)
             progent_decision = state.pop("_last_progent_decision", None)
             janus_decision = state.pop("_last_janus_decision", None)
+            stepguard_decision = state.pop("_last_stepguard_decision", None)
+            safeagent_decision = state.pop("_last_safeagent_decision", None)
             state.pop("_last_adr_decision", None)
             pro2guard_decision = state.pop("_last_pro2guard_decision", None)
             agentspec_decision = state.pop("_last_agentspec_decision", None)
@@ -754,6 +762,8 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
                     "aegis": aegis_decision,
                     "progent": {"before": progent_decision, "after": state.pop("_last_progent_decision", None)},
                     "janus": janus_decision,
+                    "stepguard": stepguard_decision,
+                    "safeagent": {"before": safeagent_decision, "after": state.pop("_last_safeagent_decision", None)},
                     "adr": state.pop("_last_adr_decision", None),
                     "pro2guard": pro2guard_decision,
                     "agentspec": agentspec_decision,
@@ -799,6 +809,8 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
                     "aegis": aegis_decision,
                     "progent": {"before": progent_decision, "after": state.pop("_last_progent_decision", None)},
                     "janus": janus_decision,
+                    "stepguard": stepguard_decision,
+                    "safeagent": {"before": safeagent_decision, "after": state.pop("_last_safeagent_decision", None)},
                     "adr": state.pop("_last_adr_decision", None),
                     "pro2guard": pro2guard_decision,
                     "agentspec": agentspec_decision,
@@ -819,6 +831,8 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
                 "aegis": aegis_decision,
                 "progent": {"before": progent_decision, "after": state.pop("_last_progent_decision", None)},
                 "janus": janus_decision,
+                "stepguard": stepguard_decision,
+                "safeagent": {"before": safeagent_decision, "after": state.pop("_last_safeagent_decision", None)},
                 "adr": state.pop("_last_adr_decision", None),
                 "pro2guard": pro2guard_decision,
                 "agentspec": agentspec_decision,
@@ -1451,6 +1465,8 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                 step["aegis"] = guard_events[idx].get("aegis")
                 step["progent"] = guard_events[idx].get("progent")
                 step["janus"] = guard_events[idx].get("janus")
+                step["stepguard"] = guard_events[idx].get("stepguard")
+                step["safeagent"] = guard_events[idx].get("safeagent")
                 step["adr"] = guard_events[idx].get("adr")
                 step["pro2guard"] = guard_events[idx].get("pro2guard")
                 step["agentspec"] = guard_events[idx].get("agentspec")
@@ -1468,6 +1484,8 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             aegis_decision = step.get("aegis")
             progent_decision = step.get("progent")
             janus_decision = step.get("janus")
+            stepguard_decision = step.get("stepguard")
+            safeagent_decision = step.get("safeagent")
             adr_decision = step.get("adr")
             pro2guard_decision = step.get("pro2guard")
             agentspec_decision = step.get("agentspec")
@@ -1509,6 +1527,8 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                         "aegis": aegis_decision,
                         "progent": progent_decision,
                         "janus": janus_decision,
+                        "stepguard": stepguard_decision,
+                        "safeagent": safeagent_decision,
                         "adr": adr_decision,
                         "pro2guard": pro2guard_decision,
                         "agentspec": agentspec_decision,
@@ -1534,6 +1554,8 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                         "aegis": aegis_decision,
                         "progent": progent_decision,
                         "janus": janus_decision,
+                        "stepguard": stepguard_decision,
+                        "safeagent": safeagent_decision,
                         "adr": adr_decision,
                         "pro2guard": pro2guard_decision,
                         "agentspec": agentspec_decision,

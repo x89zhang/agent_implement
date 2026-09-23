@@ -17,6 +17,8 @@ GUARDS = (
     "aegis",
     "progent",
     "janus",
+    "stepguard",
+    "safeagent",
     "adr",
     "pro2guard",
     "agentspec",
@@ -122,6 +124,8 @@ class GuardController:
             "_agentspec_user_request": task,
             "_progent_user_request": task,
             "_janus_user_request": task,
+            "_stepguard_user_request": task,
+            "_safeagent_user_request": task,
             "_adr_user_request": task,
             "_trace_persist": {
                 "output_path": str(directory / "defenses.json"),
@@ -133,6 +137,7 @@ class GuardController:
         from ..agentguard.scenario import compile_agentguard_scenario
         from ..agentspec.generator import compile_agentspec_rules
         from ..pro2guard.generator import compile_pro2guard_policy
+        from ..safeagent.generator import compile_safeagent_rules
 
         existing = {t.name: t for t in self.cfg.tools}
         self.cfg.tools = [
@@ -145,6 +150,10 @@ class GuardController:
         self.state["_progent_tools"] = copy.deepcopy(payload["tools"])
         self.state["_progent_user_request"] = generation_task
         self.state["_janus_user_request"] = generation_task
+        self.state["_stepguard_user_request"] = generation_task
+        self.state["_stepguard_tools"] = copy.deepcopy(payload["tools"])
+        self.state["_safeagent_user_request"] = generation_task
+        self.state["_safeagent_tools"] = copy.deepcopy(payload["tools"])
         self.state["_adr_user_request"] = generation_task
         self.state["_toolsafe_user_request"] = self.task
         self.state["_agentspec_user_request"] = self.task
@@ -152,6 +161,7 @@ class GuardController:
             compile_pro2guard_policy,
             compile_agentspec_rules,
             compile_agentguard_scenario,
+            compile_safeagent_rules,
         ):
             result = compiler(
                 self.cfg, generation_task, self.directory, user_input=""

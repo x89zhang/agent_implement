@@ -323,6 +323,8 @@ def tool_node(
         state.pop("_last_aegis_decision", None)
         state.pop("_last_progent_decision", None)
         state.pop("_last_janus_decision", None)
+        state.pop("_last_stepguard_decision", None)
+        state.pop("_last_safeagent_decision", None)
         state.pop("_last_adr_decision", None)
         state.pop("_last_pro2guard_decision", None)
         state.pop("_last_agentspec_decision", None)
@@ -335,6 +337,8 @@ def tool_node(
         aegis_decision = state.pop("_last_aegis_decision", None)
         progent_decision = state.pop("_last_progent_decision", None)
         janus_decision = state.pop("_last_janus_decision", None)
+        stepguard_decision = state.pop("_last_stepguard_decision", None)
+        safeagent_decision = state.pop("_last_safeagent_decision", None)
         adr_decision = state.pop("_last_adr_decision", None)
         pro2guard_decision = state.pop("_last_pro2guard_decision", None)
         agentspec_decision = state.pop("_last_agentspec_decision", None)
@@ -365,6 +369,9 @@ def tool_node(
         agentguard_after = state.get("_last_agentguard_decision")
         agentguard_decision = {"before": agentguard_decision, "after": agentguard_after}
         progent_after = state.pop("_last_progent_decision", None)
+        safeagent_after = state.pop("_last_safeagent_decision", None)
+        if safeagent_after is not None:
+            safeagent_decision = {"before": safeagent_decision, "after": safeagent_after}
         adr_decision = state.pop("_last_adr_decision", None)
         if progent_after is not None:
             progent_decision = {"before": progent_decision, "after": progent_after}
@@ -392,6 +399,8 @@ def tool_node(
                 "aegis": aegis_decision,
                 "progent": progent_decision,
                 "janus": janus_decision,
+                "stepguard": stepguard_decision,
+                "safeagent": safeagent_decision,
                 "adr": adr_decision,
                 "pro2guard": pro2guard_decision,
                 "agentspec": agentspec_decision,
@@ -414,6 +423,8 @@ def tool_node(
                 "aegis": aegis_decision,
                 "progent": progent_decision,
                 "janus": janus_decision,
+                "stepguard": stepguard_decision,
+                "safeagent": safeagent_decision,
                 "adr": adr_decision,
                 "pro2guard": pro2guard_decision,
                 "agentspec": agentspec_decision,
