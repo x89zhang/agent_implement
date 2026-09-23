@@ -322,6 +322,7 @@ def tool_node(
         requested_name, requested_payload = call
         state.pop("_last_aegis_decision", None)
         state.pop("_last_progent_decision", None)
+        state.pop("_last_clawsentry_decision", None)
         state.pop("_last_janus_decision", None)
         state.pop("_last_stepguard_decision", None)
         state.pop("_last_safeagent_decision", None)
@@ -336,6 +337,7 @@ def tool_node(
             state["_terminate_after_tool"] = True
         aegis_decision = state.pop("_last_aegis_decision", None)
         progent_decision = state.pop("_last_progent_decision", None)
+        clawsentry_decision = state.pop("_last_clawsentry_decision", None)
         janus_decision = state.pop("_last_janus_decision", None)
         stepguard_decision = state.pop("_last_stepguard_decision", None)
         safeagent_decision = state.pop("_last_safeagent_decision", None)
@@ -369,12 +371,15 @@ def tool_node(
         agentguard_after = state.get("_last_agentguard_decision")
         agentguard_decision = {"before": agentguard_decision, "after": agentguard_after}
         progent_after = state.pop("_last_progent_decision", None)
+        clawsentry_after = state.pop("_last_clawsentry_decision", None)
         safeagent_after = state.pop("_last_safeagent_decision", None)
         if safeagent_after is not None:
             safeagent_decision = {"before": safeagent_decision, "after": safeagent_after}
         adr_decision = state.pop("_last_adr_decision", None)
         if progent_after is not None:
             progent_decision = {"before": progent_decision, "after": progent_after}
+        if clawsentry_after is not None:
+            clawsentry_decision = {"before": clawsentry_decision, "after": clawsentry_after}
         state["messages"].append({"role": "assistant", "content": f"TOOL_RESULT: {result}"})
         state["tool_call"] = None
         state["iterations"] = int(state.get("iterations", 0)) + 1
@@ -398,6 +403,7 @@ def tool_node(
                 "usage": usage,
                 "aegis": aegis_decision,
                 "progent": progent_decision,
+                "clawsentry": clawsentry_decision,
                 "janus": janus_decision,
                 "stepguard": stepguard_decision,
                 "safeagent": safeagent_decision,
@@ -422,6 +428,7 @@ def tool_node(
                 "usage": usage,
                 "aegis": aegis_decision,
                 "progent": progent_decision,
+                "clawsentry": clawsentry_decision,
                 "janus": janus_decision,
                 "stepguard": stepguard_decision,
                 "safeagent": safeagent_decision,

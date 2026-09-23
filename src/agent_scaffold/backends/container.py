@@ -13,7 +13,10 @@ from pathlib import Path
 import yaml
 
 from ..config import load_config_mapping
-from ..container_runtime import _ensure_image, _run_checked, run_once_in_container
+from ..container_runtime import (
+    _clawsentry_managed, _ensure_image, _image_has_clawsentry,
+    _run_checked, run_once_in_container,
+)
 from ..skills import load_enabled_skills
 
 
@@ -50,6 +53,8 @@ def ensure_hermes_image(cfg, workspace):
     ):
         if getattr(cfg, section).enabled:
             args[argument] = "true"
+    if _clawsentry_managed(cfg):
+        args["INSTALL_CLAWSENTRY"] = "true"
     dockerfile = Path(cfg.container.dockerfile)
     if not dockerfile.is_absolute():
         dockerfile = workspace / dockerfile
@@ -69,7 +74,8 @@ def ensure_hermes_image(cfg, workspace):
     digest.update(commit.encode())
     image = cfg.container.image + "-hermes-" + digest.hexdigest()[:12]
     if _run_checked(["docker", "image", "inspect", image], workspace).returncode == 0:
-        return image
+        if not _clawsentry_managed(cfg) or _image_has_clawsentry(image, workspace):
+            return image
     if not cfg.container.auto_build:
         raise RuntimeError(
             f"Hermes image {image} missing and container.auto_build is false"

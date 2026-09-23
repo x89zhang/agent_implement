@@ -9,6 +9,7 @@
 !requirements-hermes-bridge.txt
 !requirements-asb-bridge.txt
 !requirements-progent.txt
+!requirements-clawsentry.txt
 !requirements-safeagent.txt
 !requirements-adr.txt
 !agents/hermes/asb-poisoning.txt
@@ -27,5 +28,7 @@ src/agent_scaffold/stepguard/test_stepguard.py
 src/agent_scaffold/safeagent/README.rst
 src/agent_scaffold/safeagent/*.example.yaml
 src/agent_scaffold/safeagent/test_*.py
+src/agent_scaffold/clawsentry/README.rst
+src/agent_scaffold/clawsentry/test_*.py
 logs_other_proj/
 runtime/venvs/

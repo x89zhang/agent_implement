@@ -116,6 +116,20 @@ class ProgentConfig:
 
 
 @dataclass
+class ClawSentryConfig:
+    enabled: bool = False
+    auto_start: bool = True
+    mode: str = "block"
+    fail_closed: bool = True
+    base_url: str = "http://127.0.0.1:8080"
+    api_key_env: str = "CS_AUTH_TOKEN"
+    timeout_seconds: float = 5.0
+    decision_tier: str = "L1"
+    observe_tool_result: bool = True
+    max_result_chars: int = 20000
+
+
+@dataclass
 class JanusConfig:
     enabled: bool = False
     mode: str = "block"
@@ -493,6 +507,7 @@ class AppConfig:
     security: SecurityConfig = field(default_factory=SecurityConfig)
     aegis: AegisConfig = field(default_factory=AegisConfig)
     progent: ProgentConfig = field(default_factory=ProgentConfig)
+    clawsentry: ClawSentryConfig = field(default_factory=ClawSentryConfig)
     janus: JanusConfig = field(default_factory=JanusConfig)
     stepguard: StepGuardConfig = field(default_factory=StepGuardConfig)
     safeagent: SafeAgentConfig = field(default_factory=SafeAgentConfig)
@@ -1185,6 +1200,35 @@ def load_config(path: str | Path) -> AppConfig:
             raise ValueError("progent.mode must be one of: block, warn, monitor")
     else:
         progent = ProgentConfig()
+
+    clawsentry_raw = raw.get("clawsentry", {}) or {}
+    if isinstance(clawsentry_raw, bool):
+        clawsentry = ClawSentryConfig(enabled=clawsentry_raw)
+    elif isinstance(clawsentry_raw, dict):
+        if clawsentry_raw.get("api_key"):
+            raise ValueError("clawsentry.api_key must not be stored in YAML; use api_key_env")
+        clawsentry = ClawSentryConfig(
+            enabled=bool(clawsentry_raw.get("enabled", False)),
+            auto_start=bool(clawsentry_raw.get("auto_start", True)),
+            mode=str(clawsentry_raw.get("mode", "block")).lower(),
+            fail_closed=bool(clawsentry_raw.get("fail_closed", True)),
+            base_url=str(clawsentry_raw.get("base_url", "http://127.0.0.1:8080")),
+            api_key_env=str(clawsentry_raw.get("api_key_env", "CS_AUTH_TOKEN")),
+            timeout_seconds=float(clawsentry_raw.get("timeout_seconds", 5.0)),
+            decision_tier=str(clawsentry_raw.get("decision_tier", "L1")).upper(),
+            observe_tool_result=bool(clawsentry_raw.get("observe_tool_result", True)),
+            max_result_chars=int(clawsentry_raw.get("max_result_chars", 20000)),
+        )
+        if clawsentry.mode not in {"block", "warn", "monitor"}:
+            raise ValueError("clawsentry.mode must be one of: block, warn, monitor")
+        if clawsentry.decision_tier not in {"L1", "L2", "L3"}:
+            raise ValueError("clawsentry.decision_tier must be L1, L2, or L3")
+        if clawsentry.timeout_seconds <= 0 or clawsentry.max_result_chars <= 0:
+            raise ValueError("ClawSentry timeout and result limit must be positive")
+        if not clawsentry.base_url.startswith(("http://", "https://")):
+            raise ValueError("clawsentry.base_url must be an HTTP(S) URL")
+    else:
+        raise TypeError("clawsentry must be a boolean or mapping")
 
     janus_raw = raw.get("janus", {}) or {}
     if isinstance(janus_raw, bool):
@@ -1909,6 +1953,7 @@ def load_config(path: str | Path) -> AppConfig:
         security=security,
         aegis=aegis,
         progent=progent,
+        clawsentry=clawsentry,
         janus=janus,
         stepguard=stepguard,
         safeagent=safeagent,

@@ -301,6 +301,10 @@ def build_middleware_manager(cfg: AppConfig) -> MiddlewareManager:
         from .progent import ProgentMiddleware
 
         middlewares.append(ProgentMiddleware(cfg))
+    if cfg.clawsentry.enabled:
+        from .clawsentry import ClawSentryMiddleware
+
+        middlewares.append(ClawSentryMiddleware(cfg))
     if cfg.janus.enabled:
         from .janus import JanusMiddleware
 

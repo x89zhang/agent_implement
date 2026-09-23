@@ -9,6 +9,7 @@ import time
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -102,6 +103,20 @@ def _image_has_safeagent(image: str, workspace_root: Path) -> bool:
     return probe.returncode == 0
 
 
+def _clawsentry_managed(cfg: Any) -> bool:
+    settings = getattr(cfg, "clawsentry", None)
+    return bool(getattr(settings, "enabled", False) and getattr(settings, "auto_start", True))
+
+
+def _image_has_clawsentry(image: str, workspace_root: Path) -> bool:
+    probe = _run_checked(
+        ["docker", "run", "--rm", "--network", "none", "--entrypoint", "/opt/clawsentry-venv/bin/python",
+         image, "-c", "from importlib.metadata import version; assert version('clawsentry') == '0.8.7'"],
+        workspace_root,
+    )
+    return probe.returncode == 0
+
+
 def _effective_build_args(cfg: Any) -> dict[str, str]:
     build_args = {
         str(key): str(value)
@@ -113,6 +128,8 @@ def _effective_build_args(cfg: Any) -> dict[str, str]:
         build_args["INSTALL_ADR"] = "true"
     if getattr(getattr(cfg, "safeagent", None), "enabled", False):
         build_args["INSTALL_SAFEAGENT"] = "true"
+    if _clawsentry_managed(cfg):
+        build_args["INSTALL_CLAWSENTRY"] = "true"
     return build_args
 
 
@@ -135,7 +152,11 @@ def _ensure_image(cfg: Any, workspace_root: Path) -> None:
         and getattr(getattr(cfg, "safeagent", None), "enabled", False)
         and not _image_has_safeagent(image, workspace_root)
     )
-    if image_exists and not agentspec_missing and not adr_missing and not safeagent_missing:
+    clawsentry_missing = (
+        image_exists and _clawsentry_managed(cfg)
+        and not _image_has_clawsentry(image, workspace_root)
+    )
+    if image_exists and not any((agentspec_missing, adr_missing, safeagent_missing, clawsentry_missing)):
         return
     if not bool(cfg.container.auto_build):
         if agentspec_missing:
@@ -154,6 +175,11 @@ def _ensure_image(cfg: Any, workspace_root: Path) -> None:
             raise RuntimeError(
                 f"Container image {image!r} lacks the SafeAgent MCP client. "
                 "Build it with --build-arg INSTALL_SAFEAGENT=true."
+            )
+        if clawsentry_missing:
+            raise RuntimeError(
+                f"Container image {image!r} lacks ClawSentry 0.8.7. "
+                "Build it with --build-arg INSTALL_CLAWSENTRY=true."
             )
         raise RuntimeError(
             f"Container image {image!r} was not found and container.auto_build is disabled. "
@@ -184,6 +210,11 @@ def _ensure_image(cfg: Any, workspace_root: Path) -> None:
         raise RuntimeError(
             f"Container image {image!r} was built without a working ADR "
             "runtime. Ensure its Dockerfile honors INSTALL_ADR=true."
+        )
+    if _clawsentry_managed(cfg) and not _image_has_clawsentry(image, workspace_root):
+        raise RuntimeError(
+            f"Container image {image!r} was built without ClawSentry 0.8.7. "
+            "Ensure its Dockerfile honors INSTALL_CLAWSENTRY=true."
         )
 
 
@@ -265,6 +296,20 @@ def run_once_in_container(
     image_ready: bool = False,
     run_as_host_user: bool = False,
 ) -> dict[str, Any]:
+    if _clawsentry_managed(cfg):
+        endpoint = urlsplit(str(cfg.clawsentry.base_url))
+        if (
+            endpoint.scheme != "http"
+            or endpoint.hostname not in {"127.0.0.1", "localhost", "::1"}
+            or endpoint.path not in {"", "/"}
+            or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment
+        ):
+            raise ValueError(
+                "clawsentry.auto_start requires a loopback base_url without a path; "
+                "set auto_start: false for an external gateway"
+            )
+        if not cfg.clawsentry.api_key_env:
+            raise ValueError("clawsentry.auto_start requires a nonempty api_key_env")
     if not image_ready:
         _ensure_image(cfg, workspace_root)
 
@@ -333,6 +378,11 @@ def run_once_in_container(
     )
     if progent_api_key_env and progent_api_key_env not in env_names:
         env_names.append(progent_api_key_env)
+    clawsentry_api_key_env = str(
+        getattr(getattr(cfg, "clawsentry", None), "api_key_env", "") or ""
+    )
+    if clawsentry_api_key_env and clawsentry_api_key_env not in env_names:
+        env_names.append(clawsentry_api_key_env)
     janus_api_key_env = str(
         getattr(getattr(cfg, "janus", None), "api_key_env", "") or ""
     )
@@ -367,17 +417,21 @@ def run_once_in_container(
             # Let Docker copy the value from its own environment. Passing only
             # the name keeps credentials out of the process argument list.
             cmd.extend(["-e", env_name])
+    if _clawsentry_managed(cfg):
+        cmd.extend(["-e", f"AGENT_CLAWSENTRY_KEY_ENV={cfg.clawsentry.api_key_env}"])
     cmd.append(str(cfg.container.image))
-    cmd.extend(
-        [
+    agent_command = [
             sys.executable.split("/")[-1] if sys.executable else "python",
             "src/agent_scaffold/main.py",
             "--config",
             config_in_container,
             "--run-payload",
             f"{run_dir_in_container}/_container_payload.json",
-        ]
-    )
+    ]
+    if _clawsentry_managed(cfg):
+        cmd.extend(["python", "-m", "agent_scaffold.clawsentry.launcher", "--", *agent_command])
+    else:
+        cmd.extend(agent_command)
 
     observer: AgentSightObserver | None = None
     observer_stopped = False

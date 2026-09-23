@@ -38,6 +38,13 @@ RUN if [ "$INSTALL_PROGENT" = "true" ]; then \
       && pip install --no-cache-dir -r /tmp/requirements-progent.txt; \
     fi
 
+ARG INSTALL_CLAWSENTRY=false
+COPY requirements-clawsentry.txt /tmp/requirements-clawsentry.txt
+RUN if [ "$INSTALL_CLAWSENTRY" = "true" ]; then \
+      python -m venv /opt/clawsentry-venv \
+      && /opt/clawsentry-venv/bin/pip install --no-cache-dir -r /tmp/requirements-clawsentry.txt; \
+    fi
+
 # ADR Detection is a research artifact; install only its detector runtime in
 # an isolated environment, never its full benchmark dependency set.
 ARG INSTALL_ADR=false

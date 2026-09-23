@@ -420,6 +420,9 @@ def run_once(
         "_progent_user_request": "\n\n".join(
             part for part in (task, user_input or "") if part
         ),
+        "_clawsentry_user_request": "\n\n".join(
+            part for part in (task, user_input or "") if part
+        ),
         "_janus_user_request": "\n\n".join(
             part for part in (task, user_input or "") if part
         ),
@@ -450,6 +453,12 @@ def run_once(
                 "enabled": bool(cfg.progent.enabled),
                 "mode": cfg.progent.mode,
                 "status": "pending" if cfg.progent.enabled else "disabled",
+                "event_count": 0,
+            },
+            "clawsentry": {
+                "enabled": bool(cfg.clawsentry.enabled),
+                "mode": cfg.clawsentry.mode,
+                "status": "pending" if cfg.clawsentry.enabled else "disabled",
                 "event_count": 0,
             },
             "janus": {
