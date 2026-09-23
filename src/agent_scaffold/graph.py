@@ -689,6 +689,7 @@ def _record_react_runtime_step(state: dict[str, Any], result: str) -> None:
             "aegis": event.get("aegis"),
             "progent": event.get("progent"),
             "rope": event.get("rope"),
+            "melon": event.get("melon"),
             "airguard": event.get("airguard"),
             "clawsentry": event.get("clawsentry"),
             "janus": event.get("janus"),
@@ -715,6 +716,7 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
             state.pop("_last_aegis_decision", None)
             state.pop("_last_progent_decision", None)
             state.pop("_last_rope_decision", None)
+            state.pop("_last_melon_decision", None)
             state.pop("_last_airguard_decision", None)
             state.pop("_last_clawsentry_decision", None)
             state.pop("_last_janus_decision", None)
@@ -730,6 +732,7 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
         aegis_decision = None
         progent_decision = None
         rope_decision = None
+        melon_decision = None
         airguard_decision = None
         clawsentry_decision = None
         janus_decision = None
@@ -745,6 +748,7 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
             aegis_decision = state.pop("_last_aegis_decision", None)
             progent_decision = state.pop("_last_progent_decision", None)
             rope_decision = state.pop("_last_rope_decision", None)
+            melon_decision = state.pop("_last_melon_decision", None)
             airguard_decision = state.pop("_last_airguard_decision", None)
             clawsentry_decision = state.pop("_last_clawsentry_decision", None)
             janus_decision = state.pop("_last_janus_decision", None)
@@ -774,6 +778,7 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
                     "aegis": aegis_decision,
                     "progent": {"before": progent_decision, "after": state.pop("_last_progent_decision", None)},
                     "rope": {"before": rope_decision, "after": state.pop("_last_rope_decision", None)},
+                    "melon": melon_decision,
                     "airguard": {"before": airguard_decision, "after": state.pop("_last_airguard_decision", None)},
                     "clawsentry": {"before": clawsentry_decision, "after": state.pop("_last_clawsentry_decision", None)},
                     "janus": janus_decision,
@@ -824,6 +829,7 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
                     "aegis": aegis_decision,
                     "progent": {"before": progent_decision, "after": state.pop("_last_progent_decision", None)},
                     "rope": {"before": rope_decision, "after": state.pop("_last_rope_decision", None)},
+                    "melon": melon_decision,
                     "airguard": {"before": airguard_decision, "after": state.pop("_last_airguard_decision", None)},
                     "clawsentry": {"before": clawsentry_decision, "after": state.pop("_last_clawsentry_decision", None)},
                     "janus": janus_decision,
@@ -849,6 +855,7 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
                 "aegis": aegis_decision,
                 "progent": {"before": progent_decision, "after": state.pop("_last_progent_decision", None)},
                 "rope": {"before": rope_decision, "after": state.pop("_last_rope_decision", None)},
+                "melon": melon_decision,
                 "airguard": {"before": airguard_decision, "after": state.pop("_last_airguard_decision", None)},
                 "clawsentry": {"before": clawsentry_decision, "after": state.pop("_last_clawsentry_decision", None)},
                 "janus": janus_decision,
@@ -1486,6 +1493,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                 step["aegis"] = guard_events[idx].get("aegis")
                 step["progent"] = guard_events[idx].get("progent")
                 step["rope"] = guard_events[idx].get("rope")
+                step["melon"] = guard_events[idx].get("melon")
                 step["airguard"] = guard_events[idx].get("airguard")
                 step["clawsentry"] = guard_events[idx].get("clawsentry")
                 step["janus"] = guard_events[idx].get("janus")
@@ -1508,6 +1516,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             aegis_decision = step.get("aegis")
             progent_decision = step.get("progent")
             rope_decision = step.get("rope")
+            melon_decision = step.get("melon")
             airguard_decision = step.get("airguard")
             clawsentry_decision = step.get("clawsentry")
             janus_decision = step.get("janus")
@@ -1554,6 +1563,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                         "aegis": aegis_decision,
                         "progent": progent_decision,
                         "rope": rope_decision,
+                        "melon": melon_decision,
                         "airguard": airguard_decision,
                         "clawsentry": clawsentry_decision,
                         "janus": janus_decision,
@@ -1584,6 +1594,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                         "aegis": aegis_decision,
                         "progent": progent_decision,
                         "rope": rope_decision,
+                        "melon": melon_decision,
                         "airguard": airguard_decision,
                         "clawsentry": clawsentry_decision,
                         "janus": janus_decision,

@@ -37,6 +37,29 @@ aegis:
   enabled: false
   mode: monitor
   risk_threshold: HIGH
+melon:
+  enabled: false
+  # block stops the run on detection (upstream); warn/monitor only record it.
+  mode: block
+  fail_closed: true
+  # Cosine cut-off between the real call and masked-run calls (upstream: 0.8).
+  threshold: 0.8
+  # llm: paper rules (send_email/send_money) + LLM-generated comparison
+  # arguments for other tools; upstream: paper rules only, all args elsewhere.
+  projection_generation: llm
+  projections: {}
+  # Masked re-execution uses the agent model (top-level llm) unless overridden.
+  transport: auto
+  llm: {}
+  embedding:
+    model: text-embedding-3-large
+    api_key_env: OPENAI_API_KEY
+  generator:
+    enabled: true
+    context_mode: benign_only
+    max_attempts: 2
+    fail_closed: false
+
 pro2guard:
   enabled: true
   mode: monitor

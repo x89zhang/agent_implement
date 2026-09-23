@@ -495,6 +495,12 @@ def run_once(
                 "status": "pending" if cfg.rope.enabled else "disabled",
                 "event_count": 0,
             },
+            "melon": {
+                "enabled": bool(cfg.melon.enabled),
+                "mode": cfg.melon.mode,
+                "status": "pending" if cfg.melon.enabled else "disabled",
+                "event_count": 0,
+            },
             "clawsentry": {
                 "enabled": bool(cfg.clawsentry.enabled),
                 "mode": cfg.clawsentry.mode,

@@ -140,6 +140,57 @@ class RopeConfig:
 
 
 @dataclass
+class MelonModelConfig:
+    """Optional override of the top-level llm; empty fields inherit it."""
+
+    provider: str = ""
+    model: str = ""
+    temperature: float | None = None
+    base_url: str = ""
+    api_key: str = ""
+    api_key_env: str = ""
+    request_timeout: int | None = None
+
+
+@dataclass
+class MelonEmbeddingConfig:
+    model: str = "text-embedding-3-large"
+    # Empty base_url uses the OpenAI API; empty api_key_env reads OPENAI_API_KEY.
+    base_url: str = ""
+    api_key: str = ""
+    api_key_env: str = ""
+    request_timeout: int | None = 60
+
+
+@dataclass
+class MelonGeneratorConfig:
+    enabled: bool = True
+    context_mode: str = "benign_only"
+    max_attempts: int = 2
+    fail_closed: bool = False
+    llm: MelonModelConfig = field(default_factory=MelonModelConfig)
+
+
+@dataclass
+class MelonConfig:
+    enabled: bool = False
+    mode: str = "block"
+    fail_closed: bool = True
+    # Upstream compares tool-call embeddings with a hard-coded cosine cut-off of 0.8.
+    threshold: float = 0.8
+    # llm: upstream send_email/send_money rules + LLM rules for other tools;
+    # upstream: only the paper's hard-coded rules (all arguments for other tools).
+    projection_generation: str = "llm"
+    # Manual per-tool comparison arguments; they take priority over all sources.
+    projections: dict[str, list[str]] = field(default_factory=dict)
+    # auto, chat_completions or responses; used for the masked re-execution.
+    transport: str = "auto"
+    llm: MelonModelConfig = field(default_factory=MelonModelConfig)
+    embedding: MelonEmbeddingConfig = field(default_factory=MelonEmbeddingConfig)
+    generator: MelonGeneratorConfig = field(default_factory=MelonGeneratorConfig)
+
+
+@dataclass
 class AIRGuardGeneratorConfig:
     enabled: bool = True
     context_mode: str = "benign_only"
@@ -574,6 +625,7 @@ class AppConfig:
     aegis: AegisConfig = field(default_factory=AegisConfig)
     progent: ProgentConfig = field(default_factory=ProgentConfig)
     rope: RopeConfig = field(default_factory=RopeConfig)
+    melon: MelonConfig = field(default_factory=MelonConfig)
     airguard: AIRGuardConfig = field(default_factory=AIRGuardConfig)
     clawsentry: ClawSentryConfig = field(default_factory=ClawSentryConfig)
     janus: JanusConfig = field(default_factory=JanusConfig)
@@ -624,6 +676,84 @@ def _optional_int(value: Any, default: int) -> int | None:
     }:
         return None
     return int(value if value is not None else default)
+
+
+def _parse_melon_model(raw: Any, key: str) -> MelonModelConfig:
+    raw = raw or {}
+    if not isinstance(raw, dict):
+        raise TypeError(f"{key} must be a mapping")
+    if raw.get("api_key"):
+        raise ValueError(f"{key}.api_key must not be stored in YAML; use api_key_env")
+    key_env = str(raw.get("api_key_env", "") or "")
+    return MelonModelConfig(
+        provider=str(raw.get("provider", "") or "").lower(),
+        model=str(raw.get("model", "") or ""),
+        temperature=float(raw["temperature"]) if "temperature" in raw else None,
+        base_url=str(raw.get("base_url", "") or ""),
+        api_key=os.environ.get(key_env, "") if key_env else "",
+        api_key_env=key_env,
+        request_timeout=_optional_int(raw.get("request_timeout"), None),
+    )
+
+
+def _parse_melon(raw: Any) -> MelonConfig:
+    raw = raw or {}
+    if isinstance(raw, bool):
+        return MelonConfig(enabled=raw)
+    if not isinstance(raw, dict):
+        raise TypeError("melon must be a mapping")
+    projections = raw.get("projections", {}) or {}
+    if not isinstance(projections, dict) or not all(
+        isinstance(args, list) and all(isinstance(arg, str) for arg in args)
+        for args in projections.values()
+    ):
+        raise TypeError("melon.projections must map tool names to argument-name lists")
+    embedding_raw = raw.get("embedding", {}) or {}
+    if not isinstance(embedding_raw, dict):
+        raise TypeError("melon.embedding must be a mapping")
+    if embedding_raw.get("api_key"):
+        raise ValueError("melon.embedding.api_key must not be stored in YAML; use api_key_env")
+    embedding_key_env = str(embedding_raw.get("api_key_env", "") or "")
+    generator_raw = raw.get("generator", {}) or {}
+    if isinstance(generator_raw, bool):
+        generator_raw = {"enabled": generator_raw}
+    if not isinstance(generator_raw, dict):
+        raise TypeError("melon.generator must be a mapping")
+    melon = MelonConfig(
+        enabled=bool(raw.get("enabled", False)),
+        mode=str(raw.get("mode", "block")).lower(),
+        fail_closed=bool(raw.get("fail_closed", True)),
+        threshold=float(raw.get("threshold", 0.8)),
+        projection_generation=str(raw.get("projection_generation", "llm")).lower(),
+        projections={str(tool): list(args) for tool, args in projections.items()},
+        transport=str(raw.get("transport", "auto")).lower(),
+        llm=_parse_melon_model(raw.get("llm"), "melon.llm"),
+        embedding=MelonEmbeddingConfig(
+            model=str(embedding_raw.get("model", "text-embedding-3-large")),
+            base_url=str(embedding_raw.get("base_url", "") or ""),
+            api_key=os.environ.get(embedding_key_env, "") if embedding_key_env else "",
+            api_key_env=embedding_key_env,
+            request_timeout=_optional_int(embedding_raw.get("request_timeout", 60), 60),
+        ),
+        generator=MelonGeneratorConfig(
+            enabled=bool(generator_raw.get("enabled", True)),
+            context_mode=str(generator_raw.get("context_mode", "benign_only")),
+            max_attempts=max(1, int(generator_raw.get("max_attempts", 2))),
+            fail_closed=bool(generator_raw.get("fail_closed", False)),
+            llm=_parse_melon_model(generator_raw.get("llm"), "melon.generator.llm"),
+        ),
+    )
+    if melon.mode not in {"block", "warn", "monitor"}:
+        raise ValueError("melon.mode must be one of: block, warn, monitor")
+    if melon.projection_generation not in {"llm", "upstream"}:
+        raise ValueError("melon.projection_generation must be one of: llm, upstream")
+    if melon.transport not in {"auto", "chat_completions", "responses"}:
+        raise ValueError("melon.transport must be one of: auto, chat_completions, responses")
+    if melon.generator.context_mode != "benign_only":
+        raise ValueError("melon.generator.context_mode must be benign_only")
+    if not -1.0 <= melon.threshold <= 1.0:
+        raise ValueError("melon.threshold is a cosine similarity in [-1, 1]")
+    return melon
 
 
 def _require(d: dict[str, Any], key: str) -> Any:
@@ -1322,6 +1452,8 @@ def load_config(path: str | Path) -> AppConfig:
             raise ValueError("rope.scope and rope.scope_path cannot both be set")
     else:
         rope = RopeConfig()
+
+    melon = _parse_melon(raw.get("melon", {}))
 
     airguard_raw = raw.get("airguard", {}) or {}
     if isinstance(airguard_raw, bool):
@@ -2162,6 +2294,7 @@ def load_config(path: str | Path) -> AppConfig:
         aegis=aegis,
         progent=progent,
         rope=rope,
+        melon=melon,
         airguard=airguard,
         clawsentry=clawsentry,
         janus=janus,

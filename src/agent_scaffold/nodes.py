@@ -323,6 +323,7 @@ def tool_node(
         state.pop("_last_aegis_decision", None)
         state.pop("_last_progent_decision", None)
         state.pop("_last_rope_decision", None)
+        state.pop("_last_melon_decision", None)
         state.pop("_last_airguard_decision", None)
         state.pop("_last_clawsentry_decision", None)
         state.pop("_last_janus_decision", None)
@@ -340,6 +341,7 @@ def tool_node(
         aegis_decision = state.pop("_last_aegis_decision", None)
         progent_decision = state.pop("_last_progent_decision", None)
         rope_decision = state.pop("_last_rope_decision", None)
+        melon_decision = state.pop("_last_melon_decision", None)
         airguard_decision = state.pop("_last_airguard_decision", None)
         clawsentry_decision = state.pop("_last_clawsentry_decision", None)
         janus_decision = state.pop("_last_janus_decision", None)
@@ -414,6 +416,7 @@ def tool_node(
                 "aegis": aegis_decision,
                 "progent": progent_decision,
                 "rope": rope_decision,
+                "melon": melon_decision,
                 "airguard": airguard_decision,
                 "clawsentry": clawsentry_decision,
                 "janus": janus_decision,
@@ -441,6 +444,7 @@ def tool_node(
                 "aegis": aegis_decision,
                 "progent": progent_decision,
                 "rope": rope_decision,
+                "melon": melon_decision,
                 "airguard": airguard_decision,
                 "clawsentry": clawsentry_decision,
                 "janus": janus_decision,

@@ -427,6 +427,15 @@ def run_once_in_container(
     rope_api_key_env = str(getattr(getattr(cfg, "rope", None), "api_key_env", "") or "")
     if rope_api_key_env and rope_api_key_env not in env_names:
         env_names.append(rope_api_key_env)
+    melon_cfg = getattr(cfg, "melon", None)
+    if melon_cfg is not None and melon_cfg.enabled:
+        for melon_env in (
+            melon_cfg.llm.api_key_env,
+            melon_cfg.generator.llm.api_key_env,
+            melon_cfg.embedding.api_key_env or "OPENAI_API_KEY",
+        ):
+            if melon_env and melon_env not in env_names:
+                env_names.append(melon_env)
     airguard_api_key_env = str(
         getattr(getattr(cfg, "airguard", None), "api_key_env", "") or ""
     )

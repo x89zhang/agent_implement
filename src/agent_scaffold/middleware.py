@@ -305,6 +305,10 @@ def build_middleware_manager(cfg: AppConfig) -> MiddlewareManager:
         from .rope import RopeMiddleware
 
         middlewares.append(RopeMiddleware(cfg))
+    if cfg.melon.enabled:
+        from .melon import MelonMiddleware
+
+        middlewares.append(MelonMiddleware(cfg))
     if cfg.clawsentry.enabled:
         from .clawsentry import ClawSentryMiddleware
 

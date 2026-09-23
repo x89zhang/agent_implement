@@ -15,6 +15,7 @@ METHODS = (
     "pro2guard",
     "agentspec",
     "llamafirewall",
+    "melon",
     "toolsafe",
     "agentguard",
     "agentdog",
@@ -47,6 +48,8 @@ def is_alarm(method: str, items: list[dict]) -> bool:
         )
     if method == "llamafirewall":
         return any(item.get("decision") not in {None, "allow"} for item in items)
+    if method == "melon":
+        return any(item.get("detected") is True for item in items)
     if method in {"progent", "pro2guard", "toolsafe"}:
         return any(item.get("allowed") is False for item in items)
     raise ValueError(method)

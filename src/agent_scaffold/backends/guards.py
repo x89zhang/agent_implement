@@ -17,6 +17,7 @@ GUARDS = (
     "aegis",
     "progent",
     "rope",
+    "melon",
     "airguard",
     "clawsentry",
     "janus",
@@ -158,6 +159,7 @@ class GuardController:
         self.state["_progent_user_request"] = generation_task
         self.state["_rope_tools"] = copy.deepcopy(payload["tools"])
         self.state["_rope_user_request"] = generation_task
+        self.state["_melon_tools"] = copy.deepcopy(payload["tools"])
         self.state["_airguard_user_request"] = generation_task
         self.state["_clawsentry_user_request"] = generation_task
         self.state["_janus_user_request"] = generation_task
