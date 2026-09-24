@@ -442,6 +442,9 @@ def run_once(
         "_progent_user_request": "\n\n".join(
             part for part in (task, user_input or "") if part
         ),
+        "_drift_user_request": "\n\n".join(
+            part for part in (task, user_input or "") if part
+        ),
         "_agrail_user_request": "\n\n".join(
             part for part in (task, user_input or "") if part
         ),
@@ -493,6 +496,12 @@ def run_once(
                 "enabled": bool(cfg.progent.enabled),
                 "mode": cfg.progent.mode,
                 "status": "pending" if cfg.progent.enabled else "disabled",
+                "event_count": 0,
+            },
+            "drift": {
+                "enabled": bool(cfg.drift.enabled),
+                "mode": cfg.drift.mode,
+                "status": "pending" if cfg.drift.enabled else "disabled",
                 "event_count": 0,
             },
             "agrail": {

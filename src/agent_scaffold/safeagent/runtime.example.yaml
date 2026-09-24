@@ -1,0 +1,18 @@
+# Adapted from safeagent_coder/config/runtime.yaml (MIT License).
+# Copyright (c) 2026 Hailin Liu. See https://github.com/lhl4971/safeagent_coder/blob/main/LICENSE
+cost_profiles:
+  actions:
+    REPLAN: {max_counts: 1}
+    ROLLBACK: {max_steps: 1}
+call_budget_profiles:
+  default: {window_seconds: 60, max_calls: 10}
+policy:
+  preference: safety_first
+  wait_until_available: false
+  hard_thresholds:
+    action_default:
+      obs_scores: {secret_leak: 0.2, backdoor_trigger: 0.2}
+      stm_scores: {secret_leak: 0.3, backdoor_trigger: 0.3}
+      ltm_scores: {secret_leak: 0.3, backdoor_trigger: 0.3}
+    ltm_write:
+      obs_scores: {secret_leak: 0.2, memory_poisoning: 0.3, backdoor_trigger: 0.2}

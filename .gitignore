@@ -28,8 +28,10 @@ __pycache__/
 !requirements-adr.txt
 !agents/hermes/asb-poisoning.txt
 *.md
-!agents/agent_security_bench/systemprompt.md
-!agents/agentharm/systemprompt.md
+# These Markdown files are loaded as runtime prompts/instructions.
+!agents/*/systemprompt.md
+!agents/*/memory.md
+!skills/*/SKILL.md
 docs/
 paper/*
 legacy/*
@@ -40,8 +42,10 @@ src/agent_scaffold/janus/README.rst
 src/agent_scaffold/stepguard/README.rst
 src/agent_scaffold/stepguard/test_stepguard.py
 src/agent_scaffold/safeagent/README.rst
-src/agent_scaffold/safeagent/*.example.yaml
+# Hermes presets reference the SafeAgent example YAMLs at runtime.
 src/agent_scaffold/safeagent/test_*.py
+src/agent_scaffold/drift/README.rst
+src/agent_scaffold/drift/test_*.py
 src/agent_scaffold/clawsentry/README.rst
 src/agent_scaffold/clawsentry/test_*.py
 src/agent_scaffold/airguard/README.rst

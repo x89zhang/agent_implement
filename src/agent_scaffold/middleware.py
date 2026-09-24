@@ -278,7 +278,7 @@ class MiddlewareManager:
         reasons: list[str] = []
         decision_type = ""
         for middleware in self.middlewares:
-            decision = middleware.after_tool(state, name, payload, result, failed)
+            decision = middleware.after_tool(state, name, payload, current, failed)
             allowed = allowed and decision.allowed
             if decision.reason and not decision.allowed:
                 reasons.append(decision.reason)
@@ -301,6 +301,10 @@ def build_middleware_manager(cfg: AppConfig) -> MiddlewareManager:
         from .progent import ProgentMiddleware
 
         middlewares.append(ProgentMiddleware(cfg))
+    if cfg.drift.enabled:
+        from .drift import DriftMiddleware
+
+        middlewares.append(DriftMiddleware(cfg))
     if cfg.agrail.enabled:
         from .agrail import AGrailMiddleware
 
@@ -379,4 +383,6 @@ def output_revision_limit(cfg: AppConfig) -> int:
         limits.append(cfg.agentdog.max_revisions)
     if cfg.safeagent.enabled:
         limits.append(cfg.safeagent.max_replans)
+    if cfg.drift.enabled and cfg.drift.dynamic_validation and cfg.drift.mode == "block":
+        limits.append(cfg.drift.max_revisions)
     return max(limits)

@@ -1,0 +1,23 @@
+# Adapted from safeagent_coder/config/developer.yaml (MIT License).
+# Copyright (c) 2026 Hailin Liu. See https://github.com/lhl4971/safeagent_coder/blob/main/LICENSE
+cost_profiles:
+  actions:
+    APPROVE: {latency: 0, utility: 0, ux: 0}
+    REJECT: {latency: 0, utility: 0.8, ux: 0.8}
+    OVERRIDE: {latency: 0.2, utility: 0.3, ux: 0.3}
+    REPLAN: {utility: 0.25, base_cost: 0.25}
+    ROLLBACK: {utility: 0.5, base_cost: 0.5}
+    TERMINATE: {latency: 0, utility: 1, ux: 1}
+    CALL_ALLOW: {latency: 0, utility: 0, ux: 0}
+    CALL_BLOCK: {latency: 0, utility: 0.8, ux: 0.8}
+    CALL_REWRITE: {latency: 0.2, utility: 0.3, ux: 0.3}
+    CALL_JIT_APPROVAL: {latency: 0.8, utility: 0.2, ux: 0.8}
+update_profiles:
+  observation: {stm_decay_gamma: 0.5, ltm_softmax_temperature: 0.06, override_confidence: 0.5}
+  short_term_memory: {stm_decay_gamma: 0.8, ltm_softmax_temperature: 0.12, override_confidence: 0.5}
+  long_term_memory: {stm_decay_gamma: 0.95, ltm_softmax_temperature: 0.25, override_confidence: 0.5}
+policy:
+  preference_weights:
+    safety_first: {risk_control: 0.5, task_completion: 0.35, user_experience: 0.15}
+    task_first: {risk_control: 0.25, task_completion: 0.55, user_experience: 0.2}
+    ux_first: {risk_control: 0.3, task_completion: 0.22, user_experience: 0.48}

@@ -424,6 +424,9 @@ def run_once_in_container(
     )
     if progent_api_key_env and progent_api_key_env not in env_names:
         env_names.append(progent_api_key_env)
+    drift_api_key_env = str(getattr(getattr(cfg, "drift", None), "api_key_env", "") or "")
+    if drift_api_key_env and drift_api_key_env not in env_names:
+        env_names.append(drift_api_key_env)
     agrail_api_key_env = str(getattr(getattr(cfg, "agrail", None), "api_key_env", "") or "")
     if agrail_api_key_env and agrail_api_key_env not in env_names:
         env_names.append(agrail_api_key_env)

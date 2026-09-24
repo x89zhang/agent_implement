@@ -116,6 +116,24 @@ class ProgentConfig:
 
 
 @dataclass
+class DriftConfig:
+    enabled: bool = False
+    mode: str = "block"
+    fail_closed: bool = True
+    injection_isolation: bool = True
+    dynamic_validation: bool = True
+    max_revisions: int = 2
+    max_mask_passes: int = 2
+    provider: str = ""
+    model: str = ""
+    temperature: float | None = None
+    base_url: str = ""
+    api_key: str = ""
+    api_key_env: str = ""
+    request_timeout: int | None = None
+
+
+@dataclass
 class AGrailConfig:
     enabled: bool = False
     mode: str = "block"
@@ -652,6 +670,7 @@ class AppConfig:
     security: SecurityConfig = field(default_factory=SecurityConfig)
     aegis: AegisConfig = field(default_factory=AegisConfig)
     progent: ProgentConfig = field(default_factory=ProgentConfig)
+    drift: DriftConfig = field(default_factory=DriftConfig)
     agrail: AGrailConfig = field(default_factory=AGrailConfig)
     rope: RopeConfig = field(default_factory=RopeConfig)
     melon: MelonConfig = field(default_factory=MelonConfig)
@@ -1427,6 +1446,45 @@ def load_config(path: str | Path) -> AppConfig:
             raise ValueError("progent.mode must be one of: block, warn, monitor")
     else:
         progent = ProgentConfig()
+
+    drift_raw = raw.get("drift", {}) or {}
+    if isinstance(drift_raw, bool):
+        drift = DriftConfig(enabled=drift_raw)
+    elif isinstance(drift_raw, dict):
+        manual_keys = {"generate_constraints", "trajectory", "parameter_checklist"} & drift_raw.keys()
+        if manual_keys:
+            raise ValueError(
+                "drift rules are always LLM-generated; remove manual settings: "
+                + ", ".join(sorted(manual_keys))
+            )
+        drift_llm = drift_raw.get("llm", {}) or {}
+        if not isinstance(drift_llm, dict):
+            raise TypeError("drift.llm must be a mapping")
+        if drift_llm.get("api_key"):
+            raise ValueError("drift.llm.api_key must not be stored in YAML; use api_key_env")
+        drift_key_env = str(drift_llm.get("api_key_env", "") or "")
+        drift = DriftConfig(
+            enabled=bool(drift_raw.get("enabled", False)),
+            mode=str(drift_raw.get("mode", "block")).lower(),
+            fail_closed=bool(drift_raw.get("fail_closed", True)),
+            injection_isolation=bool(drift_raw.get("injection_isolation", True)),
+            dynamic_validation=bool(drift_raw.get("dynamic_validation", True)),
+            max_revisions=int(drift_raw.get("max_revisions", 2)),
+            max_mask_passes=int(drift_raw.get("max_mask_passes", 2)),
+            provider=str(drift_llm.get("provider", "") or "").lower(),
+            model=str(drift_llm.get("model", "") or ""),
+            temperature=(float(drift_llm["temperature"]) if "temperature" in drift_llm else None),
+            base_url=str(drift_llm.get("base_url", "") or ""),
+            api_key=os.environ.get(drift_key_env, "") if drift_key_env else "",
+            api_key_env=drift_key_env,
+            request_timeout=_optional_int(drift_llm.get("request_timeout"), None),
+        )
+        if drift.mode not in {"block", "warn", "monitor"}:
+            raise ValueError("drift.mode must be one of: block, warn, monitor")
+        if drift.max_revisions < 0 or drift.max_mask_passes < 1:
+            raise ValueError("drift.max_revisions must be nonnegative and max_mask_passes positive")
+    else:
+        raise TypeError("drift must be a boolean or mapping")
 
     agrail_raw = raw.get("agrail", {}) or {}
     if isinstance(agrail_raw, bool):
@@ -2381,6 +2439,7 @@ def load_config(path: str | Path) -> AppConfig:
         security=security,
         aegis=aegis,
         progent=progent,
+        drift=drift,
         agrail=agrail,
         rope=rope,
         melon=melon,

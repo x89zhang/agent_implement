@@ -91,6 +91,29 @@ progent:
   generate_policy: true
   update_after_tool: false
   fail_closed: false
+drift:
+  enabled: false
+  mode: monitor
+  fail_closed: false
+  dynamic_validation: true
+  injection_isolation: true
+  max_revisions: 2
+  max_mask_passes: 2
+  # Rule generation inherits the top-level llm and OPENAI_API_KEY.
+adr:
+  enabled: false
+  mode: monitor
+  fail_closed: false
+  threshold: 0.8
+  # ADR detection source and interpreter are supplied by the container image.
+rope:
+  enabled: false
+  mode: block
+  fail_closed: true
+  floor_generation: llm
+  router: live
+  clamp: true
+  trusted_origin_tools: []
 agrail:
   enabled: false
   mode: monitor
