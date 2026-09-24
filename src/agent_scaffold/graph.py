@@ -688,6 +688,7 @@ def _record_react_runtime_step(state: dict[str, Any], result: str) -> None:
             "usage": {},
             "aegis": event.get("aegis"),
             "progent": event.get("progent"),
+            "agrail": event.get("agrail"),
             "rope": event.get("rope"),
             "melon": event.get("melon"),
             "airguard": event.get("airguard"),
@@ -715,6 +716,7 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
         if isinstance(state, dict):
             state.pop("_last_aegis_decision", None)
             state.pop("_last_progent_decision", None)
+            state.pop("_last_agrail_decision", None)
             state.pop("_last_rope_decision", None)
             state.pop("_last_melon_decision", None)
             state.pop("_last_airguard_decision", None)
@@ -731,6 +733,7 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
         decision = middleware.before_tool(state if isinstance(state, dict) else {}, name, payload)
         aegis_decision = None
         progent_decision = None
+        agrail_decision = None
         rope_decision = None
         melon_decision = None
         airguard_decision = None
@@ -747,6 +750,7 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
         if isinstance(state, dict):
             aegis_decision = state.pop("_last_aegis_decision", None)
             progent_decision = state.pop("_last_progent_decision", None)
+            agrail_decision = state.pop("_last_agrail_decision", None)
             rope_decision = state.pop("_last_rope_decision", None)
             melon_decision = state.pop("_last_melon_decision", None)
             airguard_decision = state.pop("_last_airguard_decision", None)
@@ -777,6 +781,7 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
                     "tool_input": rendered_input,
                     "aegis": aegis_decision,
                     "progent": {"before": progent_decision, "after": state.pop("_last_progent_decision", None)},
+                    "agrail": agrail_decision,
                     "rope": {"before": rope_decision, "after": state.pop("_last_rope_decision", None)},
                     "melon": melon_decision,
                     "airguard": {"before": airguard_decision, "after": state.pop("_last_airguard_decision", None)},
@@ -828,6 +833,7 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
                     "tool_input": rendered_input,
                     "aegis": aegis_decision,
                     "progent": {"before": progent_decision, "after": state.pop("_last_progent_decision", None)},
+                    "agrail": agrail_decision,
                     "rope": {"before": rope_decision, "after": state.pop("_last_rope_decision", None)},
                     "melon": melon_decision,
                     "airguard": {"before": airguard_decision, "after": state.pop("_last_airguard_decision", None)},
@@ -854,6 +860,7 @@ def _build_traced_react_tool(name: str, fn: Any, cfg: AppConfig, middleware: Any
                 "tool_input": rendered_input,
                 "aegis": aegis_decision,
                 "progent": {"before": progent_decision, "after": state.pop("_last_progent_decision", None)},
+                "agrail": agrail_decision,
                 "rope": {"before": rope_decision, "after": state.pop("_last_rope_decision", None)},
                 "melon": melon_decision,
                 "airguard": {"before": airguard_decision, "after": state.pop("_last_airguard_decision", None)},
@@ -1492,6 +1499,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             if idx < len(guard_events):
                 step["aegis"] = guard_events[idx].get("aegis")
                 step["progent"] = guard_events[idx].get("progent")
+                step["agrail"] = guard_events[idx].get("agrail")
                 step["rope"] = guard_events[idx].get("rope")
                 step["melon"] = guard_events[idx].get("melon")
                 step["airguard"] = guard_events[idx].get("airguard")
@@ -1515,6 +1523,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
             tool_usage = step.get("usage", {})
             aegis_decision = step.get("aegis")
             progent_decision = step.get("progent")
+            agrail_decision = step.get("agrail")
             rope_decision = step.get("rope")
             melon_decision = step.get("melon")
             airguard_decision = step.get("airguard")
@@ -1562,6 +1571,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                         "usage": tool_usage,
                         "aegis": aegis_decision,
                         "progent": progent_decision,
+                        "agrail": agrail_decision,
                         "rope": rope_decision,
                         "melon": melon_decision,
                         "airguard": airguard_decision,
@@ -1593,6 +1603,7 @@ def _build_langchain_react_graph(cfg: AppConfig) -> Any:
                         "usage": tool_usage,
                         "aegis": aegis_decision,
                         "progent": progent_decision,
+                        "agrail": agrail_decision,
                         "rope": rope_decision,
                         "melon": melon_decision,
                         "airguard": airguard_decision,

@@ -46,6 +46,8 @@ src/agent_scaffold/clawsentry/README.rst
 src/agent_scaffold/clawsentry/test_*.py
 src/agent_scaffold/airguard/README.rst
 src/agent_scaffold/airguard/test_*.py
+src/agent_scaffold/agrail/README.rst
+src/agent_scaffold/agrail/test_*.py
 src/agent_scaffold/rope/README.rst
 src/agent_scaffold/rope/test_*.py
 logs_other_proj/

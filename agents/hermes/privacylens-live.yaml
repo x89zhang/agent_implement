@@ -76,6 +76,14 @@ progent:
   generate_policy: true
   update_after_tool: false
   fail_closed: false
+agrail:
+  enabled: false
+  mode: monitor
+  fail_closed: false
+  generate_checks: true
+  update_memory: true
+  generator:
+    context_mode: benign_only
 janus:
   enabled: false
   mode: monitor

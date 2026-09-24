@@ -147,6 +147,15 @@ progent:
   fail_closed: false
   # Policy generation inherits the top-level llm and OPENAI_API_KEY.
 
+agrail:
+  enabled: false
+  mode: monitor
+  fail_closed: false
+  generate_checks: true
+  update_memory: true
+  generator:
+    context_mode: benign_only
+
 janus:
   enabled: false
   mode: monitor

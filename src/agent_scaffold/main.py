@@ -334,11 +334,13 @@ def run_once(
     task = augment_task_with_research_context(task, cfg.research)
     task = augment_task_with_agentdojo_context(task, cfg.agentdojo)
     generate_airguard = cfg.airguard.enabled and cfg.airguard.generator.enabled
-    benign_task = task if generate_airguard else ""
+    generate_agrail = cfg.agrail.enabled and cfg.agrail.generate_checks
+    need_benign_task = generate_airguard or generate_agrail
+    benign_task = task if need_benign_task else ""
     task = augment_task_with_agent_security_bench_context(
         task, cfg.agent_security_bench
     )
-    if generate_airguard:
+    if need_benign_task:
         clean_asb = copy.copy(cfg.agent_security_bench)
         clean_asb.injection_method = "clean"
         clean_asb.defense_type = ""
@@ -346,10 +348,10 @@ def run_once(
             benign_task, clean_asb
         )
     task = augment_task_with_agentharm_context(task, cfg.agentharm)
-    if generate_airguard:
+    if need_benign_task:
         benign_task = augment_task_with_agentharm_context(benign_task, cfg.agentharm)
     task = augment_task_with_privacylens_live_context(task, cfg.privacylens_live)
-    if generate_airguard:
+    if need_benign_task:
         benign_task = augment_task_with_privacylens_live_context(
             benign_task, cfg.privacylens_live
         )
@@ -440,6 +442,10 @@ def run_once(
         "_progent_user_request": "\n\n".join(
             part for part in (task, user_input or "") if part
         ),
+        "_agrail_user_request": "\n\n".join(
+            part for part in (task, user_input or "") if part
+        ),
+        "_agrail_generation_task": benign_task,
         "_rope_user_request": "\n\n".join(
             part for part in (task, user_input or "") if part
         ),
@@ -487,6 +493,12 @@ def run_once(
                 "enabled": bool(cfg.progent.enabled),
                 "mode": cfg.progent.mode,
                 "status": "pending" if cfg.progent.enabled else "disabled",
+                "event_count": 0,
+            },
+            "agrail": {
+                "enabled": bool(cfg.agrail.enabled),
+                "mode": cfg.agrail.mode,
+                "status": "pending" if cfg.agrail.enabled else "disabled",
                 "event_count": 0,
             },
             "rope": {

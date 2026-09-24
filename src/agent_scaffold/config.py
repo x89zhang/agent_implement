@@ -116,6 +116,34 @@ class ProgentConfig:
 
 
 @dataclass
+class AGrailConfig:
+    enabled: bool = False
+    mode: str = "block"
+    fail_closed: bool = True
+    generate_checks: bool = True
+    generator_context_mode: str = "benign_only"
+    update_memory: bool = True
+    memory_path: str = ""
+    max_checks: int = 8
+    max_memory_entries: int = 50
+    agent_specification: str = ""
+    principles: list[str] = field(default_factory=list)
+    check_items: list[str] = field(default_factory=list)
+    categories: dict[str, str] = field(default_factory=lambda: {
+        "Information Confidentiality": "Prevent unauthorized disclosure or access.",
+        "Information Integrity": "Prevent unauthorized changes to data or systems.",
+        "Information Availability": "Preserve access to resources needed for the task.",
+    })
+    provider: str = ""
+    model: str = ""
+    temperature: float | None = None
+    base_url: str = ""
+    api_key: str = ""
+    api_key_env: str = ""
+    request_timeout: int | None = None
+
+
+@dataclass
 class RopeConfig:
     enabled: bool = False
     mode: str = "block"
@@ -624,6 +652,7 @@ class AppConfig:
     security: SecurityConfig = field(default_factory=SecurityConfig)
     aegis: AegisConfig = field(default_factory=AegisConfig)
     progent: ProgentConfig = field(default_factory=ProgentConfig)
+    agrail: AGrailConfig = field(default_factory=AGrailConfig)
     rope: RopeConfig = field(default_factory=RopeConfig)
     melon: MelonConfig = field(default_factory=MelonConfig)
     airguard: AIRGuardConfig = field(default_factory=AIRGuardConfig)
@@ -1398,6 +1427,65 @@ def load_config(path: str | Path) -> AppConfig:
             raise ValueError("progent.mode must be one of: block, warn, monitor")
     else:
         progent = ProgentConfig()
+
+    agrail_raw = raw.get("agrail", {}) or {}
+    if isinstance(agrail_raw, bool):
+        agrail = AGrailConfig(enabled=agrail_raw)
+    elif isinstance(agrail_raw, dict):
+        agrail_generator = agrail_raw.get("generator", {}) or {}
+        if not isinstance(agrail_generator, dict):
+            raise TypeError("agrail.generator must be a mapping")
+        agrail_llm = agrail_raw.get("llm", {}) or {}
+        if not isinstance(agrail_llm, dict):
+            raise TypeError("agrail.llm must be a mapping")
+        if agrail_llm.get("api_key"):
+            raise ValueError("agrail.llm.api_key must not be stored in YAML; use api_key_env")
+        categories = agrail_raw.get("categories")
+        if categories is not None and (not isinstance(categories, dict) or not categories
+            or not all(isinstance(k, str) and k.strip() and isinstance(v, str)
+                       for k, v in categories.items())):
+            raise TypeError("agrail.categories must be a nonempty string mapping")
+        for key in ("principles", "check_items"):
+            value = agrail_raw.get(key, []) or []
+            if not isinstance(value, list) or not all(isinstance(x, str) and x.strip() for x in value):
+                raise TypeError(f"agrail.{key} must be a list of nonempty strings")
+        key_env = str(agrail_llm.get("api_key_env", "") or "")
+        agrail = AGrailConfig(
+            enabled=bool(agrail_raw.get("enabled", False)),
+            mode=str(agrail_raw.get("mode", "block")).lower(),
+            fail_closed=bool(agrail_raw.get("fail_closed", True)),
+            generate_checks=bool(agrail_raw.get("generate_checks", True)),
+            generator_context_mode=str(
+                agrail_generator.get("context_mode", "benign_only")
+            ).lower(),
+            update_memory=bool(agrail_raw.get("update_memory", True)),
+            memory_path=str(agrail_raw.get("memory_path", "") or ""),
+            max_checks=int(agrail_raw.get("max_checks", 8)),
+            max_memory_entries=int(agrail_raw.get("max_memory_entries", 50)),
+            agent_specification=str(agrail_raw.get("agent_specification", "") or ""),
+            principles=list(agrail_raw.get("principles", []) or []),
+            check_items=list(agrail_raw.get("check_items", []) or []),
+            categories=dict(categories) if categories is not None else AGrailConfig().categories,
+            provider=str(agrail_llm.get("provider", "") or "").lower(),
+            model=str(agrail_llm.get("model", "") or ""),
+            temperature=float(agrail_llm["temperature"]) if "temperature" in agrail_llm else None,
+            base_url=str(agrail_llm.get("base_url", "") or ""),
+            api_key=os.environ.get(key_env, "") if key_env else "",
+            api_key_env=key_env,
+            request_timeout=_optional_int(agrail_llm.get("request_timeout"), None),
+        )
+        if agrail.mode not in {"block", "warn", "monitor"}:
+            raise ValueError("agrail.mode must be one of: block, warn, monitor")
+        if agrail.generator_context_mode != "benign_only":
+            raise ValueError("agrail.generator.context_mode must be benign_only")
+        if agrail.max_checks < 1 or agrail.max_memory_entries < 1:
+            raise ValueError("agrail max_checks and max_memory_entries must be positive")
+        if len(agrail.check_items) > agrail.max_checks:
+            raise ValueError("agrail.check_items exceeds max_checks")
+        if agrail.enabled and not agrail.generate_checks and not agrail.check_items:
+            raise ValueError("agrail requires check_items when generate_checks is false")
+    else:
+        raise TypeError("agrail must be a boolean or mapping")
 
     rope_raw = raw.get("rope", {}) or {}
     if isinstance(rope_raw, bool):
@@ -2293,6 +2381,7 @@ def load_config(path: str | Path) -> AppConfig:
         security=security,
         aegis=aegis,
         progent=progent,
+        agrail=agrail,
         rope=rope,
         melon=melon,
         airguard=airguard,

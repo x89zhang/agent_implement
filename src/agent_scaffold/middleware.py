@@ -301,6 +301,10 @@ def build_middleware_manager(cfg: AppConfig) -> MiddlewareManager:
         from .progent import ProgentMiddleware
 
         middlewares.append(ProgentMiddleware(cfg))
+    if cfg.agrail.enabled:
+        from .agrail import AGrailMiddleware
+
+        middlewares.append(AGrailMiddleware(cfg))
     if cfg.rope.enabled:
         from .rope import RopeMiddleware
 
