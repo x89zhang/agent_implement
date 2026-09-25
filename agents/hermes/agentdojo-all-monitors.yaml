@@ -55,7 +55,7 @@ container:
   remove: true
   build_args:
     INSTALL_AGENTDOJO: "true"
-    # Enabled AgentSpec/LlamaFirewall dependencies are selected automatically.
+    # Enabled guard dependencies are selected automatically.
   # Configured *_env credential/endpoint variables are also forwarded by name.
   env:
     - OPENAI_API_KEY
@@ -123,7 +123,7 @@ memory_experiment:
   # use agents/hermes/asb.yaml for memory-poisoning experiments.
   mode: 'off'
 
-# Project defenses: enable each independently. All are initially disabled.
+# Project defenses: each enabled guard is replayed independently.
 # Tool names are canonical benchmark names (e.g. send_direct_message), not
 # mcp__benchmark__ names. Native skills use skill_view / skills_list / skill_manage.
 # Guard dependencies and endpoints belong to the project interpreter/service.
@@ -147,7 +147,7 @@ progent:
   # Policy generation inherits the top-level llm and OPENAI_API_KEY.
 
 drift:
-  enabled: false
+  enabled: true
   mode: monitor
   fail_closed: false
   dynamic_validation: true
@@ -157,6 +157,7 @@ drift:
   # Rule generation inherits the top-level llm and OPENAI_API_KEY.
 
 adr:
+  # Default reasoning model needs Claude credentials; keep off in this batch.
   enabled: false
   mode: monitor
   fail_closed: false
@@ -164,16 +165,16 @@ adr:
   # ADR detection source and interpreter are supplied by the container image.
 
 rope:
-  enabled: false
-  mode: block
-  fail_closed: true
+  enabled: true
+  mode: monitor
+  fail_closed: false
   floor_generation: llm
   router: live
   clamp: true
   trusted_origin_tools: []
 
 agrail:
-  enabled: false
+  enabled: true
   mode: monitor
   fail_closed: false
   generate_checks: true
@@ -182,6 +183,7 @@ agrail:
     context_mode: benign_only
 
 janus:
+  # Requires an additional local model endpoint; keep off with two GPUs.
   enabled: false
   mode: monitor
   strict: false
@@ -191,6 +193,7 @@ janus:
   api_key_env: JANUS_API_KEY
 
 stepguard:
+  # Requires an additional local model endpoint; keep off with two GPUs.
   enabled: false
   mode: block
   fail_closed: true
@@ -203,6 +206,7 @@ stepguard:
   audit_final: true
 
 safeagent:
+  # Requires an additional MCP service endpoint; keep off in this batch.
   enabled: false
   mode: block
   fail_closed: true
@@ -219,10 +223,10 @@ safeagent:
 
 
 clawsentry:
-  enabled: false
+  enabled: true
   auto_start: true
-  mode: block
-  fail_closed: true
+  mode: monitor
+  fail_closed: false
   base_url: http://127.0.0.1:8080
   api_key_env: CS_AUTH_TOKEN
   timeout_seconds: 5
@@ -230,19 +234,19 @@ clawsentry:
   observe_tool_result: true
 
 airguard:
-  enabled: false
-  mode: block
-  fail_closed: true
+  enabled: true
+  mode: monitor
+  fail_closed: false
   generator:
     enabled: true
     context_mode: benign_only
     fail_closed: false
 
 melon:
-  enabled: false
+  enabled: true
   # block stops the run on detection (upstream); warn/monitor only record it.
-  mode: block
-  fail_closed: true
+  mode: monitor
+  fail_closed: false
   # Cosine cut-off between the real call and masked-run calls (upstream: 0.8).
   threshold: 0.8
   # llm: paper rules (send_email/send_money) + LLM-generated comparison

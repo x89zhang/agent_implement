@@ -14,7 +14,7 @@ from ._upstream.clamp import _more_permissive
 from ._upstream.enforce import Enforcer
 from ._upstream.policy_synthesis import TaskScope, compile_policy
 from ._upstream.router import route_and_scope
-from .floor_generator import generate_floor, inventory_from_config
+from .floor_generator import _parse_json, generate_floor, inventory_from_config
 
 
 class RopeMiddleware(Middleware):
@@ -105,7 +105,7 @@ class RopeMiddleware(Middleware):
         state.setdefault("rope_events", []).append(event)
         state.setdefault("harness", {}).setdefault("rope", {}).update({
             "enabled": True, "mode": self.settings.mode,
-            "status": "failed" if source == "error" else "active",
+            "status": "failed" if source == "error" else "degraded" if state.get("_rope_floor_errors") else "active",
             "bucket": (state.get("_rope_scope") or {}).get("bucket"),
             "last_decision": event, "event_count": len(state["rope_events"]),
         })
@@ -135,16 +135,18 @@ class RopeMiddleware(Middleware):
             error = f"ROPE initialization failed: {exc}"
             state["_rope_scope"] = None
         state["_rope_init_error"] = error
+        status = "failed" if error else "degraded" if state.get("_rope_floor_errors") else "active"
         event = {"step": "rope_scope_generate", "timestamp": started,
                  "latency_ms": int((time.time() - started) * 1000),
-                 "output": {"status": "failed" if error else "active", "reason": error,
+                 "output": {"status": status, "reason": error,
                             "scope": state["_rope_scope"],
                             "floor_source": state.get("_rope_floor_source"),
-                            "floor_tool_count": len(state.get("_rope_floor") or {})}}
+                            "floor_tool_count": len(state.get("_rope_floor") or {}),
+                            "floor_generation_errors": state.get("_rope_floor_errors") or {}}}
         state.setdefault("trace", []).append(event)
         state.setdefault("harness", {}).setdefault("rope", {}).update({
             "enabled": True, "mode": self.settings.mode,
-            "status": "failed" if error else "active",
+            "status": status,
             "bucket": (state["_rope_scope"] or {}).get("bucket"),
         })
         run_dir = (state.get("_trace_persist") or {}).get("run_dir")
@@ -175,17 +177,31 @@ class RopeMiddleware(Middleware):
             elif self.settings.floor_generation != "llm":
                 raise ValueError("set rope.suite or rope.floor_path")
         unknown = [tool for tool in inventory if tool["name"] not in floor]
+        names = [tool["name"] for tool in unknown]
+        if any(not name for name in names) or len(names) != len(set(names)):
+            raise ValueError("ROPE tool inventory has missing or duplicate names")
         generated: dict[str, dict[str, str]] = {}
         blocked: list[str] = []
         read_only: list[str] = []
+        generation_errors: dict[str, str] = {}
+        batch_error = ""
         if unknown and self.settings.floor_generation == "llm":
             llm = self._llm()
+            raw_response = ""
 
             def complete(system: str, user: str) -> str:
-                return llm.chat([{"role": "system", "content": system},
-                                 {"role": "user", "content": user}]).content
+                nonlocal raw_response
+                raw_response = llm.chat([{"role": "system", "content": system},
+                                         {"role": "user", "content": user}]).content
+                return raw_response
 
-            generated, blocked, read_only = generate_floor(unknown, complete)
+            try:
+                generated, blocked, read_only = generate_floor(unknown, complete)
+            except (ValueError, TypeError) as exc:
+                batch_error = str(exc)
+                generated, blocked, read_only, generation_errors = self._isolate_floor_errors(
+                    unknown, raw_response, batch_error
+                )
             floor.update(scopes_io.floor_from_dict(generated))
             source = f"{source}+llm" if source in {"audited", "configured"} else "llm"
         elif not floor and self.settings.floor_generation == "llm":
@@ -195,10 +211,12 @@ class RopeMiddleware(Middleware):
         state["_rope_blocked_tools"] = blocked
         state["_rope_read_only_tools"] = read_only
         state["_rope_generated_tools"] = sorted(generated)
+        state["_rope_floor_errors"] = generation_errors
         state.setdefault("trace", []).append({
             "step": "rope_floor_generate", "output": {
                 "source": source, "floor": state["_rope_floor"],
                 "blocked_tools": blocked, "read_only_tools": read_only,
+                "batch_error": batch_error, "generation_errors": generation_errors,
             },
         })
         run_dir = (state.get("_trace_persist") or {}).get("run_dir")
@@ -207,6 +225,42 @@ class RopeMiddleware(Middleware):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(state["trace"][-1], ensure_ascii=False, indent=2), encoding="utf-8")
         return floor
+
+    def _isolate_floor_errors(
+        self, tools: list[dict[str, Any]], raw_response: str, batch_error: str
+    ) -> tuple[dict[str, dict[str, str]], list[str], list[str], dict[str, str]]:
+        """Keep valid tool rules from one LLM response; fail closed only bad tools."""
+        try:
+            rows = _parse_json(raw_response).get("tools")
+        except (ValueError, TypeError):
+            rows = None
+        if not isinstance(rows, list):
+            names = [tool["name"] for tool in tools]
+            return {}, names, [], {name: batch_error for name in names}
+        generated: dict[str, dict[str, str]] = {}
+        blocked: list[str] = []
+        read_only: list[str] = []
+        errors: dict[str, str] = {}
+        for tool in tools:
+            name = tool["name"]
+            matches = [row for row in rows if isinstance(row, dict) and row.get("name") == name]
+            if len(matches) != 1:
+                blocked.append(name)
+                errors[name] = f"expected one generated rule for {name!r}, found {len(matches)}"
+                continue
+            one_reply = json.dumps({"tools": matches}, ensure_ascii=False)
+            try:
+                rules, blocked_one, read_only_one = generate_floor(
+                    [tool], lambda _system, _user: one_reply
+                )
+            except (ValueError, TypeError) as exc:
+                blocked.append(name)
+                errors[name] = str(exc)
+                continue
+            generated.update(rules)
+            blocked.extend(blocked_one)
+            read_only.extend(read_only_one)
+        return generated, blocked, read_only, errors
 
     def _scope(self, query: str, floor: dict) -> TaskScope | None:
         if self.settings.router == "static":
