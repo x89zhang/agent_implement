@@ -1,7 +1,9 @@
-"""Generate a conservative ROPE floor for tools absent from audited tables.
+"""Generate a ROPE floor for suites without an audited upstream table.
 
-The model proposes markers, but may not omit inventory tools or invent arguments.
-Unknown mutating tools without an inspectable schema are blocked outright.
+The model proposes markers for the redirectable sensitive arguments only, as in
+the audited ``scopes/_floor`` tables; tools it leaves out of the floor are
+default-allowed, as upstream. It may not omit inventory tools or invent
+arguments.
 """
 
 from __future__ import annotations
@@ -13,10 +15,12 @@ import re
 from typing import Any, Callable
 
 from ._upstream.markers import str_to_rule
+from ._upstream.scopes_io import load_floor, floor_to_dict
 
-_READ_PREFIXES = ("get_", "list_", "search_", "read_", "view_", "fetch_", "find_", "lookup_", "inspect_", "query_")
-_MUTATION_WORDS = re.compile(r"\b(write|create|update|delete|remove|send|post|transfer|pay|refund|checkout|execute|run|install|upload|share|invite|add|set|change|submit|purchase|order)\b", re.I)
-_MARKERS = {"PROMPT", "SOURCED", "EXPLICIT"}
+# Floor-default markers used by the audited upstream tables (markers.py). FREE
+# is accepted as "unguarded" and left out of the floor.
+_MARKERS = {"PROMPT", "SOURCED", "RECORD", "DEST", "EXPLICIT"}
+_UNGUARDED = "FREE"
 
 
 def inventory_from_config(cfg: Any, state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -27,6 +31,7 @@ def inventory_from_config(cfg: Any, state: dict[str, Any]) -> list[dict[str, Any
     tools: list[dict[str, Any]] = []
     for item in cfg.tools:
         names: list[str] = []
+        required: list[str] | None = None
         complete = False
         try:
             module_name, function_name = item.import_path.split(":", 1)
@@ -34,11 +39,14 @@ def inventory_from_config(cfg: Any, state: dict[str, Any]) -> list[dict[str, Any
             signature = inspect.signature(function)
             names = [name for name, parameter in signature.parameters.items()
                      if parameter.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)]
+            required = [name for name, parameter in signature.parameters.items()
+                        if name in names and parameter.default is inspect.Parameter.empty]
             complete = True
         except (ValueError, AttributeError, ImportError, TypeError):
             pass
         tools.append({"name": item.name, "description": item.description,
-                      "arguments": names, "schema_complete": complete})
+                      "arguments": names, "required_arguments": required,
+                      "schema_complete": complete})
     return tools
 
 
@@ -48,21 +56,20 @@ def _normalize_tool(tool: dict[str, Any]) -> dict[str, Any]:
         properties = schema.get("properties")
         if isinstance(properties, dict):
             arguments = list(properties)
-            complete = True
+            required = schema.get("required", [])
+            complete = (isinstance(required, list)
+                        and all(isinstance(name, str) and name in properties
+                                for name in required))
+            if not complete:
+                required = None
         else:
-            arguments, complete = [], False
+            arguments, required, complete = [], None, False
     else:
-        arguments, complete = [], False
+        arguments, required, complete = [], None, False
     return {"name": str(tool.get("name") or ""),
             "description": str(tool.get("description") or ""),
-            "arguments": arguments, "schema_complete": complete}
-
-
-def _read_only_candidate(tool: dict[str, Any]) -> bool:
-    name = tool["name"].lower()
-    return name.startswith(_READ_PREFIXES) and not _MUTATION_WORDS.search(
-        name.replace("_", " ") + " " + tool["description"]
-    )
+            "arguments": arguments, "required_arguments": required,
+            "schema_complete": complete}
 
 
 def _parse_json(raw: str) -> dict[str, Any]:
@@ -79,29 +86,40 @@ def _parse_json(raw: str) -> dict[str, Any]:
     return value
 
 
+def _examples() -> str:
+    return json.dumps({suite: floor_to_dict(load_floor(suite)) for suite in ("banking", "slack")},
+                      ensure_ascii=False)
+
+
 def generate_floor(
     tools: list[dict[str, Any]], complete: Callable[[str, str], str]
-) -> tuple[dict[str, dict[str, str]], list[str], list[str]]:
-    """Return (marker floor, blocked tools, read-only tools) for unknown tools.
+) -> dict[str, dict[str, str]]:
+    """Return the generated marker floor {tool: {argument: marker}}.
 
-    The model must classify every tool. Any omitted argument on a mutating tool
-    is protected with PROMPT; an opaque mutating tool is blocked completely.
+    The model must classify every tool. Tools with no guarded argument are not
+    in the floor and are therefore default-allowed, like upstream benign tools.
     """
     if not tools:
-        return {}, [], []
+        return {}
     names = [tool["name"] for tool in tools]
     if any(not name for name in names) or len(names) != len(set(names)):
         raise ValueError("ROPE tool inventory has missing or duplicate names")
     system = (
-        "You propose a global sensitive-argument table for ROPE. Read ONLY the trusted tool "
-        "definitions. Return JSON exactly as {\"tools\":[{\"name\":string,\"read_only\":boolean,"
+        "You propose ROPE's global sensitive-argument table (its floor) for a tool suite. Read ONLY "
+        "the trusted tool definitions. Return JSON exactly as {\"tools\":[{\"name\":string,"
         "\"rules\":{argument:marker}}]}. Include every supplied tool exactly once. "
-        "For state-changing tools, mark every argument that can redirect a target, destination, "
-        "recipient, credential, amount, or side effect. Use PROMPT for request-only values, "
-        "SOURCED for values from a user-named authenticated source, EXPLICIT "
-        "for irreversible actions. Use only PROMPT, SOURCED, or EXPLICIT. "
-        "Never use FREE, CONST, ONEOF or invented arguments. "
-        "When unsure, use PROMPT. A tool is read_only only if it cannot change state."
+        "List ONLY the redirectable sensitive arguments of state-changing tools: the argument that "
+        "decides where data, money or access goes or which object is changed (recipient, target "
+        "user/account/channel, destination path or URL, credential/password, id of the object "
+        "deleted or cancelled). Leave free-text content (bodies, messages, subjects, notes, amounts, "
+        "dates, queries, content) out of rules. Read-only tools and tools without such an argument "
+        "get {}; they stay allowed. Markers: SOURCED = the value must come from the user's request "
+        "or a source the user named (recipients, targets, URLs); PROMPT = the value must be written "
+        "in the user's request (passwords, the user's own personal data); RECORD = from the request "
+        "or the user's own authoritative records; DEST = a filesystem write destination; EXPLICIT = "
+        "the whole action is irreversible (delete, cancel, remove, reserve) and allowed only when "
+        "the request explicitly authorizes it. Use only SOURCED, PROMPT, RECORD, DEST or EXPLICIT; "
+        "never invent arguments. Audited floors of other suites, for calibration: " + _examples()
     )
     reply = _parse_json(complete(system, json.dumps({"tools": tools}, ensure_ascii=False)))
     rows = reply.get("tools")
@@ -118,29 +136,22 @@ def generate_floor(
     if set(by_name) != set(names):
         raise ValueError(f"ROPE floor generator omitted tools: {sorted(set(names) - set(by_name))}")
     floor: dict[str, dict[str, str]] = {}
-    blocked: list[str] = []
-    read_only: list[str] = []
     for tool in tools:
         name = tool["name"]
-        row = by_name[name]
-        if not isinstance(row.get("read_only"), bool) or not isinstance(row.get("rules"), dict):
-            raise ValueError(f"ROPE floor generator returned invalid classification for {name!r}")
+        rules = by_name[name].get("rules")
+        if not isinstance(rules, dict):
+            raise ValueError(f"ROPE floor generator returned invalid rules for {name!r}")
         args = set(tool["arguments"])
-        if row["read_only"] and _read_only_candidate(tool):
-            read_only.append(name)
-            continue
-        rules = row["rules"]
         if set(rules) - args:
             raise ValueError(f"ROPE floor generator invented arguments for {name!r}: {sorted(set(rules) - args)}")
-        if not tool["schema_complete"] or not args:
-            blocked.append(name)
-            continue
         checked: dict[str, str] = {}
-        for arg in tool["arguments"]:
-            marker = rules.get(arg, "PROMPT")
+        for arg, marker in rules.items():
+            if marker == _UNGUARDED:
+                continue
             if not isinstance(marker, str) or marker not in _MARKERS:
                 raise ValueError(f"ROPE floor generator returned invalid marker for {name}.{arg}")
             str_to_rule(marker)
             checked[arg] = marker
-        floor[name] = checked
-    return floor, blocked, read_only
+        if checked:
+            floor[name] = checked
+    return floor

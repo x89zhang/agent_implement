@@ -55,3 +55,4 @@ runtime/venvs/
 
 # AGrail's persistent memory is generated during evaluation.
 /runtime/agrail-memory/
+/runtime/rope-router-cache.json

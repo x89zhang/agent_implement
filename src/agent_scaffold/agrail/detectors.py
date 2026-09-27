@@ -93,20 +93,15 @@ class DockerCheckEnvironment:
 
 
 def run_detector(middleware: Any, state: dict[str, Any], detector: str,
-                 name: str, payload: dict[str, Any], checks: list[dict[str, str]]) -> bool:
+                 name: str, payload: dict[str, Any],
+                 tool_check_list: list[dict[str, Any]]) -> str:
+    """Run one upstream detector on its Step 1 check items (DAS/guardrail.py:347-369)."""
     if detector not in DETECTORS:
         raise ValueError(f"Unknown AGrail detector: {detector}")
     # Upstream detectors call get_response_from_openai; route those calls to
     # the configured AGrail LLM while leaving the detector algorithms intact.
-    calls = 0
-
     def chat(prompt: str) -> tuple[str, int]:
-        nonlocal calls
-        calls += 1
-        if calls > 6:
-            raise RuntimeError("AGrail detector exceeded six LLM calls")
-        response = middleware._chat(state, "", prompt)
-        return response, 0
+        return middleware._chat(state, "", prompt), 0
 
     env = state.get("_agrail_agent_environment")
     owned = env is None
@@ -128,21 +123,19 @@ def run_detector(middleware: Any, state: dict[str, Any], detector: str,
         if detector == "html_detector" and "target_element" in payload:
             action = (f"Target Element: {payload['target_element']}\n"
                       f"Target Action: {payload.get('target_action', name)}\n"
-                      + str(action))
+                      + action)
         result, _ = DETECTORS[detector]().get_checking_result(
             agent_environment=env,
             user_information=middleware._request(state),
-            agent_action=str(action),
-            tool_check_list=checks,
-            agent_specification=middleware.settings.agent_specification
-                                or middleware.cfg.agent.system_prompt,
-            agent_usage_principles=middleware.settings.principles,
+            agent_action=action,
+            tool_check_list=tool_check_list,
+            agent_specification=middleware._agent_specification(state),
+            agent_usage_principles=middleware._principles(),
             agent_model=middleware.settings.model or middleware.cfg.llm.model,
             user_identity="root",
         )
-        if str(result) not in {"True", "False"}:
-            raise ValueError("AGrail detector did not return a boolean result")
-        return str(result) == "True"
+        # Upstream appends the raw result to reason_safety.
+        return str(result)
     finally:
         CHAT.reset(token)
         if owned:

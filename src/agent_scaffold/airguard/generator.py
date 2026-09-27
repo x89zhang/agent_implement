@@ -1,4 +1,10 @@
-"""Compile a task-scoped AIRGuard authority set from trusted benign inputs."""
+"""Compile a task-scoped AIRGuard authority set from trusted benign inputs.
+
+Not upstream: AIRGuard uses the constant allow set ``[read, write, respond]``
+(authority_context.py:109-137, integrations/mcp_proxy.py:66-70) and leaves
+parsing user intent into allow/deny as a TODO. This opt-in variant is off by
+default.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +16,7 @@ from typing import Any
 
 from ..config import AppConfig, LLMConfig
 from ..llm import LLMAdapter
-from .middleware import _normalized_action
+from .middleware import normalize_action
 
 _CAPABILITY_BY_ACTION = {
     "file.read": "read", "file.write": "write", "file.delete": "write",
@@ -163,24 +169,16 @@ def _generator_llm_config(cfg: AppConfig) -> LLMConfig:
 
 
 def _benign_input(cfg: AppConfig, benign_task: str) -> dict[str, Any]:
-    attacker_tool = ""
-    asb = cfg.agent_security_bench
-    if asb.enabled and asb.injection_method != "clean":
-        attacker_tool = asb.attacker_tool
-        if not attacker_tool:
-            from ..agent_security_bench_adapter import _case_data
-
-            attacker_tool = str(_case_data(asb)[3].get("Attacker Tool", ""))
+    # Full tool inventory; nothing is filtered using attack metadata.
     tools = [
         {
             "name": tool.name,
             "description": tool.description,
             "declared_capabilities": list(tool.capabilities),
             "labels": dict(tool.labels),
-            "airguard_capability": _CAPABILITY_BY_ACTION[_normalized_action(tool.name, {})],
+            "airguard_capability": _CAPABILITY_BY_ACTION[normalize_action(tool.name)],
         }
         for tool in cfg.tools
-        if tool.name != attacker_tool
     ]
     offered = {"respond"} | {item["airguard_capability"] for item in tools}
     maximum = [

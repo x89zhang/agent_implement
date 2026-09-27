@@ -157,7 +157,8 @@ drift:
   request_user_approval: false
   injection_isolation: true
   max_revisions: 2
-  max_mask_passes: 2
+  mask_limitation: 1
+  profile: auto  # asb when agent_security_bench is enabled
   # Rule generation inherits the top-level llm and OPENAI_API_KEY.
 
 adr:
@@ -174,8 +175,6 @@ agrail:
   generate_checks: true
   update_memory: true
   memory_path: ../../runtime/agrail-memory/agentdojo.json
-  generator:
-    context_mode: benign_only
 
 janus:
   enabled: false
@@ -229,8 +228,10 @@ airguard:
   enabled: false
   mode: block
   fail_closed: true
+  # Not upstream: opt-in LLM authority generator; default is upstream's
+  # constant allow [read, write, respond].
   generator:
-    enabled: true
+    enabled: false
     context_mode: benign_only
     fail_closed: false
 
@@ -238,10 +239,14 @@ rope:
   enabled: false
   mode: block
   fail_closed: true
-  # Audited suite rules take priority; LLM generates rules for uncovered tools.
+  # Audited suite floors are used as-is (other tools default-allowed); the
+  # LLM generates a floor only for suites without one (e.g. workspace).
   floor_generation: llm
   router: live
   clamp: true
+  # Memoizes router/floor LLM replies (upstream common/llm_cache.py) so clean
+  # and attacked runs of the same task get the same scope.
+  router_cache_path: ../../runtime/rope-router-cache.json
 
 melon:
   enabled: false
@@ -250,8 +255,8 @@ melon:
   fail_closed: true
   # Cosine cut-off between the real call and masked-run calls (upstream: 0.8).
   threshold: 0.8
-  # llm: paper rules (send_email/send_money) + LLM-generated comparison
-  # arguments for other tools; upstream: paper rules only, all args elsewhere.
+  # llm: LLM-generated comparison arguments for tools upstream never listed
+  # (not AgentDojo: it always uses upstream send_email/send_money rules, all args elsewhere).
   projection_generation: llm
   projections: {}
   # Masked re-execution uses the agent model (top-level llm) unless overridden.
@@ -335,9 +340,7 @@ toolsafe:
   base_url: http://localhost:8001/v1
   api_key_env: TOOLSAFE_API_KEY
   timeout_seconds: 60
-  max_history_steps: 20
-  max_replans: 3
-  fail_closed: true
+  fail_closed: false
 
 agentsight:
   enabled: false

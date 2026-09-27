@@ -44,8 +44,8 @@ melon:
   fail_closed: true
   # Cosine cut-off between the real call and masked-run calls (upstream: 0.8).
   threshold: 0.8
-  # llm: paper rules (send_email/send_money) + LLM-generated comparison
-  # arguments for other tools; upstream: paper rules only, all args elsewhere.
+  # llm: LLM-generated comparison arguments for tools upstream never listed
+  # (not AgentDojo: it always uses upstream send_email/send_money rules, all args elsewhere).
   projection_generation: llm
   projections: {}
   # Masked re-execution uses the agent model (top-level llm) unless overridden.
@@ -110,9 +110,7 @@ toolsafe:
   base_url: http://localhost:8001/v1
   api_key_env: TOOLSAFE_API_KEY
   timeout_seconds: 60
-  max_history_steps: 20
-  max_replans: 3
-  fail_closed: true
+  fail_closed: false
 agentsight:
   enabled: false
   binary: runtime/bin/agentsight

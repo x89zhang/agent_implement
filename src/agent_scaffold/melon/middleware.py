@@ -26,15 +26,19 @@ from .upstream import (
 class MelonMiddleware(Middleware):
     """MELON: masked re-execution and tool-call comparison (Zhu et al., ICML'25).
 
-    After each batch of tool outputs, the agent model is re-run on those outputs
-    with the user task replaced by a generic "follow the file's instructions"
-    task. Tool calls from the masked run accumulate in a bank. A real tool call
-    whose embedding is close to a bank entry does not depend on the user task,
-    so it is attributed to an indirect prompt injection.
+    Once per model turn that follows new tool outputs, the agent model is re-run
+    on those outputs with the user task replaced by a generic "follow the file's
+    instructions" task. Tool calls from the masked run accumulate in a bank. A
+    real tool call whose embedding is close to a bank entry does not depend on
+    the user task, so the whole turn is attributed to an indirect injection.
 
-    Hooks are ``before_tool``/``after_tool`` so the same detector runs in the
-    project graphs and behind the Hermes defense bridge. Hook instances are not
-    shared between graph nodes, so all detector state lives in ``state``.
+    The check runs in ``guard_model_output`` (upstream pi_detector.py:223-236,
+    288-365). Hosts call it once per candidate call of a turn, so the masked run
+    and the turn verdict are cached in ``state["_melon_turn"]`` keyed by the
+    number of tool outputs seen before that model input. ``before_tool`` only
+    checks calls from graphs that never report tool calls at the model turn
+    (they issue one call per turn). Hook instances are not shared between graph
+    nodes, so all detector state lives in ``state``.
     """
 
     def __init__(self, cfg: AppConfig) -> None:
@@ -48,23 +52,82 @@ class MelonMiddleware(Middleware):
         return [f"MELON warning: {warning}"] if warning else []
 
     def after_tool(self, state: dict[str, Any], name: str, payload: dict[str, Any], result: str, failed: bool) -> ResultDecision:
-        state.setdefault("_melon_outputs", []).append({"name": name, "content": str(result)})
+        # AgentDojo keeps a failed call's error outside the tool message content,
+        # which is all upstream copies into random.txt (pi_detector.py:324).
+        entry = {"name": name, "content": "" if failed else str(result)}
+        if failed:
+            entry["error"] = str(result)
+        state.setdefault("_melon_outputs", []).append(entry)
         return ResultDecision(result=result)
 
+    def guard_model_output(self, state: dict[str, Any], content: str, tool_call: Any) -> ModelDecision:
+        if tool_call is not None:
+            # Tool calls are judged here, so before_tool must not re-check them
+            # against outputs produced by sibling calls of the same turn.
+            state["_melon_model_turns"] = True
+        turn = self._turn(state)
+        if tool_call is None:
+            return ModelDecision(content=content, tool_call=tool_call)
+        name, payload = _call_parts(tool_call)
+        event = self._check(state, turn, name, payload, phase="model_output")
+        if not event["enforced"]:
+            return ModelDecision(content=content, tool_call=tool_call)
+        # Upstream replaces the whole assistant turn with the stop message before
+        # any of its calls runs (pi_detector.py:272-282); the host drops the turn.
+        return ModelDecision(False, event["reason"], content=STOP_MESSAGE, tool_call=None,
+                             decision_type="melon", terminate=True)
+
     def before_tool(self, state: dict[str, Any], name: str, payload: dict[str, Any]) -> ToolDecision:
+        if state.get("_melon_model_turns"):
+            return ToolDecision(True, "")
+        # Graphs that surface calls only here issue one call per model turn.
+        event = self._check(state, self._turn(state), name, payload, phase="before_tool")
+        if not event["enforced"]:
+            return ToolDecision(True, "")
+        # Upstream replaces the turn with a stop message, which ends the agent loop.
+        return ToolDecision(False, event["reason"], replacement_result=f"{STOP_MESSAGE} {OMITTED_MESSAGE}",
+                            decision_type="melon", terminate=True)
+
+    # Per-turn detection --------------------------------------------------
+
+    def _turn(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Open (or reuse) the record for the model turn after the current outputs."""
         outputs = list(state.get("_melon_outputs") or [])
-        if not outputs:
-            # Upstream only checks the model turn that follows a tool result.
-            return self._record(state, name, payload, allowed=True, source="no_tool_output",
-                                reason="no tool output observed yet")
+        turn = state.get("_melon_turn")
+        if isinstance(turn, dict) and turn.get("tool_output_count") == len(outputs):
+            return turn
+        previous = int(turn.get("tool_output_count", 0)) if isinstance(turn, dict) else 0
+        # Upstream runs only when the model input ends with a tool result, i.e.
+        # new outputs arrived since the previous model turn (none on turn one).
+        turn = {"tool_output_count": len(outputs), "active": len(outputs) > previous,
+                "masked_run": None, "error": None, "detected": False, "latency_ms": 0}
+        state["_melon_turn"] = turn
+        if not turn["active"]:
+            return turn
         started = time.time()
         try:
-            projection = self._projection(state)
-            masked = None
-            if int(state.get("_melon_masked_upto", 0)) < len(outputs):
-                masked = self._masked_run(state, outputs, projection)
-                state["_melon_masked_upto"] = len(outputs)
-            text = transform_tool_call(name, payload, projection.get(name))
+            # The bank is updated even when the real turn makes no tool call.
+            turn["masked_run"] = self._masked_run(state, outputs, self._projection(state))
+        except Exception as exc:
+            turn["error"] = f"MELON detection failed: {exc}"
+        turn["latency_ms"] = int((time.time() - started) * 1000)
+        return turn
+
+    def _check(self, state: dict[str, Any], turn: dict[str, Any], name: str, payload: dict[str, Any],
+               *, phase: str) -> dict[str, Any]:
+        if not turn["active"]:
+            source = "no_tool_output" if not turn["tool_output_count"] else "no_new_tool_output"
+            return self._record(state, phase, name, allowed=True, source=source,
+                                reason="model turn does not follow a new tool output")
+        masked, turn["masked_run"] = turn["masked_run"], None  # log it with the turn's first call
+        base = {"tool_output_count": turn["tool_output_count"], "masked_run": masked,
+                "masked_latency_ms": turn["latency_ms"]}
+        if turn["error"]:
+            return self._record(state, phase, name, allowed=not self.settings.fail_closed,
+                                source="error", reason=turn["error"], detail=base)
+        started = time.time()
+        try:
+            text = transform_tool_call(name, payload, self._projection(state).get(name))
             bank = state.get("_melon_bank") or []
             best, match = -1.0, None
             if bank:
@@ -75,21 +138,24 @@ class MelonMiddleware(Middleware):
                         best, match = similarity, entry["text"]
                     if similarity > self.settings.threshold:
                         break
-            injection = best > self.settings.threshold
-            reason = (
-                f"tool call {text} matches masked-run call {match} (cosine {best:.3f} > "
-                f"{self.settings.threshold})" if injection else "no masked-run call matched"
-            )
-            return self._record(
-                state, name, payload, allowed=not injection, source="comparison", reason=reason,
-                detail={"tool_call": text, "max_cosine": best if bank else None, "matched": match,
-                        "bank_size": len(bank), "masked_run": masked,
-                        "latency_ms": int((time.time() - started) * 1000)},
-            )
         except Exception as exc:
-            return self._record(state, name, payload, allowed=not self.settings.fail_closed,
+            return self._record(state, phase, name, allowed=not self.settings.fail_closed,
                                 source="error", reason=f"MELON detection failed: {exc}",
-                                detail={"latency_ms": int((time.time() - started) * 1000)})
+                                detail={**base, "latency_ms": int((time.time() - started) * 1000)})
+        injection = best > self.settings.threshold
+        prior = turn["detected"]
+        turn["detected"] = prior or injection
+        if injection:
+            turn["reason"] = (f"tool call {text} matches masked-run call {match} (cosine "
+                              f"{best:.3f} > {self.settings.threshold})")
+        # One matching call flags the whole turn (upstream compares every call).
+        reason = turn.get("reason", "") if turn["detected"] else "no masked-run call matched"
+        return self._record(
+            state, phase, name, allowed=not turn["detected"], source="comparison", reason=reason,
+            detail={**base, "tool_call": text, "max_cosine": best if bank else None, "matched": match,
+                    "turn_detected": turn["detected"], "flagged_by_sibling": prior and not injection,
+                    "bank_size": len(bank), "latency_ms": int((time.time() - started) * 1000)},
+        )
 
     # Masked re-execution -------------------------------------------------
 
@@ -116,11 +182,13 @@ class MelonMiddleware(Middleware):
                 "usage": usage, "latency_ms": int((time.time() - started) * 1000)}
 
     def _system_messages(self, state: dict[str, Any]) -> list[str]:
-        found = [str(message.get("content") or "") for message in state.get("messages") or []
-                 if message.get("role") == "system" and isinstance(message.get("content"), str)]
+        # Upstream keeps every system message of the conversation (pi_detector.py:320-322);
+        # chat-completions `developer` messages carry the same instructions.
+        found = [_text(message.get("content")) for message in state.get("messages") or []
+                 if message.get("role") in {"system", "developer"}]
         found = [text for text in found if text.strip()]
         if found:
-            return found[:1]
+            return found
         return [self.cfg.agent.system_prompt] if self.cfg.agent.system_prompt.strip() else []
 
     def _model(self, state: dict[str, Any]) -> Any:
@@ -181,9 +249,17 @@ class MelonMiddleware(Middleware):
                 projection[tool["name"]], sources[tool["name"]] = rule, "upstream"
         pending = [tool for tool in inventory if tool["name"] not in projection
                    and tool["name"] not in self.settings.projections and tool["arguments"]]
+        # Upstream fully specifies AgentDojo: the two rules above, all arguments
+        # elsewhere. Only other benchmarks, whose tools upstream never saw, get
+        # generated projections in place of hand-written rules.
+        agentdojo = bool(getattr(getattr(self.cfg, "agentdojo", None), "enabled", False))
         manifest: dict[str, Any] = {"status": "upstream_only", "context_mode": "benign_only"}
-        if pending and self.settings.projection_generation == "llm" and self.settings.generator.enabled:
-            manifest = self._generate(pending, state)
+        generate = (not agentdojo and self.settings.projection_generation == "llm"
+                    and self.settings.generator.enabled)
+        manifest["source"] = ("upstream_agentdojo" if agentdojo
+                              else "upstream+generated" if generate and pending else "upstream")
+        if pending and generate:
+            manifest = {**self._generate(pending, state), "source": manifest["source"]}
             for name, args in manifest.pop("projection", {}).items():
                 projection[name], sources[name] = args, manifest["status"]
         for name, args in self.settings.projections.items():
@@ -254,10 +330,10 @@ class MelonMiddleware(Middleware):
             request_timeout=override.request_timeout if override.request_timeout is not None else base.request_timeout,
         )
 
-    def _record(self, state: dict[str, Any], name: str, payload: dict[str, Any], *, allowed: bool,
-                source: str, reason: str, detail: dict[str, Any] | None = None) -> ToolDecision:
+    def _record(self, state: dict[str, Any], phase: str, name: str, *, allowed: bool,
+                source: str, reason: str, detail: dict[str, Any] | None = None) -> dict[str, Any]:
         enforced = not allowed and self.settings.mode == "block"
-        event = {"phase": "before_tool", "tool": name, "allowed": allowed, "enforced": enforced,
+        event = {"phase": phase, "tool": name, "allowed": allowed, "enforced": enforced,
                  "detected": not allowed and source == "comparison", "reason": reason,
                  "source": source, "mode": self.settings.mode, **(detail or {})}
         state["_last_melon_decision"] = event
@@ -272,15 +348,11 @@ class MelonMiddleware(Middleware):
             "detections": sum(1 for item in events if item.get("detected")),
             "bank_size": len(state.get("_melon_bank") or []),
         })
-        if source != "no_tool_output":
+        if source not in {"no_tool_output", "no_new_tool_output"}:
             self._write_artifact(state, "melon_events.json", events)
         if not allowed and self.settings.mode == "warn":
             state["_melon_warning"] = reason
-        if not enforced:
-            return ToolDecision(True, "")
-        # Upstream replaces the turn with a stop message, which ends the agent loop.
-        return ToolDecision(False, reason, replacement_result=f"{STOP_MESSAGE} {OMITTED_MESSAGE}",
-                            decision_type="melon", terminate=True)
+        return event
 
     def _write_artifact(self, state: dict[str, Any], filename: str, value: Any) -> None:
         run_dir = (state.get("_trace_persist") or {}).get("run_dir")
@@ -300,6 +372,29 @@ def _function_tool(tool: dict[str, Any]) -> dict[str, Any]:
         "description": str(tool.get("description") or ""),
         "parameters": schema,
     }}
+
+
+def _text(content: Any) -> str:
+    if isinstance(content, list):
+        return "".join(str(part.get("text") or "") if isinstance(part, dict) else str(part)
+                       for part in content)
+    return str(content or "")
+
+
+def _call_parts(tool_call: Any) -> tuple[str, dict[str, Any]]:
+    if isinstance(tool_call, (tuple, list)) and len(tool_call) == 2:
+        name, payload = tool_call
+    elif isinstance(tool_call, dict):
+        name = tool_call.get("name")
+        payload = tool_call.get("arguments", tool_call.get("args"))
+    else:
+        name, payload = getattr(tool_call, "name", ""), getattr(tool_call, "args", None)
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except ValueError:
+            payload = {"input": payload}
+    return str(name or ""), dict(payload) if isinstance(payload, dict) else {}
 
 
 def _to_langchain(messages: list[dict[str, Any]]) -> list[Any]:

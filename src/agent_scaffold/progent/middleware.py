@@ -9,6 +9,7 @@ from typing import Any
 from ..config import AppConfig, LLMConfig
 from ..llm import LLMAdapter
 from ..middleware import Middleware, ResultDecision, ToolDecision
+from . import always_allow
 from .runtime import ProgentRuntime, RuntimeResult
 from .tools import normalize_tool_definitions, tool_definitions_from_config
 
@@ -17,13 +18,19 @@ class ProgentMiddleware(Middleware):
     def __init__(self, cfg: AppConfig) -> None:
         self.cfg = cfg
         self.settings = cfg.progent
+        # Upstream's ASB agent (asb/pyopenagi/agents/react_agent_attack.py:275-282,
+        # :138) registers tools without arguments, checks names only and never
+        # updates the policy.
+        self.asb = bool(getattr(cfg.agent_security_bench, "enabled", False))
 
     def guard_model_input(
         self, state: dict[str, Any], messages: list[dict[str, Any]]
     ) -> Any:
         error = self._ensure_policy(state)
         if error:
+            state.pop("_progent_batch", None)
             return self._model_failure(state, messages, error)
+        self._flush_update(state)
         from ..middleware import ModelDecision
 
         return ModelDecision(messages=messages)
@@ -46,8 +53,10 @@ class ProgentMiddleware(Middleware):
             return ToolDecision(allowed, "" if allowed else error)
 
         runtime = self._runtime(state)
-        result = runtime.check(name, payload)
+        result = runtime.check(name, {} if self.asb else payload)
         denied = not result.allowed
+        # A denied call raises inside upstream's wrapper, so its update sees "".
+        state["_progent_pending_denied"] = denied
         enforced = denied and self.settings.mode == "block"
         event = self._event(
             allowed=result.allowed,
@@ -77,31 +86,46 @@ class ProgentMiddleware(Middleware):
         result: str,
         failed: bool,
     ) -> ResultDecision:
-        if not self.settings.update_after_tool or failed:
+        denied = bool(state.pop("_progent_pending_denied", False))
+        if not self.settings.update_after_tool or self.asb:
             return ResultDecision(result=result)
+        # Upstream updates once per tool batch after every call ran, with failed
+        # and blocked calls contributing an empty result (agentdojo
+        # tool_execution.py:106-123, functions_runtime.py run_function). The
+        # batch is flushed before the next model call.
+        state.setdefault("_progent_batch", []).append(
+            {
+                "call": {"name": name, "args": copy.deepcopy(payload)},
+                "result": "" if failed or denied else str(result),
+            }
+        )
+        return ResultDecision(result=result)
+
+    def _flush_update(self, state: dict[str, Any]) -> None:
+        batch = state.pop("_progent_batch", None)
+        if not batch:
+            return
         runtime = self._runtime(state)
         update = runtime.update(
-            name,
-            payload,
-            result,
+            [item["call"] for item in batch],
+            str([item["result"] for item in batch]),
             only_allow_narrow=self.settings.only_allow_narrow,
         )
+        # SECAGENT_IGNORE_UPDATE_ERROR=True (agentdojo/run.sh): a failed update
+        # keeps the previous policy and never withholds tool results.
         state["_progent_policy"] = copy.deepcopy(update.policy)
         event = self._event(
             allowed=update.allowed,
             enforced=False,
-            phase="after_tool",
+            phase="policy_update",
             reason=update.reason,
-            tool=name,
+            tool=[item["call"]["name"] for item in batch],
             source="policy_update",
         )
         state["_last_progent_decision"] = event
         state.setdefault("progent_events", []).append(event)
         self._add_usage(state, update.usage)
         self._update_harness(state, event)
-        if not update.allowed and self.settings.fail_closed:
-            return ResultDecision(False, update.reason, result, "progent_update_error")
-        return ResultDecision(result=result)
 
     def _ensure_policy(self, state: dict[str, Any]) -> str:
         if state.get("_progent_initialized"):
@@ -109,6 +133,8 @@ class ProgentMiddleware(Middleware):
         state["_progent_initialized"] = True
         started = time.time()
         runtime = self._runtime(state, use_config_policy=True)
+        if not self.asb:
+            self._register_always_allow(state, runtime)
         generated = RuntimeResult(True, policy=copy.deepcopy(runtime.policy))
         if self.settings.generate_policy:
             generated = runtime.generate()
@@ -145,6 +171,82 @@ class ProgentMiddleware(Middleware):
         )
         return str(state["_progent_init_error"])
 
+    def _register_always_allow(
+        self, state: dict[str, Any], runtime: ProgentRuntime
+    ) -> None:
+        started = time.time()
+        output = self._always_allow(state, runtime.tools)
+        usage = output.pop("usage", {})
+        if output["tools"] or output["allow_all_no_arg_tools"]:
+            registered = runtime.allow_always(
+                output["tools"],
+                allow_all_no_arg_tools=output["allow_all_no_arg_tools"],
+            )
+            if not registered.allowed:
+                output.update(status="failed", error=registered.reason)
+        self._add_usage(state, usage)
+        event = {
+            "step": "progent_always_allow",
+            "timestamp": started,
+            "latency_ms": int((time.time() - started) * 1000),
+            "output": output,
+            "usage": dict(usage),
+        }
+        state.setdefault("trace", []).append(event)
+        self._write_artifact(state, "progent_always_allow.json", event)
+
+    def _always_allow(
+        self, state: dict[str, Any], tools: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        names = [tool["name"] for tool in tools]
+        suite = self.cfg.agentdojo.suite if self.cfg.agentdojo.enabled else ""
+        upstream = always_allow.upstream_always_allow(suite)
+        if upstream is not None:
+            return {
+                "status": "upstream",
+                "suite": suite,
+                "tools": [name for name in upstream["tools"] if name in names],
+                "missing": [name for name in upstream["tools"] if name not in names],
+                "allow_all_no_arg_tools": upstream["allow_all_no_arg_tools"],
+            }
+        if not self.settings.generate_always_allow:
+            return {"status": "disabled", "tools": [], "allow_all_no_arg_tools": False}
+        cached = state.get("_progent_always_allow")
+        if isinstance(cached, list):
+            return {"status": "run_cache", "tools": list(cached), "allow_all_no_arg_tools": False}
+        inventory = always_allow.inventory(tools)
+        llm_cfg = _policy_llm_config(self.cfg)
+        identity = {"provider": llm_cfg.provider, "model": llm_cfg.model, "seed": 0}
+        key = always_allow.fingerprint(inventory, identity)
+        cache = always_allow.batch_cache_path()
+        hit = always_allow.load_cached(cache, key, inventory)
+        if hit is not None:
+            state["_progent_always_allow"] = hit
+            return {"status": "cache", "tools": hit, "allow_all_no_arg_tools": False,
+                    "cache_path": str(cache), "context_mode": "benign_only"}
+        llm = LLMAdapter(llm_cfg)
+        usage: dict[str, int] = {}
+
+        def complete(system: str, user: str) -> str:
+            content, reported = _chat(llm, system, user, 0.0)
+            for field in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                usage[field] = usage.get(field, 0) + int((reported or {}).get(field) or 0)
+            return str(content)
+
+        try:
+            generated, transcript = always_allow.generate(inventory, complete)
+        except Exception as exc:
+            # Without a list upstream registers no always-allowed tools.
+            return {"status": "failed", "error": f"{type(exc).__name__}: {exc}",
+                    "tools": [], "allow_all_no_arg_tools": False, "usage": usage}
+        always_allow.store_cached(cache, key, generated)
+        state["_progent_always_allow"] = generated
+        self._write_artifact(state, "progent_always_allow_raw.json", transcript)
+        return {"status": "llm", "tools": generated, "allow_all_no_arg_tools": False,
+                "context_mode": "benign_only", "attempts": len(transcript),
+                "llm": {"provider": llm_cfg.provider, "model": llm_cfg.model},
+                "usage": usage}
+
     def _runtime(
         self, state: dict[str, Any], *, use_config_policy: bool = False
     ) -> ProgentRuntime:
@@ -153,20 +255,22 @@ class ProgentMiddleware(Middleware):
             if use_config_policy
             else copy.deepcopy(state.get("_progent_policy"))
         )
-        llm = LLMAdapter(_policy_llm_config(self.cfg))
+        llm_cfg = _policy_llm_config(self.cfg)
+        llm = LLMAdapter(llm_cfg)
 
         def complete(system: str, user: str, temperature: float) -> tuple[str, Any]:
-            llm.config.temperature = temperature
-            response = llm.chat(
-                [{"role": "system", "content": system}, {"role": "user", "content": user}]
-            )
-            return response.content, response.usage
+            return _chat(llm, system, user, temperature)
 
+        tools = normalize_tool_definitions(self._tool_definitions(state))
+        if self.asb:
+            tools = [{**tool, "args": {}} for tool in tools]
         return ProgentRuntime(
-            tools=normalize_tool_definitions(self._tool_definitions(state)),
+            tools=tools,
             query=self._query(state),
             policy=policy,
             completion=complete,
+            policy_model=llm_cfg.model,
+            task_type="asb" if self.asb else "general",
         )
 
     def _tool_definitions(self, state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -232,6 +336,19 @@ class ProgentMiddleware(Middleware):
         for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
             stats[key] = int(stats.get(key, 0)) + int(usage.get(key) or 0)
 
+    def _write_artifact(self, state: dict[str, Any], name: str, value: Any) -> None:
+        run_dir = (state.get("_trace_persist") or {}).get("run_dir")
+        if not run_dir:
+            return
+        path = Path(str(run_dir)) / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps(value, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+
     def _persist_policy(self, state: dict[str, Any], event: dict[str, Any]) -> None:
         persist = state.get("_trace_persist") or {}
         run_dir = persist.get("run_dir")
@@ -259,6 +376,32 @@ def _configured_policy(settings: Any) -> dict[str, Any]:
     for name in settings.always_block_tools:
         policy.setdefault(name, []).insert(0, (1, 1, {}, 0))
     return policy
+
+
+def _chat(
+    llm: LLMAdapter, system: str, user: str, temperature: float
+) -> tuple[str, Any]:
+    """Send one policy request with upstream's per-attempt temperature and seed=0.
+
+    Upstream raises the temperature by 0.2 on each retry and pins ``seed=0``
+    (secagent/tool.py:239-250). The adapter builds its client once, so the
+    per-request values are applied to a copy of that client.
+    """
+    llm.config.temperature = temperature
+    llm._lazy_init()
+    client = llm._client
+    if hasattr(client, "model_copy"):
+        updates: dict[str, Any] = {"temperature": temperature}
+        if "seed" in getattr(type(client), "model_fields", {}):
+            updates["seed"] = 0
+        llm._client = client.model_copy(update=updates)
+    try:
+        response = llm.chat(
+            [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        )
+    finally:
+        llm._client = client
+    return response.content, response.usage
 
 
 def _policy_llm_config(cfg: AppConfig) -> LLMConfig:

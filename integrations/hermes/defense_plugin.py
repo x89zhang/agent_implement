@@ -23,6 +23,18 @@ class ProviderCallFailed(BaseException):
         super().__init__(str(original))
 
 
+def _tool_inventory(agent, mapping):
+    """Pass Hermes' model-visible schemas to every guard lifecycle."""
+    return [
+        {
+            "name": mapping.get(tool["function"]["name"], tool["function"]["name"]),
+            "description": tool["function"].get("description", ""),
+            "inputSchema": copy.deepcopy(tool["function"].get("parameters") or {}),
+        }
+        for tool in agent.tools
+    ]
+
+
 class DefensePlugin:
     def __init__(self, agent, request, mapping, event):
         self.agent, self.request, self.mapping, self.event = (
@@ -59,13 +71,7 @@ class DefensePlugin:
         ctx = PluginContext(
             PluginManifest(name="project-defenses"), get_plugin_manager()
         )
-        tools = [
-            {
-                "name": self.mapping.get(t["function"]["name"], t["function"]["name"]),
-                "description": t["function"].get("description", ""),
-            }
-            for t in self.agent.tools
-        ]
+        tools = _tool_inventory(self.agent, self.mapping)
         self.rpc(
             "initialize",
             tools=tools,
@@ -350,13 +356,7 @@ class ReplayRecorderPlugin:
             PluginManifest(name="project-defense-replay-recorder"),
             get_plugin_manager(),
         )
-        tools = [
-            {
-                "name": self.mapping.get(t["function"]["name"], t["function"]["name"]),
-                "description": t["function"].get("description", ""),
-            }
-            for t in self.agent.tools
-        ]
+        tools = _tool_inventory(self.agent, self.mapping)
         self._record(
             "initialize",
             tools=tools,

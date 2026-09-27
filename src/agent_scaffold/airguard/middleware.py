@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import re
 import sys
 import time
 import uuid
@@ -17,11 +16,12 @@ from ..middleware import Middleware, ModelDecision, ResultDecision, ToolDecision
 
 
 _DENIED = frozenset({"block", "ask", "inspect", "sandbox", "quarantine"})
-_READ = frozenset({"read", "get", "list", "search", "find", "query", "fetch", "browse", "view", "lookup", "inspect"})
-_DELETE = frozenset({"delete", "remove", "purge", "drop", "truncate", "destroy", "rm"})
-_EXEC = frozenset({"execute", "exec", "run", "shell", "bash", "terminal", "script"})
-_NETWORK = frozenset({"http", "request", "download", "upload", "curl", "wget"})
-_WRITE = frozenset({"write", "create", "add", "update", "set", "modify", "append", "save"})
+# Upstream's reference integration (integrations/mcp_proxy.py:60-70) checks
+# every tool call against one fixed low-trust resource and a constant
+# authority; parsing user intent into allow/deny is an upstream TODO.
+_PROXY_RESOURCE_ID = "mcp-proxy-tool"
+_PROXY_CONSTRAINTS = ("no_secret", "no_network", "inspect_before_exec")
+_PROXY_USER_INTENT_CHARS = 500  # benchmarks/dtap/agents/claudecli/agent.py:78
 
 
 class _OpenAICompletionCompat:
@@ -53,6 +53,8 @@ class AIRGuardMiddleware(Middleware):
     def guard_model_output(
         self, state: dict[str, Any], content: str, tool_call: Any
     ) -> ModelDecision:
+        # Project extension (off by default): the upstream proxy only guards
+        # tool calls, so final responses are not checked on the DTAP path.
         if tool_call is not None or not content.strip() or not self.settings.check_final_output:
             return ModelDecision(content=content, tool_call=tool_call)
         event = self._check(state, "output.respond", {"message": content}, "model_output")
@@ -119,15 +121,9 @@ class AIRGuardMiddleware(Middleware):
                         result="Tool result withheld by AIRGuard.",
                         decision_type="airguard_error",
                     )
-        if not failed:
-            state["_airguard_resource"] = {
-                "resource_id": f"tool:{name}:{uuid.uuid4().hex}",
-                "publisher": self.settings.tool_publishers.get(
-                    name, self.settings.default_tool_publisher
-                ),
-                "content_ref": str(output)[: self.settings.max_content_chars],
-            }
-        if pending is not None:
+        # Project extension (off by default): upstream's proxy runs no
+        # post-action audit; it only redacts credentials in tool output.
+        if pending is not None and self.settings.post_action_audit:
             try:
                 self._post_audit(state, pending, str(output), failed)
             except Exception as exc:
@@ -160,39 +156,53 @@ class AIRGuardMiddleware(Middleware):
             "phase": phase, "tool": name, "outcome": "", "flagged": False,
             "blocked": False, "reason": "", "error": "", "risk_source": "",
             "risk_model": "", "target_trust_tier": "", "resource_publisher": "",
-            "redacted": False,
+            "redacted": False, "sensitive_target": False, "normalized_action": "",
+            "extension": phase == "model_output",
         }
         try:
             upstream = self._load_upstream()
-            action = self._action(upstream, name, payload, state)
-            resource = self._resource(upstream, state)
-            event["resource_publisher"] = str(resource.publisher)
+            action = self._action(upstream, name, payload)
+            event["normalized_action"] = _value(action.normalized_action)
+            resource = self._resource(upstream)
+            event["resource_publisher"] = _value(resource.publisher)
+            intent = str(state.get("_airguard_user_request") or self.cfg.agent.task)
             authority = upstream.types.AuthorityContext(
                 issuer=upstream.types.Issuer.USER,
                 subject=upstream.types.Subject.AGENT,
                 scope=upstream.types.Scope.TASK,
                 allow=list(self.settings.authority_allow),
                 guard="ask",
-                user_intent=str(state.get("_airguard_user_request") or self.cfg.agent.task),
+                user_intent=intent[:_PROXY_USER_INTENT_CHARS],
             )
             ledger = upstream.audit_containment.LedgerStore()
             for row in state.get("_airguard_ledger", []):
                 ledger.record(upstream.types.LedgerEntry(**row))
+            # Like mcp_proxy._guard_check, history is empty; the run-scoped
+            # ledger still carries the sequence audit across calls.
             decision = upstream.guard.check_action(
                 resource=resource,
                 authority_ctx=authority,
                 action=action,
-                history=ledger.all_entries(),
+                history=[],
                 ledger=ledger,
                 llm_client=self._client(),
                 risk_model=self.settings.model or self.cfg.llm.model,
             )
             state["_airguard_ledger"] = [asdict(row) for row in ledger.all_entries()]
             outcome = decision.outcome.value if hasattr(decision.outcome, "value") else str(decision.outcome)
+            flagged = outcome in _DENIED
+            reason = decision.reasoning
+            # mcp_proxy.py:158-161: exec/write on a sensitive target is blocked
+            # regardless of the pipeline outcome.
+            sensitive = _is_sensitive(upstream, action.args)
+            event["sensitive_target"] = sensitive
+            if sensitive and event["normalized_action"] in {"process.exec", "file.write"} and not flagged:
+                outcome, flagged = "block", True
+                reason = f"{reason} Proxy override: {event['normalized_action']} on a sensitive target."
             event.update({
                 "outcome": outcome,
-                "flagged": outcome in _DENIED,
-                "reason": decision.reasoning,
+                "flagged": flagged,
+                "reason": reason,
                 "risk_source": decision.risk_source,
                 "risk_model": decision.risk_model,
                 "risk_recommendation": decision.risk_recommendation,
@@ -233,29 +243,32 @@ class AIRGuardMiddleware(Middleware):
         state["_airguard_ledger"] = [asdict(row) for row in ledger.all_entries()]
         self._record(state, {
             "phase": "after_tool", "tool": pending["name"],
-            "outcome": "audit", "blocked": False,
+            "outcome": "audit", "blocked": False, "extension": True,
             "suspicions": [asdict(item) for item in suspicions],
             "reason": f"Post-action audit found {len(suspicions)} suspicion(s)",
             "mode": self.settings.mode,
         })
 
-    def _action(self, upstream: Any, name: str, payload: dict[str, Any], state: dict[str, Any]) -> Any:
-        normalized = _normalized_action(name, payload)
-        source = state.get("_airguard_resource") or {}
+    def _action(self, upstream: Any, name: str, payload: dict[str, Any]) -> Any:
+        # output.respond is only produced by the final-response extension.
+        normalized = "output.respond" if name == "output.respond" else normalize_action(name, upstream)
         return upstream.types.Action(
             action_id=uuid.uuid4().hex,
             name=name,
             args=dict(payload),
-            source_resource_id=str(source.get("resource_id") or "trusted_user_task"),
+            source_resource_id=_PROXY_RESOURCE_ID,
+            required_capabilities=[_value(normalized).split(".")[0]],
             normalized_action=normalized,
         )
 
-    def _resource(self, upstream: Any, state: dict[str, Any]) -> Any:
-        source = state.get("_airguard_resource") or {
-            "resource_id": "trusted_user_task", "publisher": "user",
-            "trust_tier": "high", "content_ref": "",
-        }
-        return upstream.trust_labeling.label_resource(source)
+    def _resource(self, upstream: Any) -> Any:
+        types = upstream.types
+        return types.Resource(
+            resource_id=_PROXY_RESOURCE_ID,
+            publisher=types.Publisher.UNKNOWN_WEB,
+            trust_tier=types.TrustTier.LOW,
+            constraints=list(_PROXY_CONSTRAINTS),
+        )
 
     def _client(self) -> Any:
         if not self.settings.use_llm:
@@ -317,6 +330,11 @@ class AIRGuardMiddleware(Middleware):
             raise RuntimeError(
                 "AIRGuard source is unavailable; set airguard.source_root to its checkout"
             ) from exc
+        try:
+            # Needs the optional ``mcp`` package; the vendored copy is identical.
+            package.mcp_proxy = importlib.import_module("airguard.integrations.mcp_proxy")
+        except Exception:
+            package.mcp_proxy = None
         self._upstream = package
         return package
 
@@ -355,36 +373,69 @@ class AIRGuardMiddleware(Middleware):
         )
 
 
-def _normalized_action(name: str, payload: dict[str, Any]) -> str:
-    if name == "output.respond":
-        return "output.respond"
-    tokens = set(re.split(r"[_\-./\s]+", name.lower()))
-    if "email" in tokens and "send" in tokens:
-        return "email.send"
-    if "mail" in tokens and "send" in tokens:
-        return "email.send"
-    if "browser" in tokens and tokens & {"navigate", "open", "go"}:
-        return "browser.navigate"
-    if "browser" in tokens and tokens & {"extract", "scrape", "read"}:
-        return "browser.extract"
-    if "memory" in tokens and tokens & _WRITE:
-        return "memory.write"
-    if "config" in tokens and tokens & (_WRITE | _DELETE):
-        return "config.modify"
-    if tokens & {"database", "db", "sql"} and tokens & (_READ | {"select"}):
-        return "database.query"
-    if tokens & {"package", "pip", "npm"} and tokens & {"install", "add"}:
-        return "package.install"
-    if tokens & _DELETE:
+def _value(item: Any) -> str:
+    return str(getattr(item, "value", item))
+
+
+def normalize_action(name: str, upstream: Any = None) -> str:
+    """Upstream DTAP proxy normalization; prefer the installed upstream copy."""
+    proxy = getattr(upstream, "mcp_proxy", None)
+    if proxy is not None:
+        return _value(proxy._normalize(name))
+    return _normalize(name)
+
+
+def _is_sensitive(upstream: Any, args: dict[str, Any]) -> bool:
+    proxy = getattr(upstream, "mcp_proxy", None)
+    if proxy is not None:
+        return bool(proxy._is_sensitive(args))
+    return _proxy_is_sensitive(args)
+
+
+# Vendored verbatim from AIRGuard 3def7bff3afbfb890e224131190a988bd3e4faba,
+# src/airguard/integrations/mcp_proxy.py:84-127, for environments without the
+# optional ``mcp`` dependency. Only the enum return values became strings.
+def _normalize(name: str) -> str:
+    """Map tool name to NormalizedAction.
+
+    Order matters: destructive and exec checks run first so that names like
+    ``delete_readme`` or ``run_query`` are not swallowed by the read branch.
+    Matching uses ``_``/``-`` split tokens, not raw substrings, to avoid
+    partial-word collisions.
+    """
+    import re as _re
+    tokens = set(_re.split(r"[_\-./\s]+", name.lower()))
+
+    # Destructive first — before read, so delete_readme → FILE_DELETE
+    if tokens & {"delete", "remove", "rm", "drop", "purge", "truncate", "destroy"}:
         return "file.delete"
-    if tokens & _EXEC:
+    # Exec before read — so run_query → PROCESS_EXEC
+    if tokens & {"execute", "run", "exec", "bash", "terminal", "shell"}:
         return "process.exec"
-    if tokens & _NETWORK:
-        return "network.request"
-    if tokens & _READ:
+    # Read
+    if tokens & {"query", "search", "get", "list", "read", "find", "check", "view", "fetch",
+                 "browse", "tree", "info", "show", "describe", "lookup", "inspect",
+                 "login", "auth"}:
         return "file.read"
-    if tokens & _WRITE:
+    # Write
+    if tokens & {"write", "create", "add", "update", "set", "modify", "send", "put", "insert", "append"}:
         return "file.write"
-    if "command" in payload or "cmd" in payload:
-        return "process.exec"
     return "tool.call"
+
+
+_SENSITIVE_TARGETS = [
+    ".bashrc", ".zshrc", ".profile", ".bash_profile",
+    ".ssh", ".env", ".aws", "id_rsa",
+    "/etc/shadow", "/etc/passwd", "/etc/sudoers",
+    "crontab", "systemd", "launchd",
+]
+
+
+def _proxy_is_sensitive(args: dict) -> bool:
+    for v in args.values():
+        if isinstance(v, str):
+            vl = v.lower()
+            for s in _SENSITIVE_TARGETS:
+                if s in vl:
+                    return True
+    return False

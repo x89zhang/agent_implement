@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import importlib
+import os
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -30,11 +31,18 @@ class ProgentRuntime:
         policy: dict[str, Any] | None = None,
         completion: Callable[[str, str, float], tuple[str, dict[str, Any] | None]]
         | None = None,
+        policy_model: str = "",
+        task_type: str = "general",
     ) -> None:
         self.tools = copy.deepcopy(tools)
         self.query = query
         self.policy = copy.deepcopy(policy)
         self.completion = completion
+        # Upstream branches its prompts and JSON extraction on this name
+        # (secagent/tool.py:300-372, :388-391), so it names the model that answers.
+        self.policy_model = policy_model
+        # "asb" selects SYS_PROMPT_ASB (secagent/tool.py:300-307).
+        self.task_type = task_type
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     @staticmethod
@@ -60,11 +68,28 @@ class ProgentRuntime:
                 usage=dict(self.usage),
             )
 
+    def allow_always(self, tools: list[str], *, allow_all_no_arg_tools: bool) -> RuntimeResult:
+        """Register priority-1 allow entries as upstream's suite modules do."""
+        try:
+            module = self._module()
+            with self._activated(module):
+                module.update_always_allowed_tools(
+                    list(tools), allow_all_no_arg_tools=allow_all_no_arg_tools
+                )
+                self.policy = copy.deepcopy(module.get_current_config())
+            return RuntimeResult(True, policy=copy.deepcopy(self.policy))
+        except Exception as exc:
+            return RuntimeResult(
+                False,
+                f"Progent always-allow registration failed: {type(exc).__name__}: {exc}",
+                policy=copy.deepcopy(self.policy),
+            )
+
     def check(self, name: str, arguments: dict[str, Any]) -> RuntimeResult:
         try:
             module = self._module()
             with self._activated(module):
-                module.check_tool_call(name, copy.deepcopy(arguments))
+                module.check_tool_call(name, self._with_defaults(name, arguments))
                 self.policy = copy.deepcopy(module.get_current_config())
             return RuntimeResult(True, policy=copy.deepcopy(self.policy))
         except Exception as exc:
@@ -76,19 +101,19 @@ class ProgentRuntime:
 
     def update(
         self,
-        name: str,
-        arguments: dict[str, Any],
-        result: Any,
+        calls: list[dict[str, Any]],
+        result: str,
         *,
         only_allow_narrow: bool,
     ) -> RuntimeResult:
+        """One update per tool batch, as agentdojo tool_execution.py:120-123."""
         previous = copy.deepcopy(self.policy)
         try:
             module = self._module()
             with self._activated(module):
                 module.generate_update_security_policy(
-                    [{"name": name, "args": copy.deepcopy(arguments)}],
-                    str(result),
+                    copy.deepcopy(calls),
+                    result,
                     manual_check=False,
                 )
                 candidate = copy.deepcopy(module.get_current_config())
@@ -129,12 +154,20 @@ class ProgentRuntime:
                 "init_user_query",
                 "api_request",
                 "generate_policy",
+                "policy_model",
+                "ignore_update_error",
             )
             previous = {name: getattr(module, name, None) for name in names}
+            previous_task_type = os.environ.get("SECAGENT_TASK_TYPE")
             module.available_tools = copy.deepcopy(self.tools)
             module.security_policy = copy.deepcopy(self.policy)
             module.init_user_query = self.query
             module.generate_policy = True
+            # agentdojo/run.sh exports SECAGENT_IGNORE_UPDATE_ERROR=True.
+            module.ignore_update_error = True
+            if self.policy_model:
+                module.policy_model = self.policy_model
+            os.environ["SECAGENT_TASK_TYPE"] = self.task_type
             if self.completion is not None:
                 module.api_request = self._complete
             try:
@@ -142,6 +175,22 @@ class ProgentRuntime:
             finally:
                 for name, value in previous.items():
                     setattr(module, name, value)
+                if previous_task_type is None:
+                    os.environ.pop("SECAGENT_TASK_TYPE", None)
+                else:
+                    os.environ["SECAGENT_TASK_TYPE"] = previous_task_type
+
+    def _with_defaults(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Upstream checks ``bound_args`` after ``apply_defaults()`` (tool.py:754-757)."""
+        values: dict[str, Any] = {}
+        for tool in self.tools:
+            if tool["name"] == name:
+                for key, schema in (tool.get("args") or {}).items():
+                    if isinstance(schema, dict) and "default" in schema:
+                        values[key] = copy.deepcopy(schema["default"])
+                break
+        values.update(copy.deepcopy(arguments))
+        return values
 
     def _complete(self, system: str, user: str, temperature: float = 0.0) -> str:
         if self.completion is None:  # pragma: no cover - guarded by _activated

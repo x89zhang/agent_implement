@@ -182,6 +182,7 @@ class GuardController:
         self.state["_safeagent_tools"] = copy.deepcopy(payload["tools"])
         self.state["_adr_user_request"] = generation_task
         self.state["_toolsafe_user_request"] = self.task
+        self.state["_toolsafe_tools"] = copy.deepcopy(payload["tools"])
         self.state["_agentspec_user_request"] = self.task
         airguard_generation = compile_airguard_authority(
             self.cfg, generation_task, self.directory

@@ -114,6 +114,9 @@ class ProgentConfig:
     policy: dict[str, list[Any]] = field(default_factory=dict)
     always_allow_tools: list[str] = field(default_factory=list)
     always_block_tools: list[str] = field(default_factory=list)
+    # Benchmarks without upstream's hand-written AgentDojo list get an
+    # LLM-chosen list of read-only tools from the tool inventory only.
+    generate_always_allow: bool = True
     provider: str = ""
     model: str = ""
     temperature: float | None = None
@@ -132,7 +135,10 @@ class DriftConfig:
     dynamic_validation: bool = True
     request_user_approval: bool = False
     max_revisions: int = 2
-    max_mask_passes: int = 2
+    # Extra detections when masking leaves a tool result unchanged (upstream mask_limitation).
+    mask_limitation: int = 1
+    # auto: asb when agent_security_bench is enabled, else agentdojo.
+    profile: str = "auto"
     provider: str = ""
     model: str = ""
     temperature: float | None = None
@@ -148,19 +154,19 @@ class AGrailConfig:
     mode: str = "block"
     fail_closed: bool = True
     generate_checks: bool = True
-    generator_context_mode: str = "benign_only"
     update_memory: bool = True
     memory_path: str = ""
-    max_checks: int = 8
-    max_memory_entries: int = 50
+    # 0 keeps upstream's unbounded memory; a positive value keeps the newest N.
+    max_memory_entries: int = 0
+    # Empty generates a specification from the tool inventory once per run.
     agent_specification: str = ""
-    principles: list[str] = field(default_factory=list)
+    # Empty uses upstream UNIVERSIAL_USAGE_PRINCEPLE.
+    principles: str = ""
     check_items: list[str] = field(default_factory=list)
-    categories: dict[str, str] = field(default_factory=lambda: {
-        "Information Confidentiality": "Prevent unauthorized disclosure or access.",
-        "Information Integrity": "Prevent unauthorized changes to data or systems.",
-        "Information Availability": "Preserve access to resources needed for the task.",
-    })
+    # Empty uses upstream's generic confidentiality/integrity/availability criteria.
+    categories: dict[str, str] = field(default_factory=dict)
+    # Empty is upstream's generic setting (tools={"": ""}): no detectors.
+    detectors: dict[str, str] = field(default_factory=dict)
     provider: str = ""
     model: str = ""
     temperature: float | None = None
@@ -184,6 +190,8 @@ class RopeConfig:
     scope_path: str = ""
     clamp: bool = False
     trusted_facts: str = ""
+    live_few_shot: bool = True
+    router_cache_path: str = ""
     provider: str = ""
     model: str = ""
     temperature: float | None = None
@@ -246,7 +254,9 @@ class MelonConfig:
 
 @dataclass
 class AIRGuardGeneratorConfig:
-    enabled: bool = True
+    # Not upstream: AIRGuard uses a constant authority (see README), so the
+    # project-side LLM authority generator is an explicit opt-in variant.
+    enabled: bool = False
     context_mode: str = "benign_only"
     max_attempts: int = 2
     fail_closed: bool = False
@@ -269,6 +279,8 @@ class AIRGuardConfig:
     fail_closed: bool = True
     source_root: str = "/opt/airguard/src"
     authority_allow: list[str] = field(default_factory=lambda: ["read", "write", "respond"])
+    # Ignored: upstream's proxy labels every call unknown_web/low; kept for
+    # backward-compatible YAML parsing.
     default_tool_publisher: str = "unknown_web"
     tool_publishers: dict[str, str] = field(default_factory=dict)
     use_llm: bool = True
@@ -278,7 +290,9 @@ class AIRGuardConfig:
     api_key: str = ""
     api_key_env: str = ""
     timeout_seconds: float = 30.0
-    check_final_output: bool = True
+    # Project extensions beyond upstream's DTAP proxy path; off by default.
+    check_final_output: bool = False
+    post_action_audit: bool = False
     redact_credentials: bool = True
     max_content_chars: int = 4000
     generator: AIRGuardGeneratorConfig = field(default_factory=AIRGuardGeneratorConfig)
@@ -478,8 +492,10 @@ class ToolSafeConfig:
     api_key: str = ""
     api_key_env: str = "TOOLSAFE_API_KEY"
     timeout_seconds: float = 30.0
-    max_history_steps: int = 20
-    max_replans: int = 3
+    # 0 keeps the full history, as upstream TS-Guard does.
+    max_history_steps: int = 0
+    # None: no replan cap; upstream TS-Flow is bounded only by max_turns.
+    max_replans: int | None = None
     fail_closed: bool = False
 
 
@@ -1442,6 +1458,7 @@ def load_config(path: str | Path) -> AppConfig:
                 str(item)
                 for item in (progent_raw.get("always_block_tools", []) or [])
             ],
+            generate_always_allow=bool(progent_raw.get("generate_always_allow", True)),
             provider=str(progent_llm_raw.get("provider", "")).lower(),
             model=str(progent_llm_raw.get("model", "")),
             temperature=(
@@ -1489,7 +1506,8 @@ def load_config(path: str | Path) -> AppConfig:
             dynamic_validation=bool(drift_raw.get("dynamic_validation", True)),
             request_user_approval=bool(drift_raw.get("request_user_approval", False)),
             max_revisions=int(drift_raw.get("max_revisions", 2)),
-            max_mask_passes=int(drift_raw.get("max_mask_passes", 2)),
+            mask_limitation=int(drift_raw.get("mask_limitation", 1)),
+            profile=str(drift_raw.get("profile", "auto")).lower(),
             provider=str(drift_llm.get("provider", "") or "").lower(),
             model=str(drift_llm.get("model", "") or ""),
             temperature=(float(drift_llm["temperature"]) if "temperature" in drift_llm else None),
@@ -1500,8 +1518,10 @@ def load_config(path: str | Path) -> AppConfig:
         )
         if drift.mode not in {"block", "warn", "monitor"}:
             raise ValueError("drift.mode must be one of: block, warn, monitor")
-        if drift.max_revisions < 0 or drift.max_mask_passes < 1:
-            raise ValueError("drift.max_revisions must be nonnegative and max_mask_passes positive")
+        if drift.max_revisions < 0 or drift.mask_limitation < 0:
+            raise ValueError("drift.max_revisions and drift.mask_limitation must be nonnegative")
+        if drift.profile not in {"auto", "agentdojo", "asb"}:
+            raise ValueError("drift.profile must be one of: auto, agentdojo, asb")
     else:
         raise TypeError("drift must be a boolean or mapping")
 
@@ -1509,40 +1529,45 @@ def load_config(path: str | Path) -> AppConfig:
     if isinstance(agrail_raw, bool):
         agrail = AGrailConfig(enabled=agrail_raw)
     elif isinstance(agrail_raw, dict):
-        agrail_generator = agrail_raw.get("generator", {}) or {}
-        if not isinstance(agrail_generator, dict):
-            raise TypeError("agrail.generator must be a mapping")
+        if "generator" in agrail_raw or "max_checks" in agrail_raw:
+            # The Analyzer now follows upstream and analyzes each concrete
+            # action, so the benign_only generator context and caps are gone.
+            raise ValueError("agrail.generator and agrail.max_checks were removed; "
+                             "the Analyzer checks each concrete action as upstream")
         agrail_llm = agrail_raw.get("llm", {}) or {}
         if not isinstance(agrail_llm, dict):
             raise TypeError("agrail.llm must be a mapping")
         if agrail_llm.get("api_key"):
             raise ValueError("agrail.llm.api_key must not be stored in YAML; use api_key_env")
-        categories = agrail_raw.get("categories")
-        if categories is not None and (not isinstance(categories, dict) or not categories
-            or not all(isinstance(k, str) and k.strip() and isinstance(v, str)
-                       for k, v in categories.items())):
-            raise TypeError("agrail.categories must be a nonempty string mapping")
-        for key in ("principles", "check_items"):
-            value = agrail_raw.get(key, []) or []
-            if not isinstance(value, list) or not all(isinstance(x, str) and x.strip() for x in value):
-                raise TypeError(f"agrail.{key} must be a list of nonempty strings")
+        for key in ("categories", "detectors"):
+            value = agrail_raw.get(key, {}) or {}
+            if not isinstance(value, dict) or not all(
+                    isinstance(k, str) and k.strip() and isinstance(v, str)
+                    for k, v in value.items()):
+                raise TypeError(f"agrail.{key} must be a string mapping")
+        check_items = agrail_raw.get("check_items", []) or []
+        if not isinstance(check_items, list) or not all(
+                isinstance(x, str) and x.strip() for x in check_items):
+            raise TypeError("agrail.check_items must be a list of nonempty strings")
+        principles = agrail_raw.get("principles", "") or ""
+        if isinstance(principles, list) and all(isinstance(x, str) for x in principles):
+            principles = "\n".join(principles)
+        if not isinstance(principles, str):
+            raise TypeError("agrail.principles must be a string or list of strings")
         key_env = str(agrail_llm.get("api_key_env", "") or "")
         agrail = AGrailConfig(
             enabled=bool(agrail_raw.get("enabled", False)),
             mode=str(agrail_raw.get("mode", "block")).lower(),
             fail_closed=bool(agrail_raw.get("fail_closed", True)),
             generate_checks=bool(agrail_raw.get("generate_checks", True)),
-            generator_context_mode=str(
-                agrail_generator.get("context_mode", "benign_only")
-            ).lower(),
             update_memory=bool(agrail_raw.get("update_memory", True)),
             memory_path=str(agrail_raw.get("memory_path", "") or ""),
-            max_checks=int(agrail_raw.get("max_checks", 8)),
-            max_memory_entries=int(agrail_raw.get("max_memory_entries", 50)),
+            max_memory_entries=int(agrail_raw.get("max_memory_entries", 0) or 0),
             agent_specification=str(agrail_raw.get("agent_specification", "") or ""),
-            principles=list(agrail_raw.get("principles", []) or []),
-            check_items=list(agrail_raw.get("check_items", []) or []),
-            categories=dict(categories) if categories is not None else AGrailConfig().categories,
+            principles=principles,
+            check_items=list(check_items),
+            categories=dict(agrail_raw.get("categories", {}) or {}),
+            detectors=dict(agrail_raw.get("detectors", {}) or {}),
             provider=str(agrail_llm.get("provider", "") or "").lower(),
             model=str(agrail_llm.get("model", "") or ""),
             temperature=float(agrail_llm["temperature"]) if "temperature" in agrail_llm else None,
@@ -1553,12 +1578,8 @@ def load_config(path: str | Path) -> AppConfig:
         )
         if agrail.mode not in {"block", "warn", "monitor"}:
             raise ValueError("agrail.mode must be one of: block, warn, monitor")
-        if agrail.generator_context_mode != "benign_only":
-            raise ValueError("agrail.generator.context_mode must be benign_only")
-        if agrail.max_checks < 1 or agrail.max_memory_entries < 1:
-            raise ValueError("agrail max_checks and max_memory_entries must be positive")
-        if len(agrail.check_items) > agrail.max_checks:
-            raise ValueError("agrail.check_items exceeds max_checks")
+        if agrail.max_memory_entries < 0:
+            raise ValueError("agrail.max_memory_entries must be nonnegative")
         if agrail.enabled and not agrail.generate_checks and not agrail.check_items:
             raise ValueError("agrail requires check_items when generate_checks is false")
     else:
@@ -1595,6 +1616,8 @@ def load_config(path: str | Path) -> AppConfig:
             scope_path=str(rope_raw.get("scope_path", "") or ""),
             clamp=bool(rope_raw.get("clamp", False)),
             trusted_facts=str(rope_raw.get("trusted_facts", "") or ""),
+            live_few_shot=bool(rope_raw.get("live_few_shot", True)),
+            router_cache_path=str(rope_raw.get("router_cache_path", "") or ""),
             provider=str(rope_llm_raw.get("provider", "") or "").lower(),
             model=str(rope_llm_raw.get("model", "") or ""),
             temperature=(
@@ -1612,6 +1635,8 @@ def load_config(path: str | Path) -> AppConfig:
             raise ValueError("rope.router must be one of: live, cached, static")
         if rope.floor_generation not in {"llm", "audited_only"}:
             raise ValueError("rope.floor_generation must be one of: llm, audited_only")
+        if rope.temperature not in (None, 0.0):
+            raise ValueError("rope.llm.temperature must be 0; the ROPE router is deterministic")
         if rope.scope and rope.scope_path:
             raise ValueError("rope.scope and rope.scope_path cannot both be set")
     else:
@@ -1654,7 +1679,7 @@ def load_config(path: str | Path) -> AppConfig:
             raise ValueError("airguard.authority_allow must contain AIRGuard capabilities")
         generator_api_key_env = str(generator_llm_raw.get("api_key_env", "") or "")
         generator = AIRGuardGeneratorConfig(
-            enabled=bool(generator_raw.get("enabled", True)),
+            enabled=bool(generator_raw.get("enabled", False)),
             context_mode=str(generator_raw.get("context_mode", "benign_only")),
             max_attempts=int(generator_raw.get("max_attempts", 2)),
             fail_closed=bool(generator_raw.get("fail_closed", False)),
@@ -1690,7 +1715,8 @@ def load_config(path: str | Path) -> AppConfig:
             api_key=os.environ.get(str(llm_raw.get("api_key_env", "")), "") if llm_raw.get("api_key_env") else "",
             api_key_env=str(llm_raw.get("api_key_env", "")),
             timeout_seconds=float(llm_raw.get("timeout_seconds", 30.0)),
-            check_final_output=bool(airguard_raw.get("check_final_output", True)),
+            check_final_output=bool(airguard_raw.get("check_final_output", False)),
+            post_action_audit=bool(airguard_raw.get("post_action_audit", False)),
             redact_credentials=bool(airguard_raw.get("redact_credentials", True)),
             max_content_chars=int(airguard_raw.get("max_content_chars", 4000)),
             generator=generator,
@@ -2141,8 +2167,12 @@ def load_config(path: str | Path) -> AppConfig:
             api_key=str(toolsafe_raw.get("api_key", "")),
             api_key_env=str(toolsafe_raw.get("api_key_env", "TOOLSAFE_API_KEY")),
             timeout_seconds=float(toolsafe_raw.get("timeout_seconds", 30.0)),
-            max_history_steps=int(toolsafe_raw.get("max_history_steps", 20)),
-            max_replans=int(toolsafe_raw.get("max_replans", 3)),
+            max_history_steps=int(toolsafe_raw.get("max_history_steps") or 0),
+            max_replans=(
+                None
+                if toolsafe_raw.get("max_replans") is None
+                else int(toolsafe_raw["max_replans"])
+            ),
             fail_closed=bool(toolsafe_raw.get("fail_closed", False)),
         )
         if toolsafe.mode not in {"replan", "block", "warn", "monitor"}:
@@ -2159,7 +2189,7 @@ def load_config(path: str | Path) -> AppConfig:
             raise ValueError("toolsafe.timeout_seconds must be greater than zero")
         if toolsafe.max_history_steps < 0:
             raise ValueError("toolsafe.max_history_steps must be non-negative")
-        if toolsafe.max_replans < 0:
+        if toolsafe.max_replans is not None and toolsafe.max_replans < 0:
             raise ValueError("toolsafe.max_replans must be non-negative")
     else:
         toolsafe = ToolSafeConfig()
