@@ -106,6 +106,15 @@ def _image_has_airguard(image: str, workspace_root: Path) -> bool:
     return probe.returncode == 0
 
 
+def _image_has_agrail(image: str, workspace_root: Path) -> bool:
+    probe = _run_checked(
+        ["docker", "run", "--rm", "--network", "none", "--entrypoint", "python",
+         image, "-c", "import sentence_transformers, langchain_chroma"],
+        workspace_root,
+    )
+    return probe.returncode == 0
+
+
 def _image_has_safeagent(image: str, workspace_root: Path) -> bool:
     probe = _run_checked(
         ["docker", "run", "--rm", "--network", "none", "--entrypoint", "python",
@@ -142,6 +151,8 @@ def _effective_build_args(cfg: Any) -> dict[str, str]:
         build_args["INSTALL_AIRGUARD"] = "true"
     if getattr(getattr(cfg, "safeagent", None), "enabled", False):
         build_args["INSTALL_SAFEAGENT"] = "true"
+    if getattr(getattr(cfg, "agrail", None), "enabled", False):
+        build_args["INSTALL_AGRAIL"] = "true"
     if _clawsentry_managed(cfg):
         build_args["INSTALL_CLAWSENTRY"] = "true"
     return build_args
@@ -166,6 +177,11 @@ def _ensure_image(cfg: Any, workspace_root: Path) -> None:
         and getattr(getattr(cfg, "airguard", None), "enabled", False)
         and not _image_has_airguard(image, workspace_root)
     )
+    agrail_missing = (
+        image_exists
+        and getattr(getattr(cfg, "agrail", None), "enabled", False)
+        and not _image_has_agrail(image, workspace_root)
+    )
     safeagent_missing = (
         image_exists
         and getattr(getattr(cfg, "safeagent", None), "enabled", False)
@@ -175,7 +191,7 @@ def _ensure_image(cfg: Any, workspace_root: Path) -> None:
         image_exists and _clawsentry_managed(cfg)
         and not _image_has_clawsentry(image, workspace_root)
     )
-    if image_exists and not any((agentspec_missing, adr_missing, airguard_missing, safeagent_missing, clawsentry_missing)):
+    if image_exists and not any((agentspec_missing, adr_missing, airguard_missing, agrail_missing, safeagent_missing, clawsentry_missing)):
         return
     if not bool(cfg.container.auto_build):
         if agentspec_missing:
@@ -194,6 +210,11 @@ def _ensure_image(cfg: Any, workspace_root: Path) -> None:
             raise RuntimeError(
                 f"Container image {image!r} lacks AIRGuard source. "
                 "Build it with --build-arg INSTALL_AIRGUARD=true."
+            )
+        if agrail_missing:
+            raise RuntimeError(
+                f"Container image {image!r} lacks AGrail's sentence-transformers runtime. "
+                "Build it with --build-arg INSTALL_AGRAIL=true."
             )
         if safeagent_missing:
             raise RuntimeError(
@@ -234,6 +255,11 @@ def _ensure_image(cfg: Any, workspace_root: Path) -> None:
         raise RuntimeError(
             f"Container image {image!r} was built without a working ADR "
             "runtime. Ensure its Dockerfile honors INSTALL_ADR=true."
+        )
+    if getattr(getattr(cfg, "agrail", None), "enabled", False) and not _image_has_agrail(image, workspace_root):
+        raise RuntimeError(
+            f"Container image {image!r} was built without AGrail sentence-transformers. "
+            "Ensure its Dockerfile honors INSTALL_AGRAIL=true."
         )
     if getattr(getattr(cfg, "airguard", None), "enabled", False) and not _image_has_airguard(image, workspace_root):
         raise RuntimeError(
@@ -419,6 +445,9 @@ def run_once_in_container(
     llm_api_key_env = str(getattr(cfg.llm, "api_key_env", "") or "")
     if llm_api_key_env and llm_api_key_env not in env_names:
         env_names.append(llm_api_key_env)
+    aegis_api_key_env = str(getattr(getattr(cfg, "aegis", None), "api_key_env", "") or "")
+    if aegis_api_key_env and aegis_api_key_env not in env_names:
+        env_names.append(aegis_api_key_env)
     progent_api_key_env = str(
         getattr(getattr(cfg, "progent", None), "api_key_env", "") or ""
     )
@@ -493,6 +522,22 @@ def run_once_in_container(
             cmd.extend(["-e", env_name])
     if _clawsentry_managed(cfg):
         cmd.extend(["-e", f"AGENT_CLAWSENTRY_KEY_ENV={cfg.clawsentry.api_key_env}"])
+    agrail_bridge = None
+    agrail_bridge_env = None
+    if getattr(getattr(cfg, "agrail", None), "enabled", False):
+        if network != "host":
+            raise ValueError("AGrail detector bridge requires container.network: host")
+        from .agrail.bridge import DetectorBridge
+
+        agrail_bridge = DetectorBridge(str(cfg.container.image))
+        agrail_bridge_env = run_dir / "_agrail_detector_bridge.env"
+        agrail_bridge_env.write_text(
+            f"AGRAIL_DETECTOR_BRIDGE_URL={agrail_bridge.url}\n"
+            f"AGRAIL_DETECTOR_BRIDGE_TOKEN={agrail_bridge.token}\n",
+            encoding="utf-8",
+        )
+        agrail_bridge_env.chmod(0o600)
+        cmd.extend(["--env-file", str(agrail_bridge_env)])
     cmd.append(str(cfg.container.image))
     agent_command = [
             sys.executable.split("/")[-1] if sys.executable else "python",
@@ -599,6 +644,10 @@ def run_once_in_container(
         container_completed = True
         return result
     finally:
+        if agrail_bridge is not None:
+            agrail_bridge.close()
+        if agrail_bridge_env is not None:
+            agrail_bridge_env.unlink(missing_ok=True)
         if cfg.agentsight.enabled and not gate_path.exists():
             gate_path.touch()
         if observer is not None and not observer_stopped:

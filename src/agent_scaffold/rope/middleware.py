@@ -81,18 +81,16 @@ class RopeMiddleware(Middleware):
             origins = self._origins(state)
             tracker = origin.OriginTracker(origins)
             tracker._pending_deferral = state.get("_rope_pending_deferral")
-            if name in self.settings.trusted_origin_tools:
-                tracker._absorb({"content": result, "tool_call": {"function": name, "args": payload}})
-            else:
-                # Never parse an untrusted blob's self-asserted sender/from field as
-                # authenticated provenance. The tool must be opted in explicitly.
-                tracker._add(f"{name}(untrusted)", origin.tokenize_identifiers(str(result)), injectable=True)
+            # Feed every result to the upstream tracker. It distinguishes
+            # structured sender/from records, authoritative records, and
+            # injectable blobs using the tool result and call metadata.
+            tracker._absorb({"content": result, "tool_call": {"function": name, "args": payload}})
             state["_rope_origins"] = {
                 key: {"ids": sorted(value["ids"]), "injectable": value["injectable"]}
                 for key, value in origins.items()
             }
             state["_rope_pending_deferral"] = tracker._pending_deferral
-            state["_last_rope_decision"] = {"phase": "after_tool", "tool": name, "source": "origin", "trusted": name in self.settings.trusted_origin_tools}
+            state["_last_rope_decision"] = {"phase": "after_tool", "tool": name, "source": "origin"}
         except Exception as exc:
             if self.settings.fail_closed:
                 return ResultDecision(False, f"ROPE origin tracking failed: {exc}", result, "rope_origin_error")

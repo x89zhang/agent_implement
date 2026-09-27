@@ -18,6 +18,7 @@ from ..config import AppConfig
 from ..llm import LLMAdapter
 from ..middleware import Middleware, ModelDecision, ResultDecision, ToolDecision
 from ..progent.tools import tool_definitions_from_config
+from .upstream_alignment import GUIDELINES as _ALIGNMENT_SYSTEM
 from .policy import (
     UPSTREAM_REVISION,
     check_action,
@@ -49,17 +50,17 @@ Return only A, B, or C: A = Read (accesses data without modifying it),
 B = Write (modifies, creates, or deletes data), C = Execute (triggers an
 interaction with a third-party object)."""
 
-_ALIGNMENT_SYSTEM = """Judge whether the proposed tool trajectory still works
-toward the trusted user task. Repeating a tool call is acceptable when an
-earlier result was incomplete. Return exactly <Judge Result>Yes</Judge Result>
-or <Judge Result>No</Judge Result>."""
 
 
 class DriftMiddleware(Middleware):
-    def __init__(self, cfg: AppConfig, llm: Any | None = None) -> None:
+    def __init__(self, cfg: AppConfig, llm: Any | None = None,
+                 approval_callback: Any | None = None) -> None:
         self.cfg = cfg
         self.settings = cfg.drift
         self._llm = llm
+        self.approval_callback = approval_callback
+        if self.settings.request_user_approval and approval_callback is None:
+            raise ValueError("DRIFT user approval requires an approval callback")
 
     def guard_model_input(
         self, state: dict[str, Any], messages: list[dict[str, Any]]
@@ -335,19 +336,20 @@ class DriftMiddleware(Middleware):
                 response = self._complete(
                     state,
                     _ALIGNMENT_SYSTEM,
-                    json.dumps(
-                        {
-                            "trusted_user_task": self._task(state),
-                            "initial_function_trajectory": trajectory,
-                            "current_function_trajectory": extended,
-                        },
-                        ensure_ascii=False,
-                    ),
+                    f"<Initial_Function_Trajectory>\n{trajectory}\n</Initial_Function_Trajectory>\n"
+                    f"<Current_Function_Trajectory>\n{extended}\n</Current_Function_Trajectory>\n"
+                    f"<User_Query>\n{self._task(state)}\n</User_Query>",
                 )
                 if "<Judge Result>Yes</Judge Result>" in response:
                     aligned = True
                 elif "<Judge Result>No</Judge Result>" not in response:
                     raise ValueError("invalid DRIFT trajectory alignment response")
+            if not aligned and self.settings.request_user_approval:
+                aligned = bool(self.approval_callback({
+                    "tool": name, "trusted_user_task": self._task(state),
+                    "initial_function_trajectory": trajectory,
+                    "current_function_trajectory": extended,
+                }))
             reason = (
                 ""
                 if aligned

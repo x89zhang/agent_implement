@@ -90,7 +90,9 @@ def check_action(
         # have no fixed value and are therefore not compared here.
         if isinstance(expected_value, str) and re.search(r"\{[^{}]*\}", expected_value):
             continue
-        if arguments[key] != expected_value:
+        # Upstream node_check accepts either value as a substring of the other.
+        actual_text, expected_text = str(arguments[key]), str(expected_value)
+        if actual_text not in expected_text and expected_text not in actual_text:
             return f"DRIFT checklist expected {key}={expected_value!r} for {name}"
     return ""
 

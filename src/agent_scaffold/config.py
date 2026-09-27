@@ -91,8 +91,16 @@ class AegisConfig:
     mode: str = "block"
     risk_threshold: str = "HIGH"
     fail_closed: bool = True
+    gateway_url: str = "http://127.0.0.1:8080"
+    api_key: str = ""
+    api_key_env: str = "AEGIS_API_KEY"
+    agent_id: str = ""
+    environment: str = "DEVELOPMENT"
+    timeout_seconds: float = 3.0
+    blocking: bool = False
+    human_approval_timeout_seconds: float = 300.0
+    poll_interval_seconds: float = 2.0
     allow_tools: list[str] = field(default_factory=list)
-    block_tools: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -101,8 +109,8 @@ class ProgentConfig:
     mode: str = "block"
     fail_closed: bool = True
     generate_policy: bool = True
-    update_after_tool: bool = False
-    only_allow_narrow: bool = True
+    update_after_tool: bool = True
+    only_allow_narrow: bool = False
     policy: dict[str, list[Any]] = field(default_factory=dict)
     always_allow_tools: list[str] = field(default_factory=list)
     always_block_tools: list[str] = field(default_factory=list)
@@ -122,6 +130,7 @@ class DriftConfig:
     fail_closed: bool = True
     injection_isolation: bool = True
     dynamic_validation: bool = True
+    request_user_approval: bool = False
     max_revisions: int = 2
     max_mask_passes: int = 2
     provider: str = ""
@@ -174,7 +183,6 @@ class RopeConfig:
     scope: dict[str, Any] = field(default_factory=dict)
     scope_path: str = ""
     clamp: bool = False
-    trusted_origin_tools: list[str] = field(default_factory=list)
     trusted_facts: str = ""
     provider: str = ""
     model: str = ""
@@ -304,7 +312,9 @@ class JanusConfig:
     api_key_env: str = "JANUS_API_KEY"
     timeout_seconds: float = 60.0
     max_tokens: int = 512
+    summary_max_tokens: int = 256
     temperature: float = 0.0
+    summary_temperature: float | None = None
     max_input_chars: int = 50000
     max_history_steps: int = 30
     extra_body: dict[str, Any] = field(default_factory=lambda: {
@@ -1363,17 +1373,25 @@ def load_config(path: str | Path) -> AppConfig:
     if isinstance(aegis_raw, bool):
         aegis = AegisConfig(enabled=aegis_raw)
     elif isinstance(aegis_raw, dict):
+        if aegis_raw.get("block_tools"):
+            raise ValueError(
+                "aegis.block_tools was a local-only rule; configure it in the AEGIS Gateway policy DSL"
+            )
         aegis = AegisConfig(
             enabled=bool(aegis_raw.get("enabled", False)),
             mode=str(aegis_raw.get("mode", "block")),
             risk_threshold=str(aegis_raw.get("risk_threshold", "HIGH")).upper(),
             fail_closed=bool(aegis_raw.get("fail_closed", True)),
-            allow_tools=[
-                str(item) for item in (aegis_raw.get("allow_tools", []) or [])
-            ],
-            block_tools=[
-                str(item) for item in (aegis_raw.get("block_tools", []) or [])
-            ],
+            gateway_url=str(aegis_raw.get("gateway_url", "http://127.0.0.1:8080")),
+            api_key=str(aegis_raw.get("api_key", "")),
+            api_key_env=str(aegis_raw.get("api_key_env", "AEGIS_API_KEY")),
+            agent_id=str(aegis_raw.get("agent_id", "")),
+            environment=str(aegis_raw.get("environment", "DEVELOPMENT")).upper(),
+            timeout_seconds=float(aegis_raw.get("timeout_seconds", 3.0)),
+            blocking=bool(aegis_raw.get("blocking", False)),
+            human_approval_timeout_seconds=float(aegis_raw.get("human_approval_timeout_seconds", 300.0)),
+            poll_interval_seconds=float(aegis_raw.get("poll_interval_seconds", 2.0)),
+            allow_tools=[str(item) for item in (aegis_raw.get("allow_tools", []) or [])],
         )
     else:
         aegis = AegisConfig()
@@ -1413,8 +1431,8 @@ def load_config(path: str | Path) -> AppConfig:
             generate_policy=bool(
                 progent_raw.get("generate_policy", progent_raw.get("generator", True))
             ),
-            update_after_tool=bool(progent_raw.get("update_after_tool", False)),
-            only_allow_narrow=bool(progent_raw.get("only_allow_narrow", True)),
+            update_after_tool=bool(progent_raw.get("update_after_tool", True)),
+            only_allow_narrow=bool(progent_raw.get("only_allow_narrow", False)),
             policy=policy,
             always_allow_tools=[
                 str(item)
@@ -1469,6 +1487,7 @@ def load_config(path: str | Path) -> AppConfig:
             fail_closed=bool(drift_raw.get("fail_closed", True)),
             injection_isolation=bool(drift_raw.get("injection_isolation", True)),
             dynamic_validation=bool(drift_raw.get("dynamic_validation", True)),
+            request_user_approval=bool(drift_raw.get("request_user_approval", False)),
             max_revisions=int(drift_raw.get("max_revisions", 2)),
             max_mask_passes=int(drift_raw.get("max_mask_passes", 2)),
             provider=str(drift_llm.get("provider", "") or "").lower(),
@@ -1557,11 +1576,11 @@ def load_config(path: str | Path) -> AppConfig:
         rope_scope = rope_raw.get("scope", {}) or {}
         if not isinstance(rope_scope, dict):
             raise TypeError("rope.scope must be a mapping")
-        rope_sources = rope_raw.get("trusted_origin_tools", []) or []
-        if not isinstance(rope_sources, list) or not all(
-            isinstance(item, str) for item in rope_sources
-        ):
-            raise TypeError("rope.trusted_origin_tools must be a list of tool names")
+        if "trusted_origin_tools" in rope_raw:
+            raise ValueError(
+                "rope.trusted_origin_tools is no longer supported; "
+                "ROPE now applies its upstream origin tracker to every tool result"
+            )
         rope_key_env = str(rope_llm_raw.get("api_key_env", "") or "")
         rope = RopeConfig(
             enabled=bool(rope_raw.get("enabled", False)),
@@ -1575,7 +1594,6 @@ def load_config(path: str | Path) -> AppConfig:
             scope=dict(rope_scope),
             scope_path=str(rope_raw.get("scope_path", "") or ""),
             clamp=bool(rope_raw.get("clamp", False)),
-            trusted_origin_tools=list(rope_sources),
             trusted_facts=str(rope_raw.get("trusted_facts", "") or ""),
             provider=str(rope_llm_raw.get("provider", "") or "").lower(),
             model=str(rope_llm_raw.get("model", "") or ""),
@@ -1732,7 +1750,10 @@ def load_config(path: str | Path) -> AppConfig:
             api_key_env=str(janus_raw.get("api_key_env", "JANUS_API_KEY")),
             timeout_seconds=float(janus_raw.get("timeout_seconds", 60.0)),
             max_tokens=int(janus_raw.get("max_tokens", 512)),
+            summary_max_tokens=int(janus_raw.get("summary_max_tokens", 256)),
             temperature=float(janus_raw.get("temperature", 0.0)),
+            summary_temperature=(float(janus_raw["summary_temperature"])
+                                 if janus_raw.get("summary_temperature") is not None else None),
             max_input_chars=int(janus_raw.get("max_input_chars", 50000)),
             max_history_steps=int(janus_raw.get("max_history_steps", 30)),
             extra_body=janus_raw.get("extra_body", {
@@ -1741,7 +1762,8 @@ def load_config(path: str | Path) -> AppConfig:
         )
         if janus.mode not in {"block", "warn", "monitor"}:
             raise ValueError("janus.mode must be one of: block, warn, monitor")
-        if min(janus.timeout_seconds, janus.max_tokens, janus.max_input_chars, janus.max_history_steps) <= 0:
+        if min(janus.timeout_seconds, janus.max_tokens, janus.summary_max_tokens,
+               janus.max_input_chars, janus.max_history_steps) <= 0:
             raise ValueError("JANUS timeout and size limits must be positive")
         if not isinstance(janus.extra_body, dict):
             raise ValueError("janus.extra_body must be a mapping")

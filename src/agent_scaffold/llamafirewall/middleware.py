@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib
 import json
+import sys
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any
 
@@ -41,7 +43,20 @@ class _Runtime:
 
     @classmethod
     def load(cls) -> "_Runtime":
-        return cls(importlib.import_module("llamafirewall"))
+        # Running ``python src/agent_scaffold/main.py`` prepends the package
+        # directory to sys.path. Its local ``llamafirewall`` adapter would then
+        # shadow Meta's installed top-level package and fail relative imports.
+        adapter_parent = Path(__file__).resolve().parents[1]
+        original_path = sys.path[:]
+        try:
+            sys.path[:] = [entry for entry in original_path
+                           if Path(entry or ".").resolve() != adapter_parent]
+            module = importlib.import_module("llamafirewall")
+        finally:
+            sys.path[:] = original_path
+        if not hasattr(module, "LlamaFirewall") or not hasattr(module, "ScannerType"):
+            raise ImportError("Installed LlamaFirewall package is unavailable")
+        return cls(module)
 
     def message(self, role: str, content: str, tool_call: Any = None) -> Any:
         if role == "system":

@@ -9,6 +9,7 @@ import time
 import uuid
 from dataclasses import asdict
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from ..config import AppConfig
@@ -21,6 +22,21 @@ _DELETE = frozenset({"delete", "remove", "purge", "drop", "truncate", "destroy",
 _EXEC = frozenset({"execute", "exec", "run", "shell", "bash", "terminal", "script"})
 _NETWORK = frozenset({"http", "request", "download", "upload", "curl", "wget"})
 _WRITE = frozenset({"write", "create", "add", "update", "set", "modify", "append", "save"})
+
+
+class _OpenAICompletionCompat:
+    """Adapt upstream AIRGuard's Chat Completions call to GPT-5 parameters."""
+
+    def __init__(self, client: Any) -> None:
+        self.chat = SimpleNamespace(completions=self)
+        self._create = client.chat.completions.create
+
+    def create(self, **kwargs: Any) -> Any:
+        if str(kwargs.get("model", "")).lower().startswith("gpt-5"):
+            kwargs.pop("temperature", None)
+            if "max_tokens" in kwargs:
+                kwargs["max_completion_tokens"] = kwargs.pop("max_tokens")
+        return self._create(**kwargs)
 
 
 class AIRGuardMiddleware(Middleware):
@@ -260,11 +276,12 @@ class AIRGuardMiddleware(Middleware):
         if provider in {"openai", "vllm_openai"}:
             from openai import OpenAI
 
-            self._llm_client = OpenAI(
+            client = OpenAI(
                 api_key=api_key or ("local-airguard" if base_url else None),
                 base_url=base_url or None,
                 timeout=timeout,
             )
+            self._llm_client = _OpenAICompletionCompat(client)
         elif provider == "anthropic":
             from anthropic import Anthropic
 

@@ -20,6 +20,9 @@ container:
   network: host
   remove: true
   env:
+    - AEGIS_API_KEY
+    - AEGIS_AGENT_SECRET
+    - AEGIS_AGENT_TOKEN
     - OPENAI_API_KEY
     - AGENTGUARD_API_KEY
     - AGENTGUARD_SERVER_URL
@@ -77,25 +80,31 @@ memory_experiment:
   run_clean_control: true
 # Project defenses. These enabled values match agents/hermes/agentdojo.yaml:
 # AgentGuard is active in monitor mode; the other plugins are ready to enable.
-# ASB tools use their canonical benchmark names in allow/block rules.
+# AEGIS checks canonical ASB tool names through the upstream Gateway.
 aegis:
   enabled: false
   mode: monitor
   risk_threshold: HIGH
+  # The original AEGIS Gateway performs classification, policy, DSL, and anomaly checks.
+  # Start the original AEGIS Gateway before running this defense.
+  gateway_url: http://127.0.0.1:8080
+  api_key_env: AEGIS_API_KEY
+  blocking: false
+  timeout_seconds: 3
   fail_closed: false
   allow_tools: []
-  block_tools: []
 progent:
   enabled: false
   mode: monitor
   generate_policy: true
-  update_after_tool: false
+  update_after_tool: true
   fail_closed: false
 drift:
   enabled: false
   mode: monitor
   fail_closed: false
   dynamic_validation: true
+  request_user_approval: false
   injection_isolation: true
   max_revisions: 2
   max_mask_passes: 2
@@ -113,13 +122,13 @@ rope:
   floor_generation: llm
   router: live
   clamp: true
-  trusted_origin_tools: []
 agrail:
   enabled: false
   mode: monitor
   fail_closed: false
   generate_checks: true
   update_memory: true
+  memory_path: ../../runtime/agrail-memory/asb.json
   generator:
     context_mode: benign_only
 janus:
@@ -239,7 +248,8 @@ llamafirewall:
   enabled: false
   mode: enforce
   use_case: ''
-  scanners: {}
+  scanners:
+    assistant: [agent_alignment]
   factory: ''
   factory_kwargs: {}
   fail_closed: false

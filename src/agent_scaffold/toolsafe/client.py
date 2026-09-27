@@ -27,7 +27,10 @@ class OpenAICompatibleGuardClient:
             {
                 "model": self.model,
                 "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.0,
+                # The released local TS-Guard uses vLLM sampling with these values.
+                "temperature": 0.1,
+                "top_p": 0.9,
+                "max_tokens": 2048,
             }
         ).encode("utf-8")
         headers = {"Content-Type": "application/json"}

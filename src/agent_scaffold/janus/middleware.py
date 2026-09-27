@@ -135,4 +135,9 @@ def _observed(
         for message in source
         if isinstance(message, dict)
     ]
-    return observed[-max(1, limit - 1):] + [candidate]
+    first_user = next((item for item in observed if item.get("role") == "user"
+                       and str(item.get("content") or "").strip()), None)
+    recent = observed[-max(1, limit - 1):]
+    if first_user is not None and first_user not in recent:
+        recent = [first_user, *recent]
+    return recent + [candidate]

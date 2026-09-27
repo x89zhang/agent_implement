@@ -1,0 +1,4 @@
+# Upstream AGrail uses all-MiniLM-L6-v2 for memory overwrite similarity.
+sentence-transformers>=3.0,<6
+# Upstream memory search uses Chroma over JSON memory documents.
+langchain-chroma>=0.1,<2

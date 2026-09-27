@@ -54,6 +54,9 @@ container:
     # Enabled AgentSpec/LlamaFirewall dependencies are selected automatically.
   # Configured *_env credential/endpoint variables are also forwarded by name.
   env:
+    - AEGIS_API_KEY
+    - AEGIS_AGENT_SECRET
+    - AEGIS_AGENT_TOKEN
     - OPENAI_API_KEY
     - AGENTGUARD_API_KEY
     - AGENTGUARD_SERVER_URL
@@ -116,19 +119,23 @@ memory_experiment:
 
 aegis:
   enabled: false
-  # monitor records risk; block enforces the configured threshold.
+  # monitor records the Gateway verdict; block enforces it above risk_threshold.
   mode: monitor
   risk_threshold: HIGH
+  # The original AEGIS Gateway performs classification, policy, DSL, and anomaly checks.
+  # Start the original AEGIS Gateway before running this defense.
+  gateway_url: http://127.0.0.1:8080
+  api_key_env: AEGIS_API_KEY
+  blocking: false
+  timeout_seconds: 3
   fail_closed: false
   allow_tools: []
-  block_tools: []
-  # Example: block_tools: [skill_view] prevents native skill payload loading.
 
 progent:
   enabled: false
   mode: monitor
   generate_policy: true
-  update_after_tool: false
+  update_after_tool: true
   fail_closed: false
 
 drift:
@@ -136,6 +143,7 @@ drift:
   mode: monitor
   fail_closed: false
   dynamic_validation: true
+  request_user_approval: false
   injection_isolation: true
   max_revisions: 2
   max_mask_passes: 2
@@ -155,7 +163,6 @@ rope:
   floor_generation: llm
   router: live
   clamp: true
-  trusted_origin_tools: []
 
 agrail:
   enabled: false
@@ -163,6 +170,7 @@ agrail:
   fail_closed: false
   generate_checks: true
   update_memory: true
+  memory_path: ../../runtime/agrail-memory/agentharm.json
   generator:
     context_mode: benign_only
 
@@ -297,7 +305,8 @@ llamafirewall:
   # Optional preset: chatbot or coding_assistant; empty uses library defaults.
   use_case: ''
   # Optional role-to-scanner mapping; empty uses library defaults.
-  scanners: {}
+  scanners:
+    assistant: [agent_alignment]
   # Optional module:function returning a native LlamaFirewall instance.
   factory: ''
   factory_kwargs: {}

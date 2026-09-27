@@ -6,10 +6,9 @@ local skill modules, vendored from the AgentGuard research implementation.
 Only runtime Python sources are included; servers, examples, tests, generated
 files, and caches are intentionally excluded.
 
-The bundled copy includes a local-enforcement integration change: explicit
-policy snapshot rules are evaluated before remote fallback so standalone mode
-can enforce configured DSL policies.
+The bundled Python sources match the upstream AgentGuard checkout at
+commit d1bdf0926c14f0454762f596e897e97198c2ea72. Project-specific
+benchmark adaptation is kept outside this vendor directory.
 
 AgentGuard is licensed under GNU GPL version 3. See AGENTGUARD_LICENSE in this
-directory. This notice records that the bundled copy has been modified for the
-agent scaffold integration on 2026-07-28.
+directory.

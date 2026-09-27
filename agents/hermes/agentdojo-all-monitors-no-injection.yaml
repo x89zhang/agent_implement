@@ -39,6 +39,7 @@ execution:
     api_mode: auto
     max_iterations: 30
     timeout_seconds: 300
+    replay_timeout_seconds: 1800
     # Run Hermes once without enforcement, then replay each defense independently.
     defense_mode: replay
 
@@ -59,6 +60,9 @@ container:
     # Enabled guard dependencies are selected automatically.
   # Configured *_env credential/endpoint variables are also forwarded by name.
   env:
+    - AEGIS_API_KEY
+    - AEGIS_AGENT_SECRET
+    - AEGIS_AGENT_TOKEN
     - OPENAI_API_KEY
     - AGENTGUARD_API_KEY
     - AGENTGUARD_SERVER_URL
@@ -131,19 +135,23 @@ memory_experiment:
 
 aegis:
   enabled: true
-  # monitor records risk; block enforces the configured threshold.
+  # monitor records the Gateway verdict; block enforces it above risk_threshold.
   mode: monitor
   risk_threshold: HIGH
+  # The original AEGIS Gateway performs classification, policy, DSL, and anomaly checks.
+  # Start the original AEGIS Gateway before running this defense.
+  gateway_url: http://127.0.0.1:8080
+  api_key_env: AEGIS_API_KEY
+  blocking: false
+  timeout_seconds: 3
   fail_closed: false
   allow_tools: []
-  block_tools: []
-  # Example: block_tools: [skill_view] prevents native skill payload loading.
 
 progent:
   enabled: false
   mode: monitor
   generate_policy: true
-  update_after_tool: false
+  update_after_tool: true
   fail_closed: false
   # Policy generation inherits the top-level llm and OPENAI_API_KEY.
 
@@ -152,6 +160,7 @@ drift:
   mode: monitor
   fail_closed: false
   dynamic_validation: true
+  request_user_approval: false
   injection_isolation: true
   max_revisions: 2
   max_mask_passes: 2
@@ -172,7 +181,6 @@ rope:
   floor_generation: llm
   router: live
   clamp: true
-  trusted_origin_tools: []
 
 agrail:
   enabled: true
@@ -180,6 +188,7 @@ agrail:
   fail_closed: false
   generate_checks: true
   update_memory: true
+  memory_path: ../../runtime/agrail-memory/agentdojo-all-monitors-no-injection.json
   generator:
     context_mode: benign_only
 
@@ -270,19 +279,21 @@ pro2guard:
   enabled: true
   # monitor, warn, block
   mode: monitor
-  model_path: ../../models/pro2guard/dtmc.new.json
+  # Trained from limited banking/Slack traces; use a model trained for the evaluation distribution.
+  model_path: ../../models/pro2guard/banking-trained.json
   dtmc_path: ''
   prism_bin: prism
   abstraction: ''
-  abstraction_policy_path: ''
+  abstraction_policy_path: ../../rules/pro2guard_banking_profiles.json
   threshold: 0.1
   horizon: 20
   timeout_seconds: 10
   fail_closed: false
-  # Domain safety property; the generator can add action-level unsafe states.
-  unsafe_states: []
+  # Fixed training abstraction and terminal property for this DTMC.
+  unsafe_states: [ATTACK_SUCCESS]
+  # Profiles were LLM-generated from the separate benign training split.
   generator:
-    enabled: true
+    enabled: false
     # benign_only excludes attack metadata; full includes it.
     context_mode: benign_only
     max_attempts: 2
@@ -317,7 +328,8 @@ llamafirewall:
   # Optional preset: chatbot or coding_assistant; empty uses library defaults.
   use_case: ''
   # Optional role-to-scanner mapping; empty uses library defaults.
-  scanners: {}
+  scanners:
+    assistant: [agent_alignment]
   # Optional module:function returning a native LlamaFirewall instance.
   factory: ''
   factory_kwargs: {}

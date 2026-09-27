@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .config import AppConfig
-from .guard import check_tool_call
+from .guard import check_tool_call, record_tool_result
 from .planner import complete_plan_on_final, mark_plan_progress, render_plan_context
 
 
@@ -96,8 +96,15 @@ class AegisGuardMiddleware(Middleware):
         decision = check_tool_call(self.cfg, state, name, payload)
         state["_last_aegis_decision"] = decision.to_dict()
         if not decision.allowed:
-            return ToolDecision(False, decision.reason or "blocked by Aegis guard")
+            return ToolDecision(False, decision.reason or "blocked by AEGIS Gateway")
         return ToolDecision(True, "")
+
+    def after_tool(
+        self, state: dict[str, Any], name: str, payload: dict[str, Any],
+        result: str, failed: bool,
+    ) -> ResultDecision:
+        record_tool_result(self.cfg, state, name, payload, result, failed)
+        return ResultDecision(result=result)
 
 
 class HarnessMiddleware(Middleware):

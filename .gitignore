@@ -26,8 +26,10 @@ __pycache__/
 !requirements-clawsentry.txt
 !requirements-safeagent.txt
 !requirements-adr.txt
+!requirements-agrail.txt
 !agents/hermes/asb-poisoning.txt
 *.md
+[Rr][Ee][Aa][Dd][Mm][Ee]*
 # These Markdown files are loaded as runtime prompts/instructions.
 !agents/*/systemprompt.md
 !agents/*/memory.md
@@ -37,22 +39,19 @@ paper/*
 legacy/*
 jobs/*
 tests/
-src/agent_scaffold/adr/README.rst
-src/agent_scaffold/janus/README.rst
-src/agent_scaffold/stepguard/README.rst
-src/agent_scaffold/stepguard/test_stepguard.py
-src/agent_scaffold/safeagent/README.rst
-# Hermes presets reference the SafeAgent example YAMLs at runtime.
-src/agent_scaffold/safeagent/test_*.py
-src/agent_scaffold/drift/README.rst
-src/agent_scaffold/drift/test_*.py
-src/agent_scaffold/clawsentry/README.rst
-src/agent_scaffold/clawsentry/test_*.py
-src/agent_scaffold/airguard/README.rst
-src/agent_scaffold/airguard/test_*.py
-src/agent_scaffold/agrail/README.rst
-src/agent_scaffold/agrail/test_*.py
-src/agent_scaffold/rope/README.rst
-src/agent_scaffold/rope/test_*.py
+test_*.py
+*_test.py
+conftest.py
+*.test.js
+*.spec.js
+*.test.ts
+*.spec.ts
 logs_other_proj/
 runtime/venvs/
+
+# Locally trained ProbGuard DTMCs and generated abstraction policies are not shipped.
+/models/pro2guard/
+/rules/pro2guard_*.json
+
+# AGrail's persistent memory is generated during evaluation.
+/runtime/agrail-memory/

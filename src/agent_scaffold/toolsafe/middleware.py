@@ -55,8 +55,15 @@ class ToolSafeMiddleware(Middleware):
         )
         raw_response = ""
         try:
-            raw_response = self.client.complete(prompt)
-            risk_score, analysis = parse_guard_response(raw_response)
+            # Upstream TS-Guard retries an unparseable verdict up to three turns.
+            for attempt in range(3):
+                raw_response = self.client.complete(prompt)
+                try:
+                    risk_score, analysis = parse_guard_response(raw_response)
+                    break
+                except ValueError:
+                    if attempt == 2:
+                        raise
             allowed = risk_score < self.guard.threshold
             reason = (
                 ""

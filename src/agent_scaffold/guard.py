@@ -1,13 +1,25 @@
+"""AEGIS Gateway adapter for pre-execution checks and action traces.
+
+Classification, policies, DSL rules, and anomaly detection run in the original
+AEGIS Gateway. This module only translates the project's tool lifecycle.
+"""
+
 from __future__ import annotations
 
-import re
-from dataclasses import asdict, dataclass
+import hashlib
+import json
+import os
+import time
+import urllib.request
+import uuid
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 from .config import AppConfig
 
 
-RISK_ORDER = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+RISK_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
 
 
 @dataclass
@@ -16,208 +28,208 @@ class AegisDecision:
     reason: str = ""
     risk_level: str = "LOW"
     category: str = "unknown"
-    signals: list[str] | None = None
+    signals: list[Any] = field(default_factory=list)
     mode: str = "off"
-    policy: str = "none"
+    policy: str = ""
+    decision: str = "allow"
+    gateway_decision: str = "allow"
+    check_id: str = ""
+    error: str = ""
+    anomaly: dict[str, Any] | None = None
+    dsl: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        data = asdict(self)
-        data["signals"] = list(self.signals or [])
-        return data
+        return asdict(self)
+
+
+def _identity(cfg: AppConfig, state: dict[str, Any]) -> tuple[str, str]:
+    agent_id = cfg.aegis.agent_id or str(
+        uuid.uuid5(uuid.NAMESPACE_URL, f"agent-scaffold:{cfg.agent.name}")
+    )
+    uuid.UUID(agent_id)  # Required by the upstream action-trace schema.
+    session_id = state.setdefault("_aegis_session_id", str(uuid.uuid4()))
+    return agent_id, session_id
+
+
+def _headers(cfg: AppConfig, agent_id: str, session_id: str) -> dict[str, str]:
+    headers = {
+        "Content-Type": "application/json",
+        "x-aegis-agent-id": agent_id,
+        "x-aegis-session-id": session_id,
+    }
+    key = cfg.aegis.api_key or os.environ.get(cfg.aegis.api_key_env, "")
+    if key:
+        headers["x-api-key"] = key
+    for env, header in (
+        ("AEGIS_AGENT_SECRET", "x-aegis-agent-secret"),
+        ("AEGIS_AGENT_TOKEN", "x-aegis-agent-token"),
+    ):
+        if os.environ.get(env):
+            headers[header] = os.environ[env]
+    return headers
+
+
+def _request(
+    cfg: AppConfig, state: dict[str, Any], method: str, path: str,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    agent_id, session_id = _identity(cfg, state)
+    data = json.dumps(payload, ensure_ascii=False, default=str).encode() if payload is not None else None
+    request = urllib.request.Request(
+        cfg.aegis.gateway_url.rstrip("/") + path,
+        data=data,
+        headers=_headers(cfg, agent_id, session_id),
+        method=method,
+    )
+    with urllib.request.urlopen(request, timeout=cfg.aegis.timeout_seconds) as response:
+        result = json.loads(response.read())
+    if not isinstance(result, dict) or result.get("error"):
+        raise ValueError(f"AEGIS Gateway returned an invalid response: {result!r}")
+    return result
+
+
+def _resolve_pending(cfg: AppConfig, state: dict[str, Any], check_id: str) -> dict[str, Any]:
+    if not check_id:
+        raise ValueError("AEGIS returned pending without check_id")
+    deadline = time.monotonic() + cfg.aegis.human_approval_timeout_seconds
+    while time.monotonic() < deadline:
+        result = _request(cfg, state, "GET", f"/api/v1/check/{check_id}/decision")
+        if result.get("decision") in {"allow", "block"}:
+            return result
+        if result.get("decision") != "pending":
+            raise ValueError(f"AEGIS returned unknown approval decision: {result!r}")
+        time.sleep(min(cfg.aegis.poll_interval_seconds, max(0, deadline - time.monotonic())))
+    return {"decision": "block", "reason": "AEGIS approval timed out"}
 
 
 def check_tool_call(cfg: AppConfig, state: dict[str, Any], name: str, payload: Any) -> AegisDecision:
     if not cfg.aegis.enabled:
         return AegisDecision(mode="off")
+    mode = cfg.aegis.mode.lower().strip()
     try:
-        decision = _check_tool_call(cfg, state, name, payload)
-    except Exception as exc:
-        if cfg.aegis.fail_closed:
-            return AegisDecision(
-                allowed=False,
-                reason=f"Aegis guard failed closed: {exc}",
-                risk_level="CRITICAL",
-                category="unknown",
-                signals=["guard_error"],
-                mode=cfg.aegis.mode,
-                policy="guard_error",
-            )
-        return AegisDecision(
-            allowed=True,
-            reason=f"Aegis guard failed open: {exc}",
-            risk_level="LOW",
-            category="unknown",
-            signals=["guard_error"],
-            mode=cfg.aegis.mode,
-            policy="guard_error",
-        )
-    return decision
-
-
-def _check_tool_call(cfg: AppConfig, state: dict[str, Any], name: str, payload: Any) -> AegisDecision:
-    mode = cfg.aegis.mode.lower().strip() or "block"
-    category = classify_tool(name, payload)
-    signals = collect_signals(category, name, payload, state)
-
-    blocked_by_config = name in set(cfg.aegis.block_tools)
-    if blocked_by_config:
-        signals.append(("configured_block_tool", "CRITICAL", f"Tool {name} is configured as blocked"))
-    if not blocked_by_config and name in set(cfg.aegis.allow_tools):
-        return AegisDecision(
-            allowed=True,
-            reason="Tool explicitly allowed by Aegis config",
-            risk_level="LOW",
-            category=category,
-            signals=["configured_allow_tool"],
+        if not isinstance(payload, dict):
+            raise TypeError("AEGIS tool arguments must be an object")
+        # The upstream SDK skips gateway checks for explicitly allowed tools.
+        if name.lower() in {item.lower() for item in cfg.aegis.allow_tools}:
+            return AegisDecision(mode=mode, reason="AEGIS SDK allow_tools", policy="sdk_allow_tools")
+        agent_id, _ = _identity(cfg, state)
+        result = _request(cfg, state, "POST", "/api/v1/check", {
+            "agent_id": agent_id,
+            "tool_name": name,
+            "arguments": payload,
+            "environment": cfg.aegis.environment,
+            "blocking": cfg.aegis.blocking and mode == "block",
+        })
+        gateway_decision = str(result.get("decision") or "")
+        if gateway_decision not in {"allow", "block", "pending"}:
+            raise ValueError(f"AEGIS Gateway returned unknown decision: {gateway_decision!r}")
+        risk = str(result.get("risk_level") or "LOW").upper()
+        if risk not in RISK_ORDER:
+            raise ValueError(f"AEGIS Gateway returned unknown risk level: {risk!r}")
+        check_id = str(result.get("check_id") or "")
+        final = result
+        if gateway_decision == "pending" and mode == "block":
+            final = _resolve_pending(cfg, state, check_id)
+        resolved = str(final.get("decision") or gateway_decision)
+        if resolved not in {"allow", "block", "pending"}:
+            raise ValueError(f"AEGIS returned unknown final decision: {resolved!r}")
+        # Matches the upstream SDK's block_threshold; the Gateway verdict is
+        # recorded separately and never replaced by this enforcement filter.
+        threshold = cfg.aegis.risk_threshold.upper()
+        if threshold not in RISK_ORDER:
+            raise ValueError(f"Unknown AEGIS risk_threshold: {threshold!r}")
+        above_threshold = RISK_ORDER[risk] >= RISK_ORDER[threshold]
+        allowed = mode != "block" or resolved == "allow" or not above_threshold
+        decision = AegisDecision(
+            allowed=allowed,
+            reason=str(final.get("reason") or result.get("reason") or ""),
+            risk_level=risk,
+            category=str(result.get("category") or "unknown"),
+            signals=list(result.get("signals") or []),
             mode=mode,
-            policy="configured_allow_tool",
+            policy=str((result.get("dsl") or {}).get("rule") or ""),
+            decision=resolved,
+            gateway_decision=gateway_decision,
+            check_id=check_id,
+            anomaly=result.get("anomaly"),
+            dsl=result.get("dsl"),
+        )
+        state.setdefault("_aegis_pending_traces", []).append({
+            "name": name, "arguments": payload, "decision": decision.to_dict(),
+            "started": time.time(),
+        })
+        return decision
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        return AegisDecision(
+            allowed=not cfg.aegis.fail_closed or mode != "block",
+            reason=f"AEGIS Gateway check failed: {error}",
+            risk_level="CRITICAL" if cfg.aegis.fail_closed else "LOW",
+            mode=mode,
+            decision="error",
+            gateway_decision="error",
+            error=error,
         )
 
-    risk_level = "LOW"
-    policy = "none"
-    details: list[str] = []
-    for signal, severity, detail in signals:
-        details.append(signal)
-        if RISK_ORDER[severity] > RISK_ORDER[risk_level]:
-            risk_level = severity
-            policy = signal
 
-    threshold = cfg.aegis.risk_threshold.upper()
-    if threshold not in RISK_ORDER:
-        threshold = "HIGH"
-    should_block = RISK_ORDER[risk_level] >= RISK_ORDER[threshold]
-    if mode in {"monitor", "audit", "log"}:
-        should_block = False
-
-    reason = ""
-    if signals:
-        first_detail = next((detail for _, severity, detail in signals if severity == risk_level), signals[0][2])
-        reason = f"Aegis {risk_level} risk: {first_detail}"
-
-    return AegisDecision(
-        allowed=not should_block,
-        reason=reason,
-        risk_level=risk_level,
-        category=category,
-        signals=details,
-        mode=mode,
-        policy=policy,
-    )
-
-
-def classify_tool(name: str, payload: Any) -> str:
-    text = name.lower()
-    groups = [
-        ("database", ["sql", "query", "database", "db", "postgres", "sqlite", "mysql"]),
-        ("file", ["file", "read", "write", "open", "path", "dir", "folder", "glob", "stat", "mkdir", "remove", "delete"]),
-        ("network", ["http", "request", "fetch", "url", "web", "download", "upload", "browse", "search", "scrape"]),
-        ("shell", ["shell", "bash", "cmd", "command", "exec", "subprocess", "terminal", "powershell"]),
-        ("communication", ["email", "mail", "send", "slack", "message", "notify", "sms", "post"]),
-        ("supply-chain", ["publish", "deploy", "release", "docker", "npm", "package", "registry", "commit", "push"]),
-    ]
-    for category, keywords in groups:
-        if any(keyword in text for keyword in keywords):
-            return category
-    values = _flatten_strings(payload)
-    if any(_looks_like_url(value) for value in values):
-        return "network"
-    return "unknown"
-
-
-def collect_signals(category: str, name: str, payload: Any, state: dict[str, Any]) -> list[tuple[str, str, str]]:
-    values = _flatten_strings(payload)
-    joined = "\n".join(values)
-    signals: list[tuple[str, str, str]] = []
-
-    for value in values:
-        normalized = value.replace("\\", "/")
-        if "../" in normalized or normalized.startswith("~/") or "%2e%2e" in normalized.lower():
-            signals.append(("path_traversal", "HIGH", f"Path traversal pattern in {value[:80]!r}"))
-        for marker in ("/.env", "/.ssh/", "/.aws/", "/.kube/", "/etc/passwd", "/etc/shadow", "/proc/", "id_rsa", "id_ed25519"):
-            if marker in normalized:
-                signals.append(("sensitive_path", "CRITICAL", f"Sensitive path access: {marker}"))
-                break
-
-    if _contains_secret(joined):
-        severity = "CRITICAL" if category in {"network", "communication"} else "HIGH"
-        signals.append(("secret_in_arguments", severity, "Tool arguments contain credential-like material"))
-
-    if category == "database":
-        if re.search(r"\b(drop|truncate|alter\s+table|delete\s+from)\b", joined, re.I):
-            signals.append(("destructive_sql", "HIGH", "Destructive SQL keyword in tool arguments"))
-        if re.search(r"\b(union\s+select|or\s+['\"]?1['\"]?\s*=\s*['\"]?1|--|;\s*drop)\b", joined, re.I):
-            signals.append(("sql_injection", "HIGH", "SQL injection pattern in tool arguments"))
-
-    if category == "shell":
-        if re.search(r"[;&|`]\s*|\$\(|\|\|", joined):
-            signals.append(("shell_metacharacters", "HIGH", "Shell metacharacters in command arguments"))
-        if re.search(r"\brm\s+-rf\s+(/|~|\*)", joined):
-            signals.append(("destructive_shell", "CRITICAL", "Destructive shell command pattern"))
-        if re.search(r"\b(curl|wget|nc|ncat)\b.*https?://", joined, re.I):
-            signals.append(("shell_network_egress", "HIGH", "Shell command performs network egress"))
-
-    if category in {"network", "communication"}:
-        if _large_payload(payload):
-            signals.append(("large_external_payload", "MEDIUM", "Large payload sent through external-facing tool"))
-        if _contains_pii(joined):
-            signals.append(("pii_external_egress", "HIGH", "PII-like data in external-facing tool arguments"))
-
-    if category == "supply-chain" and re.search(r"\b(publish|deploy|release|push)\b", name, re.I):
-        signals.append(("supply_chain_side_effect", "MEDIUM", "Supply-chain or deployment side effect"))
-
-    return signals
-
-
-def _flatten_strings(value: Any, limit: int = 200) -> list[str]:
-    out: list[str] = []
-
-    def visit(item: Any) -> None:
-        if len(out) >= limit:
-            return
-        if item is None:
-            return
-        if isinstance(item, str):
-            out.append(item)
-        elif isinstance(item, (int, float, bool)):
-            out.append(str(item))
-        elif isinstance(item, dict):
-            for key, val in item.items():
-                out.append(str(key))
-                visit(val)
-        elif isinstance(item, (list, tuple, set)):
-            for val in item:
-                visit(val)
-        else:
-            out.append(str(item))
-
-    visit(value)
-    return out
-
-
-def _looks_like_url(value: str) -> bool:
-    return bool(re.search(r"https?://|ftp://", value, re.I))
-
-
-def _contains_secret(text: str) -> bool:
-    patterns = [
-        r"(?i)(api[_-]?key|secret|token|password|passwd|credential)[\s:=]+[^\s,;]{8,}",
-        r"sk-[A-Za-z0-9_-]{16,}",
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
-        r"AKIA[0-9A-Z]{16}",
-    ]
-    return any(re.search(pattern, text) for pattern in patterns)
-
-
-def _contains_pii(text: str) -> bool:
-    return bool(
-        re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text)
-        or re.search(r"\b\d{3}-\d{2}-\d{4}\b", text)
-        or re.search(r"\b(?:\d[ -]*?){13,16}\b", text)
-    )
-
-
-def _large_payload(value: Any) -> bool:
+def record_tool_result(
+    cfg: AppConfig, state: dict[str, Any], name: str, payload: dict[str, Any],
+    result: str, failed: bool,
+) -> None:
+    """Send an upstream-schema action trace after an executed tool call."""
+    pending_list = state.get("_aegis_pending_traces") or []
+    index = next((i for i, item in enumerate(pending_list)
+                  if item["name"] == name and item["arguments"] == payload), None)
+    if index is None:
+        return
+    pending = pending_list.pop(index)
+    if not pending["decision"]["allowed"]:
+        return
+    agent_id, _ = _identity(cfg, state)
+    now = datetime.now(timezone.utc).isoformat()
+    trace_id = str(uuid.uuid4())
+    sequence = int(state.get("_aegis_trace_sequence", 0))
+    previous = state.get("_aegis_previous_hash")
+    trace: dict[str, Any] = {
+        "trace_id": trace_id,
+        "agent_id": agent_id,
+        "timestamp": now,
+        "sequence_number": sequence,
+        "input_context": {"prompt": str(state.get("_aegis_user_request") or cfg.agent.task or "")},
+        "thought_chain": {"raw_tokens": "Captured at tool boundary", "parsed_steps": []},
+        "tool_call": {"tool_name": name, "function": name, "arguments": payload, "timestamp": now},
+        "observation": {
+            "raw_output": result,
+            "error": str(result) if failed else None,
+            "duration_ms": max((time.time() - pending["started"]) * 1000, 0.001),
+        },
+        "previous_hash": previous,
+        "environment": cfg.aegis.environment,
+        "safety_validation": {
+            "policy_name": pending["decision"]["policy"] or "AEGIS Gateway",
+            "passed": pending["decision"]["decision"] == "allow",
+            "violations": [pending["decision"]["reason"]] if pending["decision"]["reason"] else [],
+            "risk_level": pending["decision"]["risk_level"],
+        },
+    }
+    hash_fields = {key: trace.get(key, "") for key in (
+        "trace_id", "agent_id", "timestamp", "input_context", "thought_chain",
+        "tool_call", "observation", "previous_hash",
+    )}
+    trace["integrity_hash"] = hashlib.sha256(
+        json.dumps(hash_fields, sort_keys=True, default=str).encode()
+    ).hexdigest()
     try:
-        return len(str(value)) > 10_000
-    except Exception:
-        return False
+        _request(cfg, state, "POST", "/api/v1/traces", trace)
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        state.setdefault("aegis_trace_errors", []).append(error)
+        state.setdefault("harness", {}).setdefault("aegis", {})["trace_errors"] = list(
+            state["aegis_trace_errors"]
+        )
+        state.setdefault("trace", []).append({
+            "step": "aegis_trace_error", "tool": name, "error": error,
+        })
+        return
+    state["_aegis_trace_sequence"] = sequence + 1
+    state["_aegis_previous_hash"] = trace["integrity_hash"]

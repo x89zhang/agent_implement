@@ -1,5 +1,4 @@
 """Client enforcer: local plugins first, then remote decision."""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -12,7 +11,6 @@ from agentguard.plugins.manager import PluginManager
 from agentguard.schemas.context import RuntimeContext
 from agentguard.schemas.decisions import GuardDecision
 from agentguard.schemas.events import RuntimeEvent
-from agentguard.schemas.policy import effect_to_decision
 from agentguard.u_guard.policy_snapshot import PolicySnapshot
 from agentguard.u_guard.remote_client import RemoteGuardClient
 from agentguard.u_guard.sync_buffer import ClientSyncBuffer
@@ -94,45 +92,8 @@ class UGuardEnforcer:
                 extensions=extensions or {},
             )
 
-        # 3. Explicit snapshot rules are authoritative in local mode and provide
-        # a fast path before remote evaluation. No-match behavior falls through.
-        if self.snapshot is not None:
-            local_match = self.snapshot.evaluate(event, trace_window)
-            if (
-                local_match.matched
-                and local_match.rule is not None
-                and local_match.effect is not None
-            ):
-                decision = GuardDecision(
-                    decision_type=effect_to_decision(local_match.effect),
-                    reason=local_match.reason or local_match.rule.reason,
-                    policy_id=f"local:{local_match.rule.rule_id}",
-                    risk_signals=list(event.risk_signals),
-                    metadata={
-                        "route": "local_policy",
-                        "matched_rule_ids": [
-                            rule.rule_id for rule in (local_match.all_matched or [])
-                        ],
-                        **dict(local_match.rule.metadata),
-                    },
-                )
-                self.sync_buffer.add_local_decision(
-                    event=event,
-                    context=context,
-                    check=check,
-                    decision=decision,
-                    route="local_policy",
-                    extensions=extensions,
-                )
-                return EnforcementResult(
-                    decision,
-                    event,
-                    route="local_policy",
-                    check=check,
-                    extensions=extensions or {},
-                )
-
-        # 4. No final local decision: use the configured control server.
+        # 3. No final local decision: send to remote and accept the server's
+        # decision as authoritative.
         if self.server_available:
             decision, final_route = self._decide_remote(event, context, trace_window, extensions)
             return EnforcementResult(
@@ -143,7 +104,7 @@ class UGuardEnforcer:
                 extensions=extensions or {},
             )
 
-        # 5. Local/dev mode without a remote server. This keeps wrappers usable
+        # 4. Local/dev mode without a remote server. This keeps wrappers usable
         # when no server_url is configured; production deployments should set
         # server_url so non-final events are judged by the server.
         decision = GuardDecision.allow(

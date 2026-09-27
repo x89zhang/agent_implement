@@ -304,10 +304,10 @@ class BenchmarkService:
         self.timeout = timeout
         self.calls = []
 
-    def _receive(self):
-        if not self._parent.poll(self.timeout):
+    def _receive(self, timeout=None, operation="startup/evaluation"):
+        if not self._parent.poll(self.timeout if timeout is None else timeout):
             raise TimeoutError(
-                "Benchmark service exceeded its startup/evaluation deadline"
+                f"Benchmark service exceeded its {operation} deadline"
             )
         try:
             result = self._parent.recv()
@@ -342,9 +342,9 @@ class BenchmarkService:
         self.calls = result["calls"]
         return result["evaluation"]
 
-    def replay_guards(self):
+    def replay_guards(self, timeout=None):
         self._parent.send({"op": "replay_guards"})
-        return self._receive()["replay"]
+        return self._receive(timeout, "defense replay")["replay"]
 
     def __exit__(self, *args):
         import os

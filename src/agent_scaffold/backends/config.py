@@ -14,6 +14,7 @@ class HermesConfig:
     api_mode: str = "auto"
     max_iterations: int = 30
     timeout_seconds: float = 300
+    replay_timeout_seconds: float = 1800
     defense_mode: str = "inline"
 
 
@@ -60,6 +61,13 @@ def parse_execution(raw: dict, config_dir: Path) -> ExecutionConfig:
         or hermes.timeout_seconds <= 0
     ):
         raise ValueError("Hermes timeout_seconds must be positive and finite")
+    if (
+        not isinstance(hermes.replay_timeout_seconds, (int, float))
+        or isinstance(hermes.replay_timeout_seconds, bool)
+        or not math.isfinite(hermes.replay_timeout_seconds)
+        or hermes.replay_timeout_seconds <= 0
+    ):
+        raise ValueError("Hermes replay_timeout_seconds must be positive and finite")
     if (
         type(hermes.allow_dirty_checkout) is not bool
         or type(memory.run_clean_control) is not bool

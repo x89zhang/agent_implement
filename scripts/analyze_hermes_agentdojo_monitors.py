@@ -33,7 +33,7 @@ def decisions(method: str, defense: dict) -> list[dict]:
 
 def is_alarm(method: str, items: list[dict]) -> bool:
     if method == "aegis":
-        return any(item.get("risk_level") in {"HIGH", "CRITICAL"} for item in items)
+        return any(item.get("gateway_decision") in {"block", "pending"} for item in items)
     if method in {"adr", "agrail", "airguard", "janus", "stepguard"}:
         return any(item.get("flagged") is True and not item.get("error") for item in items)
     if method == "clawsentry":

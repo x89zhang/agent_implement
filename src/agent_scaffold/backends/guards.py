@@ -126,6 +126,7 @@ class GuardController:
             "harness": {},
             "iterations": 0,
             "tool_errors": [],
+            "_aegis_user_request": task,
             "_toolsafe_user_request": task,
             "_agentspec_user_request": task,
             "_progent_user_request": task,

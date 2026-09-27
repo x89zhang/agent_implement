@@ -39,34 +39,73 @@ class JsonDTMC:
         self.transitions = _load_transitions(raw.get("transition_probs") or raw.get("transitions") or {})
 
     def probability_to_unsafe(self, state: str, unsafe_states: list[str], horizon: int = 20) -> tuple[float, str]:
+        """Unbounded reachability, matching upstream's PRISM ``F unsafe`` query.
+
+        ``horizon`` remains accepted for old callers but does not truncate the
+        property: upstream ProbGuard does not impose a step horizon.
+        """
         matched_state = self._match_state(state)
-        # Keep the learned DTMC independent from the domain safety property.
-        # As in upstream Pro2Guard, callers provide unsafe states at runtime.
-        unsafe = set(unsafe_states or [])
-        unsafe_ids = {self._state_id(item) for item in unsafe}
+        unsafe_ids = {self._state_id(item) for item in unsafe_states or []}
         unsafe_ids.discard(None)
         start = self._state_id(matched_state)
         if start is None:
+            raise ValueError(f"ProbGuard state is absent from the learned DTMC: {matched_state}")
+        if not unsafe_ids:
             return 0.0, matched_state
         if start in unsafe_ids:
             return 1.0, matched_state
 
-        current = {start: 1.0}
-        hit = 0.0
-        for _ in range(max(1, horizon)):
-            next_dist: dict[int, float] = {}
-            for src, mass in current.items():
-                row = self.transitions.get(src) or {src: 1.0}
-                for dst, prob in row.items():
-                    value = mass * prob
-                    if dst in unsafe_ids:
-                        hit += value
-                    else:
-                        next_dist[dst] = next_dist.get(dst, 0.0) + value
-            current = next_dist
-            if not current:
-                break
-        return min(1.0, max(0.0, hit)), matched_state
+        # States with no positive-probability path to an unsafe state have
+        # reachability zero. Removing them also makes the remaining linear
+        # system nonsingular, including models with safe absorbing cycles.
+        predecessors: dict[int, set[int]] = {}
+        for src, row in self.transitions.items():
+            for dst, probability in row.items():
+                if probability > 0:
+                    predecessors.setdefault(dst, set()).add(src)
+        reachable = set(unsafe_ids)
+        queue = list(unsafe_ids)
+        while queue:
+            for src in predecessors.get(queue.pop(), ()):
+                if src not in reachable:
+                    reachable.add(src)
+                    queue.append(src)
+        if start not in reachable:
+            return 0.0, matched_state
+        unknown = sorted(reachable - unsafe_ids)
+        positions = {node: index for index, node in enumerate(unknown)}
+        matrix = [[0.0] * (len(unknown) + 1) for _ in unknown]
+        for src in unknown:
+            index = positions[src]
+            matrix[index][index] = 1.0
+            for dst, probability in (self.transitions.get(src) or {src: 1.0}).items():
+                if dst in unsafe_ids:
+                    matrix[index][-1] += probability
+                elif dst in positions:
+                    matrix[index][positions[dst]] -= probability
+        # Pivoted Gaussian elimination computes the same eventual hitting
+        # probability as PRISM for this finite DTMC, without a step cutoff.
+        size = len(unknown)
+        for column in range(size):
+            pivot = max(range(column, size), key=lambda row: abs(matrix[row][column]))
+            if abs(matrix[pivot][column]) < 1e-14:
+                raise ValueError("ProbGuard model has a singular transition matrix")
+            matrix[column], matrix[pivot] = matrix[pivot], matrix[column]
+            divisor = matrix[column][column]
+            for item in range(column, size + 1):
+                matrix[column][item] /= divisor
+            for row in range(column + 1, size):
+                factor = matrix[row][column]
+                if factor:
+                    for item in range(column, size + 1):
+                        matrix[row][item] -= factor * matrix[column][item]
+        solved = [0.0] * size
+        for row in range(size - 1, -1, -1):
+            solved[row] = matrix[row][-1] - sum(
+                matrix[row][column] * solved[column]
+                for column in range(row + 1, size)
+            )
+        return min(1.0, max(0.0, solved[positions[start]])), matched_state
 
     def _match_state(self, state: str) -> str:
         if state in self.state_index:

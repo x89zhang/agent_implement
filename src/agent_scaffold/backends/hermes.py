@@ -421,7 +421,7 @@ def _run_phase(
             raise
         if settings.defense_mode == "replay":
             try:
-                bridge.replay_guards()
+                bridge.replay_guards(settings.replay_timeout_seconds)
             except Exception as exc:
                 dump(
                     directory / "failure.json",

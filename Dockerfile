@@ -14,6 +14,12 @@ RUN if [ "$INSTALL_LLAMA_FIREWALL" = "true" ]; then \
       pip install --no-cache-dir -r /tmp/requirements-llamafirewall.txt; \
     fi
 
+ARG INSTALL_AGRAIL=false
+COPY requirements-agrail.txt /tmp/requirements-agrail.txt
+RUN if [ "$INSTALL_AGRAIL" = "true" ]; then \
+      pip install --no-cache-dir -r /tmp/requirements-agrail.txt; \
+    fi
+
 ARG INSTALL_SAFEAGENT=false
 COPY requirements-safeagent.txt /tmp/requirements-safeagent.txt
 RUN if [ "$INSTALL_SAFEAGENT" = "true" ]; then \
