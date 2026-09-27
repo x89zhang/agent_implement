@@ -101,6 +101,19 @@ class AegisConfig:
     human_approval_timeout_seconds: float = 300.0
     poll_interval_seconds: float = 2.0
     allow_tools: list[str] = field(default_factory=list)
+    # Gateway 429/transport retries (research/baselines/aegis_rules_http.py).
+    max_retries: int = 5
+    # The paper's L1 -> L2 (XGBoost) -> L3 (LLM judge) cascade; false = L1 only.
+    cascade: bool = True
+    l2_model_path: str = "models/aegis/l2_xgboost.json"
+    use_l3: bool = True
+    disable_l2_block: bool = False
+    framework: str = "hermes"
+    # Empty judge fields inherit the top-level llm configuration.
+    judge_provider: str = ""
+    judge_model: str = ""
+    judge_base_url: str = ""
+    judge_api_key_env: str = ""
 
 
 @dataclass
@@ -114,9 +127,20 @@ class ProgentConfig:
     policy: dict[str, list[Any]] = field(default_factory=dict)
     always_allow_tools: list[str] = field(default_factory=list)
     always_block_tools: list[str] = field(default_factory=list)
-    # Benchmarks without upstream's hand-written AgentDojo list get an
-    # LLM-chosen list of read-only tools from the tool inventory only.
+    # Priority-1 always-allowed tools (upstream's deployer-written lists):
+    # "generate" (default, every benchmark) lets an LLM pick read-only tools
+    # from the tool inventory only; "upstream_agentdojo" uses upstream's
+    # hand-written AgentDojo per-suite tables (non-default, AgentDojo only);
+    # "none" registers nothing. generate_always_allow: false means "none".
+    always_allow: str = "generate"
     generate_always_allow: bool = True
+    # One rule for every benchmark: no-argument tools are not allowed wholesale
+    # (upstream sets this only for AgentDojo banking); the generator judges them
+    # like any other tool. The upstream_agentdojo tables keep their own value.
+    allow_all_no_arg_tools: bool = False
+    # "general" (default, upstream's generic secagent mode) or "asb" (upstream's
+    # ASB agent: name-only checks, SYS_PROMPT_ASB, no updates or always-allow).
+    profile: str = "general"
     provider: str = ""
     model: str = ""
     temperature: float | None = None
@@ -132,13 +156,21 @@ class DriftConfig:
     mode: str = "block"
     fail_closed: bool = True
     injection_isolation: bool = True
+    # A failed detection call passes the result through, as upstream does;
+    # withheld only when fail_closed (or this key) is set explicitly.
+    isolation_fail_closed: bool = False
+    # Upstream isolates only the last tool message of a model output.
+    isolate_last_only: bool = True
     dynamic_validation: bool = True
     request_user_approval: bool = False
-    max_revisions: int = 2
+    # DRIFTToolsExecutionLoop max_iters (inline block mode only).
+    max_revisions: int = 15
     # Extra detections when masking leaves a tool result unchanged (upstream mask_limitation).
     mask_limitation: int = 1
-    # auto: asb when agent_security_bench is enabled, else agentdojo.
-    profile: str = "auto"
+    # default: DRIFTLLM.py for every benchmark; asb: the ASB_DRIFT variant (explicit only).
+    profile: str = "default"
+    # Append upstream's AgentDojo persona (ENVIRONMENT_GUIDELINES) to plan generation.
+    environment_guidelines: bool = False
     provider: str = ""
     model: str = ""
     temperature: float | None = None
@@ -158,7 +190,8 @@ class AGrailConfig:
     memory_path: str = ""
     # 0 keeps upstream's unbounded memory; a positive value keeps the newest N.
     max_memory_entries: int = 0
-    # Empty generates a specification from the tool inventory once per run.
+    # Empty generates a specification from the tool inventory only, cached on
+    # disk (beside the memory file) by a hash of that inventory.
     agent_specification: str = ""
     # Empty uses upstream UNIVERSIAL_USAGE_PRINCEPLE.
     principles: str = ""
@@ -226,6 +259,7 @@ class MelonEmbeddingConfig:
 
 @dataclass
 class MelonGeneratorConfig:
+    # Used only with melon.projection_generation: llm.
     enabled: bool = True
     context_mode: str = "benign_only"
     max_attempts: int = 2
@@ -240,9 +274,9 @@ class MelonConfig:
     fail_closed: bool = True
     # Upstream compares tool-call embeddings with a hard-coded cosine cut-off of 0.8.
     threshold: float = 0.8
-    # llm: upstream send_email/send_money rules + LLM rules for other tools;
-    # upstream: only the paper's hard-coded rules (all arguments for other tools).
-    projection_generation: str = "llm"
+    # upstream (default, every benchmark): the paper's send_email/send_money rules
+    # and all arguments for other tools; llm (opt-in): LLM rules for other tools.
+    projection_generation: str = "upstream"
     # Manual per-tool comparison arguments; they take priority over all sources.
     projections: dict[str, list[str]] = field(default_factory=dict)
     # auto, chat_completions or responses; used for the masked re-execution.
@@ -254,9 +288,9 @@ class MelonConfig:
 
 @dataclass
 class AIRGuardGeneratorConfig:
-    # Not upstream: AIRGuard uses a constant authority (see README), so the
-    # project-side LLM authority generator is an explicit opt-in variant.
-    enabled: bool = False
+    # Fills upstream compile_task_authority's system_policy allow set, which the
+    # deployer or user supplies upstream; the constant is only its fallback.
+    enabled: bool = True
     context_mode: str = "benign_only"
     max_attempts: int = 2
     fail_closed: bool = False
@@ -301,6 +335,19 @@ class AIRGuardConfig:
 
 
 @dataclass
+class ClawSentryLLMConfig:
+    """Managed gateway's L2/L3 provider; empty fields inherit the top-level llm."""
+
+    enabled: bool = True
+    provider: str = ""
+    model: str = ""
+    base_url: str = ""
+    api_key_env: str = ""
+    # Upstream default (CS_L3_ENABLED=false); L3 is an optional review agent.
+    l3_enabled: bool = False
+
+
+@dataclass
 class ClawSentryConfig:
     enabled: bool = False
     auto_start: bool = True
@@ -312,6 +359,9 @@ class ClawSentryConfig:
     decision_tier: str = "L1"
     observe_tool_result: bool = True
     max_result_chars: int = 20000
+    # Bounded wait for the gateway's background post-action finding.
+    post_action_wait_seconds: float = 5.0
+    llm: ClawSentryLLMConfig = field(default_factory=ClawSentryLLMConfig)
 
 
 @dataclass
@@ -319,7 +369,8 @@ class JanusConfig:
     enabled: bool = False
     mode: str = "block"
     strict: bool = False
-    fail_closed: bool = True
+    # Upstream vllm_guard fails open on endpoint/parse errors.
+    fail_closed: bool = False
     base_url: str = ""
     model: str = ""
     api_key: str = ""
@@ -329,8 +380,8 @@ class JanusConfig:
     summary_max_tokens: int = 256
     temperature: float = 0.0
     summary_temperature: float | None = None
-    max_input_chars: int = 50000
-    max_history_steps: int = 30
+    # Whole-prompt character budget; upstream run_eval.sh uses 20000.
+    max_input_chars: int = 20000
     extra_body: dict[str, Any] = field(default_factory=lambda: {
         "chat_template_kwargs": {"enable_thinking": False},
     })
@@ -347,20 +398,22 @@ class StepGuardConfig:
     api_key_env: str = "STEPGUARD_API_KEY"
     timeout_seconds: float = 120.0
     temperature: float = 0.0
-    max_tokens: int = 1024
+    # Upstream evals/dynamic/config.py.
+    max_tokens: int = 4096
     confidence_threshold: float = 0.5
-    max_history_chars: int = 40000
     max_replans: int = 3
-    audit_final: bool = True
+    # Project extension: upstream's dynamic protocol checks only actions.
+    audit_final: bool = False
     replacement_message: str = "The response was withheld by StepGuard."
 
 
 @dataclass
 class SafeAgentGeneratorConfig:
-    enabled: bool = True
+    # Off by default, as in upstream's ASB evaluation. When on, it drafts the
+    # server-side developer_policy.yaml into the run directory (see
+    # safeagent/generator.py); the core must be started with that file.
+    enabled: bool = False
     max_attempts: int = 2
-    max_focus_dimensions: int = 4
-    max_restricted_tools: int = 10
     fail_closed: bool = False
     provider: str = ""
     model: str = ""
@@ -377,10 +430,16 @@ class SafeAgentConfig:
     fail_closed: bool = True
     mcp_url: str = "http://127.0.0.1:8000/mcp"
     api_key_env: str = "SAFEAGENT_MCP_API_KEY"
-    timeout_seconds: float = 60.0
+    # Upstream runtime.yaml sets wait_until_available: true, so the core may
+    # sleep up to a call-budget window (60 s) before answering tool_wrapper.
+    timeout_seconds: float = 300.0
     developer_config_path: str = ""
     runtime_config_path: str = ""
-    max_replans: int = 1
+    # The core enforces the REPLAN limit itself (runtime
+    # cost_profiles.actions.REPLAN.max_counts) and upstream's client has no
+    # limit on after_model REPLAN/REJECT loops. This is only the harness's
+    # runaway cap on consecutive model re-calls (output_revision_limit).
+    max_replans: int = 10
     generator: SafeAgentGeneratorConfig = field(default_factory=SafeAgentGeneratorConfig)
 
 
@@ -406,14 +465,11 @@ class ADRConfig:
 
 @dataclass
 class Pro2GuardGeneratorConfig:
-    enabled: bool = True
-    context_mode: str = "benign_only"
+    """LLM that writes the per-task unsafe spec at model-build time."""
+
     max_attempts: int = 2
-    max_profiles: int = 50
-    max_unsafe_states: int = 20
-    max_model_states: int = 200
-    state_batch_size: int = 8
-    fail_closed: bool = False
+    max_conditions: int = 4
+    max_atoms: int = 4
     provider: str = ""
     model: str = ""
     temperature: float | None = None
@@ -424,20 +480,29 @@ class Pro2GuardGeneratorConfig:
 @dataclass
 class Pro2GuardConfig:
     enabled: bool = False
-    mode: str = "block"
-    threshold: float = 0.1
+    # monitor records; warn adds upstream's reflection message; block stops the run.
+    mode: str = "monitor"
+    # Upstream monitor_dtmc.py default, compared with >=.
+    threshold: float = 0.9
+    # Directory of per-task models written by pro2guard.build_model.
+    model_dir: str = ""
+    # Optional fixed model directory used for every task (non-default).
     model_path: str = ""
-    dtmc_path: str = ""
+    granularity: str = "task"
+    engine: str = "json"
     prism_bin: str = "prism"
-    abstraction: str = ""
-    abstraction_policy_path: str = ""
-    unsafe_states: list[str] = field(default_factory=list)
-    horizon: int = 20
+    # -1: unbounded P=?[F unsafe] (upstream default); k>0: P=?[F<=k unsafe].
+    bound: int = -1
     timeout_seconds: int = 10
     fail_closed: bool = False
     generator: Pro2GuardGeneratorConfig = field(
         default_factory=Pro2GuardGeneratorConfig
     )
+    # Runtime values set by compile_pro2guard_policy / the guard controller.
+    tool_inventory: list[dict[str, Any]] = field(default_factory=list)
+    task_key: str = ""
+    resolved_model_dir: str = ""
+    resolution_error: str = ""
 
 
 @dataclass
@@ -496,6 +561,8 @@ class ToolSafeConfig:
     max_history_steps: int = 0
     # None: no replan cap; upstream TS-Flow is bounded only by max_turns.
     max_replans: int | None = None
+    # false (upstream): no rating after 3 unparseable replies executes the call.
+    # true: treat it like an endpoint error (withheld in replan/block modes).
     fail_closed: bool = False
 
 
@@ -527,8 +594,13 @@ class AgentDoGConfig:
 @dataclass
 class AgentGuardScenarioCompilerConfig:
     enabled: bool = True
-    context_mode: str = "full"
+    # Generators see only the benign task and tool catalog.
+    context_mode: str = "benign_only"
+    # Attempts for the stand-in user's natural-language requirements.
     max_attempts: int = 2
+    max_requirements: int = 8
+    # Upstream LLMRuleGeneratorWorkflow validate-and-repair rounds per requirement.
+    max_rounds: int = 4
     provider: str = ""
     model: str = ""
     temperature: float | None = None
@@ -559,9 +631,15 @@ class AgentGuardConfig:
     remote_timeout_seconds: float = 5.0
     remote_retries: int = 2
     fail_closed: bool = True
+    # Start the upstream server (src/server/backend) per run and use its URL
+    # when server_url is empty; without a server no policy is evaluated.
+    auto_start_server: bool = False
+    server_startup_timeout_seconds: float = 30.0
     scenario_compiler: AgentGuardScenarioCompilerConfig = field(
         default_factory=AgentGuardScenarioCompilerConfig
     )
+    # Runtime only: set when this run's policy generation failed.
+    compile_error: str = ""
 
 
 @dataclass
@@ -798,7 +876,7 @@ def _parse_melon(raw: Any) -> MelonConfig:
         mode=str(raw.get("mode", "block")).lower(),
         fail_closed=bool(raw.get("fail_closed", True)),
         threshold=float(raw.get("threshold", 0.8)),
-        projection_generation=str(raw.get("projection_generation", "llm")).lower(),
+        projection_generation=str(raw.get("projection_generation", "upstream")).lower(),
         projections={str(tool): list(args) for tool, args in projections.items()},
         transport=str(raw.get("transport", "auto")).lower(),
         llm=_parse_melon_model(raw.get("llm"), "melon.llm"),
@@ -1408,6 +1486,16 @@ def load_config(path: str | Path) -> AppConfig:
             human_approval_timeout_seconds=float(aegis_raw.get("human_approval_timeout_seconds", 300.0)),
             poll_interval_seconds=float(aegis_raw.get("poll_interval_seconds", 2.0)),
             allow_tools=[str(item) for item in (aegis_raw.get("allow_tools", []) or [])],
+            max_retries=int(aegis_raw.get("max_retries", 5)),
+            cascade=bool(aegis_raw.get("cascade", True)),
+            l2_model_path=str(aegis_raw.get("l2_model_path", "models/aegis/l2_xgboost.json")),
+            use_l3=bool(aegis_raw.get("use_l3", True)),
+            disable_l2_block=bool(aegis_raw.get("disable_l2_block", False)),
+            framework=str(aegis_raw.get("framework", "hermes")),
+            judge_provider=str(aegis_raw.get("judge_provider", "") or ""),
+            judge_model=str(aegis_raw.get("judge_model", "") or ""),
+            judge_base_url=str(aegis_raw.get("judge_base_url", "") or ""),
+            judge_api_key_env=str(aegis_raw.get("judge_api_key_env", "") or ""),
         )
     else:
         aegis = AegisConfig()
@@ -1458,7 +1546,19 @@ def load_config(path: str | Path) -> AppConfig:
                 str(item)
                 for item in (progent_raw.get("always_block_tools", []) or [])
             ],
+            always_allow=str(
+                progent_raw.get(
+                    "always_allow",
+                    "generate"
+                    if progent_raw.get("generate_always_allow", True)
+                    else "none",
+                )
+            ).lower(),
             generate_always_allow=bool(progent_raw.get("generate_always_allow", True)),
+            allow_all_no_arg_tools=bool(
+                progent_raw.get("allow_all_no_arg_tools", False)
+            ),
+            profile=str(progent_raw.get("profile", "general")).lower(),
             provider=str(progent_llm_raw.get("provider", "")).lower(),
             model=str(progent_llm_raw.get("model", "")),
             temperature=(
@@ -1479,6 +1579,12 @@ def load_config(path: str | Path) -> AppConfig:
         )
         if progent.mode not in {"block", "warn", "monitor"}:
             raise ValueError("progent.mode must be one of: block, warn, monitor")
+        if progent.always_allow not in {"generate", "upstream_agentdojo", "none"}:
+            raise ValueError(
+                "progent.always_allow must be one of: generate, upstream_agentdojo, none"
+            )
+        if progent.profile not in {"general", "asb"}:
+            raise ValueError("progent.profile must be one of: general, asb")
     else:
         progent = ProgentConfig()
 
@@ -1503,11 +1609,16 @@ def load_config(path: str | Path) -> AppConfig:
             mode=str(drift_raw.get("mode", "block")).lower(),
             fail_closed=bool(drift_raw.get("fail_closed", True)),
             injection_isolation=bool(drift_raw.get("injection_isolation", True)),
+            isolation_fail_closed=bool(
+                drift_raw.get("isolation_fail_closed", drift_raw.get("fail_closed", False))
+            ),
+            isolate_last_only=bool(drift_raw.get("isolate_last_only", True)),
             dynamic_validation=bool(drift_raw.get("dynamic_validation", True)),
             request_user_approval=bool(drift_raw.get("request_user_approval", False)),
-            max_revisions=int(drift_raw.get("max_revisions", 2)),
+            max_revisions=int(drift_raw.get("max_revisions", 15)),
             mask_limitation=int(drift_raw.get("mask_limitation", 1)),
-            profile=str(drift_raw.get("profile", "auto")).lower(),
+            profile=str(drift_raw.get("profile", "default")).lower(),
+            environment_guidelines=bool(drift_raw.get("environment_guidelines", False)),
             provider=str(drift_llm.get("provider", "") or "").lower(),
             model=str(drift_llm.get("model", "") or ""),
             temperature=(float(drift_llm["temperature"]) if "temperature" in drift_llm else None),
@@ -1520,8 +1631,10 @@ def load_config(path: str | Path) -> AppConfig:
             raise ValueError("drift.mode must be one of: block, warn, monitor")
         if drift.max_revisions < 0 or drift.mask_limitation < 0:
             raise ValueError("drift.max_revisions and drift.mask_limitation must be nonnegative")
-        if drift.profile not in {"auto", "agentdojo", "asb"}:
-            raise ValueError("drift.profile must be one of: auto, agentdojo, asb")
+        if drift.profile not in {"default", "asb"}:
+            raise ValueError(
+                "drift.profile must be one of: default, asb (benchmark-dependent auto was removed)"
+            )
     else:
         raise TypeError("drift must be a boolean or mapping")
 
@@ -1633,8 +1746,12 @@ def load_config(path: str | Path) -> AppConfig:
             raise ValueError("rope.mode must be one of: block, warn, monitor")
         if rope.router not in {"live", "cached", "static"}:
             raise ValueError("rope.router must be one of: live, cached, static")
-        if rope.floor_generation not in {"llm", "audited_only"}:
-            raise ValueError("rope.floor_generation must be one of: llm, audited_only")
+        if rope.floor_generation == "audited_only":
+            rope.floor_generation = "audited"
+        if rope.floor_generation not in {"llm", "audited"}:
+            raise ValueError("rope.floor_generation must be one of: llm, audited")
+        if rope.router == "cached" and rope.floor_generation != "audited" and not rope.floor_path:
+            raise ValueError("rope.router: cached requires floor_generation: audited")
         if rope.temperature not in (None, 0.0):
             raise ValueError("rope.llm.temperature must be 0; the ROPE router is deterministic")
         if rope.scope and rope.scope_path:
@@ -1679,7 +1796,7 @@ def load_config(path: str | Path) -> AppConfig:
             raise ValueError("airguard.authority_allow must contain AIRGuard capabilities")
         generator_api_key_env = str(generator_llm_raw.get("api_key_env", "") or "")
         generator = AIRGuardGeneratorConfig(
-            enabled=bool(generator_raw.get("enabled", False)),
+            enabled=bool(generator_raw.get("enabled", True)),
             context_mode=str(generator_raw.get("context_mode", "benign_only")),
             max_attempts=int(generator_raw.get("max_attempts", 2)),
             fail_closed=bool(generator_raw.get("fail_closed", False)),
@@ -1737,6 +1854,21 @@ def load_config(path: str | Path) -> AppConfig:
     elif isinstance(clawsentry_raw, dict):
         if clawsentry_raw.get("api_key"):
             raise ValueError("clawsentry.api_key must not be stored in YAML; use api_key_env")
+        clawsentry_llm_raw = clawsentry_raw.get("llm", {}) or {}
+        if isinstance(clawsentry_llm_raw, bool):
+            clawsentry_llm_raw = {"enabled": clawsentry_llm_raw}
+        if not isinstance(clawsentry_llm_raw, dict):
+            raise TypeError("clawsentry.llm must be a boolean or mapping")
+        if clawsentry_llm_raw.get("api_key"):
+            raise ValueError("clawsentry.llm.api_key must not be stored in YAML; use api_key_env")
+        clawsentry_llm = ClawSentryLLMConfig(
+            enabled=bool(clawsentry_llm_raw.get("enabled", True)),
+            provider=str(clawsentry_llm_raw.get("provider", "") or "").lower(),
+            model=str(clawsentry_llm_raw.get("model", "") or ""),
+            base_url=str(clawsentry_llm_raw.get("base_url", "") or ""),
+            api_key_env=str(clawsentry_llm_raw.get("api_key_env", "") or ""),
+            l3_enabled=bool(clawsentry_llm_raw.get("l3_enabled", False)),
+        )
         clawsentry = ClawSentryConfig(
             enabled=bool(clawsentry_raw.get("enabled", False)),
             auto_start=bool(clawsentry_raw.get("auto_start", True)),
@@ -1748,7 +1880,11 @@ def load_config(path: str | Path) -> AppConfig:
             decision_tier=str(clawsentry_raw.get("decision_tier", "L1")).upper(),
             observe_tool_result=bool(clawsentry_raw.get("observe_tool_result", True)),
             max_result_chars=int(clawsentry_raw.get("max_result_chars", 20000)),
+            post_action_wait_seconds=float(clawsentry_raw.get("post_action_wait_seconds", 5.0)),
+            llm=clawsentry_llm,
         )
+        if clawsentry.post_action_wait_seconds < 0:
+            raise ValueError("clawsentry.post_action_wait_seconds must be non-negative")
         if clawsentry.mode not in {"block", "warn", "monitor"}:
             raise ValueError("clawsentry.mode must be one of: block, warn, monitor")
         if clawsentry.decision_tier not in {"L1", "L2", "L3"}:
@@ -1770,7 +1906,7 @@ def load_config(path: str | Path) -> AppConfig:
             enabled=bool(janus_raw.get("enabled", False)),
             mode=str(janus_raw.get("mode", "block")).lower(),
             strict=bool(janus_raw.get("strict", False)),
-            fail_closed=bool(janus_raw.get("fail_closed", True)),
+            fail_closed=bool(janus_raw.get("fail_closed", False)),
             base_url=str(janus_raw.get("base_url", "")),
             model=str(janus_raw.get("model", "")),
             api_key_env=str(janus_raw.get("api_key_env", "JANUS_API_KEY")),
@@ -1780,16 +1916,17 @@ def load_config(path: str | Path) -> AppConfig:
             temperature=float(janus_raw.get("temperature", 0.0)),
             summary_temperature=(float(janus_raw["summary_temperature"])
                                  if janus_raw.get("summary_temperature") is not None else None),
-            max_input_chars=int(janus_raw.get("max_input_chars", 50000)),
-            max_history_steps=int(janus_raw.get("max_history_steps", 30)),
+            max_input_chars=int(janus_raw.get("max_input_chars", 20000)),
             extra_body=janus_raw.get("extra_body", {
                 "chat_template_kwargs": {"enable_thinking": False},
             }),
         )
         if janus.mode not in {"block", "warn", "monitor"}:
             raise ValueError("janus.mode must be one of: block, warn, monitor")
+        if "max_history_steps" in janus_raw:
+            raise ValueError("janus.max_history_steps was removed; upstream judges the full history")
         if min(janus.timeout_seconds, janus.max_tokens, janus.summary_max_tokens,
-               janus.max_input_chars, janus.max_history_steps) <= 0:
+               janus.max_input_chars) <= 0:
             raise ValueError("JANUS timeout and size limits must be positive")
         if not isinstance(janus.extra_body, dict):
             raise ValueError("janus.extra_body must be a mapping")
@@ -1804,7 +1941,7 @@ def load_config(path: str | Path) -> AppConfig:
     elif isinstance(safeagent_raw, dict):
         if safeagent_raw.get("api_key"):
             raise ValueError("safeagent.api_key must not be stored in YAML; use api_key_env")
-        generator_raw = safeagent_raw.get("generator", True)
+        generator_raw = safeagent_raw.get("generator", False)
         if isinstance(generator_raw, bool):
             safeagent_generator = SafeAgentGeneratorConfig(enabled=generator_raw)
         elif isinstance(generator_raw, dict):
@@ -1814,10 +1951,8 @@ def load_config(path: str | Path) -> AppConfig:
             if generator_llm_raw.get("api_key") or generator_raw.get("api_key"):
                 raise ValueError("safeagent.generator.llm.api_key must not be stored in YAML; use api_key_env")
             safeagent_generator = SafeAgentGeneratorConfig(
-                enabled=bool(generator_raw.get("enabled", True)),
+                enabled=bool(generator_raw.get("enabled", False)),
                 max_attempts=int(generator_raw.get("max_attempts", 2)),
-                max_focus_dimensions=int(generator_raw.get("max_focus_dimensions", 4)),
-                max_restricted_tools=int(generator_raw.get("max_restricted_tools", 10)),
                 fail_closed=bool(generator_raw.get("fail_closed", False)),
                 provider=str(generator_llm_raw.get("provider", "")).lower(),
                 model=str(generator_llm_raw.get("model", "")),
@@ -1834,10 +1969,10 @@ def load_config(path: str | Path) -> AppConfig:
             fail_closed=bool(safeagent_raw.get("fail_closed", True)),
             mcp_url=str(safeagent_raw.get("mcp_url", "http://127.0.0.1:8000/mcp")),
             api_key_env=str(safeagent_raw.get("api_key_env", "SAFEAGENT_MCP_API_KEY")),
-            timeout_seconds=float(safeagent_raw.get("timeout_seconds", 60.0)),
+            timeout_seconds=float(safeagent_raw.get("timeout_seconds", 300.0)),
             developer_config_path=str(safeagent_raw.get("developer_config_path", "")),
             runtime_config_path=str(safeagent_raw.get("runtime_config_path", "")),
-            max_replans=int(safeagent_raw.get("max_replans", 1)),
+            max_replans=int(safeagent_raw.get("max_replans", 10)),
             generator=safeagent_generator,
         )
         if safeagent.mode not in {"block", "warn", "monitor"}:
@@ -1846,8 +1981,8 @@ def load_config(path: str | Path) -> AppConfig:
             raise ValueError("safeagent timeout must be positive and max_replans non-negative")
         if safeagent.enabled and (not safeagent.developer_config_path or not safeagent.runtime_config_path):
             raise ValueError("safeagent requires developer_config_path and runtime_config_path")
-        if min(safeagent.generator.max_attempts, safeagent.generator.max_focus_dimensions, safeagent.generator.max_restricted_tools) < 1:
-            raise ValueError("safeagent.generator limits must be positive")
+        if safeagent.generator.max_attempts < 1:
+            raise ValueError("safeagent.generator.max_attempts must be positive")
     else:
         raise TypeError("safeagent must be a boolean or mapping")
 
@@ -1866,11 +2001,10 @@ def load_config(path: str | Path) -> AppConfig:
             api_key_env=str(stepguard_raw.get("api_key_env", "STEPGUARD_API_KEY")),
             timeout_seconds=float(stepguard_raw.get("timeout_seconds", 120.0)),
             temperature=float(stepguard_raw.get("temperature", 0.0)),
-            max_tokens=int(stepguard_raw.get("max_tokens", 1024)),
+            max_tokens=int(stepguard_raw.get("max_tokens", 4096)),
             confidence_threshold=float(stepguard_raw.get("confidence_threshold", 0.5)),
-            max_history_chars=int(stepguard_raw.get("max_history_chars", 40000)),
             max_replans=int(stepguard_raw.get("max_replans", 3)),
-            audit_final=bool(stepguard_raw.get("audit_final", True)),
+            audit_final=bool(stepguard_raw.get("audit_final", False)),
             replacement_message=str(stepguard_raw.get(
                 "replacement_message", "The response was withheld by StepGuard."
             )),
@@ -1879,7 +2013,9 @@ def load_config(path: str | Path) -> AppConfig:
             raise ValueError("stepguard.mode must be one of: block, warn, monitor")
         if not 0 <= stepguard.confidence_threshold <= 1:
             raise ValueError("stepguard.confidence_threshold must be between 0 and 1")
-        if min(stepguard.timeout_seconds, stepguard.max_tokens, stepguard.max_history_chars) <= 0:
+        if "max_history_chars" in stepguard_raw:
+            raise ValueError("stepguard.max_history_chars was removed; upstream never truncates history")
+        if min(stepguard.timeout_seconds, stepguard.max_tokens) <= 0:
             raise ValueError("StepGuard timeout and size limits must be positive")
         if stepguard.max_replans < 0:
             raise ValueError("stepguard.max_replans must be non-negative")
@@ -1929,103 +2065,58 @@ def load_config(path: str | Path) -> AppConfig:
     if isinstance(pro2guard_raw, bool):
         pro2guard = Pro2GuardConfig(enabled=pro2guard_raw)
     elif isinstance(pro2guard_raw, dict):
-        generator_raw = pro2guard_raw.get("generator", True)
-        if isinstance(generator_raw, bool):
-            pro2guard_generator = Pro2GuardGeneratorConfig(enabled=generator_raw)
-        elif isinstance(generator_raw, dict):
-            generator_llm_raw = generator_raw.get("llm", {}) or {}
-            if not isinstance(generator_llm_raw, dict):
-                raise TypeError("pro2guard.generator.llm must be a mapping")
-            pro2guard_generator = Pro2GuardGeneratorConfig(
-                enabled=bool(generator_raw.get("enabled", True)),
-                context_mode=str(
-                    generator_raw.get("context_mode", "benign_only")
-                ).lower(),
-                max_attempts=int(generator_raw.get("max_attempts", 2)),
-                max_profiles=int(generator_raw.get("max_profiles", 50)),
-                max_unsafe_states=int(
-                    generator_raw.get("max_unsafe_states", 20)
-                ),
-                max_model_states=int(generator_raw.get("max_model_states", 200)),
-                state_batch_size=int(generator_raw.get("state_batch_size", 8)),
-                fail_closed=bool(generator_raw.get("fail_closed", False)),
-                provider=str(
-                    generator_llm_raw.get(
-                        "provider", generator_raw.get("provider", "")
-                    )
-                ).lower(),
-                model=str(
-                    generator_llm_raw.get("model", generator_raw.get("model", ""))
-                ),
-                temperature=(
-                    float(generator_llm_raw["temperature"])
-                    if "temperature" in generator_llm_raw
-                    else (
-                        float(generator_raw["temperature"])
-                        if "temperature" in generator_raw
-                        else None
-                    )
-                ),
-                base_url=str(
-                    generator_llm_raw.get(
-                        "base_url", generator_raw.get("base_url", "")
-                    )
-                ),
-                api_key=str(
-                    generator_llm_raw.get(
-                        "api_key", generator_raw.get("api_key", "")
-                    )
-                ),
-                request_timeout=_optional_int(
-                    generator_llm_raw.get(
-                        "request_timeout", generator_raw.get("request_timeout")
-                    ),
-                    120,
-                ),
-            )
-        else:
-            raise TypeError("pro2guard.generator must be a boolean or mapping")
+        generator_raw = pro2guard_raw.get("generator", {}) or {}
+        if not isinstance(generator_raw, dict):
+            raise TypeError("pro2guard.generator must be a mapping")
+        generator_llm_raw = generator_raw.get("llm", {}) or {}
+        if not isinstance(generator_llm_raw, dict):
+            raise TypeError("pro2guard.generator.llm must be a mapping")
+
+        def _generator_value(key: str, default: Any = "") -> Any:
+            return generator_llm_raw.get(key, generator_raw.get(key, default))
+
+        temperature = _generator_value("temperature", None)
+        pro2guard_generator = Pro2GuardGeneratorConfig(
+            max_attempts=int(generator_raw.get("max_attempts", 2)),
+            max_conditions=int(generator_raw.get("max_conditions", 4)),
+            max_atoms=int(generator_raw.get("max_atoms", 4)),
+            provider=str(_generator_value("provider")).lower(),
+            model=str(_generator_value("model")),
+            temperature=float(temperature) if temperature is not None else None,
+            base_url=str(_generator_value("base_url")),
+            api_key=str(_generator_value("api_key")),
+            request_timeout=_optional_int(_generator_value("request_timeout", None), 120),
+        )
         pro2guard = Pro2GuardConfig(
             enabled=bool(pro2guard_raw.get("enabled", False)),
-            mode=str(pro2guard_raw.get("mode", "block")).lower(),
-            threshold=float(pro2guard_raw.get("threshold", 0.1)),
-            model_path=str(pro2guard_raw.get("model_path", "")),
-            dtmc_path=str(pro2guard_raw.get("dtmc_path", "")),
+            mode=str(pro2guard_raw.get("mode", "monitor")).lower(),
+            threshold=float(pro2guard_raw.get("threshold", 0.9)),
+            model_dir=str(pro2guard_raw.get("model_dir", "") or ""),
+            model_path=str(pro2guard_raw.get("model_path", "") or ""),
+            granularity=str(pro2guard_raw.get("granularity", "task")).lower(),
+            engine=str(pro2guard_raw.get("engine", "json")).lower(),
             prism_bin=str(pro2guard_raw.get("prism_bin", "prism")),
-            abstraction=str(pro2guard_raw.get("abstraction", "")),
-            abstraction_policy_path=str(
-                pro2guard_raw.get("abstraction_policy_path", "")
-            ),
-            unsafe_states=[
-                str(item) for item in (pro2guard_raw.get("unsafe_states", []) or [])
-            ],
-            horizon=int(pro2guard_raw.get("horizon", 20)),
+            bound=int(pro2guard_raw.get("bound", -1)),
             timeout_seconds=int(pro2guard_raw.get("timeout_seconds", 10)),
             fail_closed=bool(pro2guard_raw.get("fail_closed", False)),
             generator=pro2guard_generator,
         )
-        if pro2guard.generator.context_mode not in {"full", "benign_only"}:
-            raise ValueError(
-                "pro2guard.generator.context_mode must be one of: full, benign_only"
-            )
         if pro2guard.generator.max_attempts < 1:
             raise ValueError("pro2guard.generator.max_attempts must be at least 1")
-        if pro2guard.generator.max_profiles < 0:
-            raise ValueError("pro2guard.generator.max_profiles must be non-negative")
-        if pro2guard.generator.max_unsafe_states < 0:
-            raise ValueError(
-                "pro2guard.generator.max_unsafe_states must be non-negative"
-            )
-        if pro2guard.generator.max_model_states < 1:
-            raise ValueError(
-                "pro2guard.generator.max_model_states must be at least 1"
-            )
-        if pro2guard.generator.state_batch_size < 1:
-            raise ValueError(
-                "pro2guard.generator.state_batch_size must be at least 1"
-            )
+        if pro2guard.generator.max_conditions < 1 or pro2guard.generator.max_atoms < 1:
+            raise ValueError("pro2guard.generator.max_conditions and max_atoms must be at least 1")
         if pro2guard.mode not in {"block", "warn", "monitor"}:
             raise ValueError("pro2guard.mode must be one of: block, warn, monitor")
+        if pro2guard.granularity not in {"task", "tools"}:
+            raise ValueError("pro2guard.granularity must be one of: task, tools")
+        if pro2guard.engine not in {"json", "prism"}:
+            raise ValueError("pro2guard.engine must be one of: json, prism")
+        for legacy in ("unsafe_states", "horizon", "dtmc_path", "abstraction", "abstraction_policy_path"):
+            if legacy in pro2guard_raw:
+                raise ValueError(
+                    f"pro2guard.{legacy} was removed; unsafe states come from the "
+                    "generated spec stored with each trained model (see docs/pro2guard.md)"
+                )
     else:
         pro2guard = Pro2GuardConfig()
 
@@ -2299,8 +2390,12 @@ def load_config(path: str | Path) -> AppConfig:
             )
             scenario_compiler = AgentGuardScenarioCompilerConfig(
                 enabled=bool(scenario_raw.get("enabled", True)),
-                context_mode=str(scenario_raw.get("context_mode", "full")).lower(),
+                context_mode=str(
+                    scenario_raw.get("context_mode", "benign_only")
+                ).lower(),
                 max_attempts=int(scenario_raw.get("max_attempts", 2)),
+                max_requirements=int(scenario_raw.get("max_requirements", 8)),
+                max_rounds=int(scenario_raw.get("max_rounds", 4)),
                 provider=str(scenario_llm_raw.get("provider", "")),
                 model=str(scenario_llm_raw.get("model", "")),
                 temperature=(
@@ -2323,14 +2418,19 @@ def load_config(path: str | Path) -> AppConfig:
             )
         else:
             raise TypeError("agentguard.scenario_compiler must be a boolean or mapping")
-        if scenario_compiler.max_attempts < 1:
+        if (
+            scenario_compiler.max_attempts < 1
+            or scenario_compiler.max_requirements < 1
+            or scenario_compiler.max_rounds < 1
+        ):
             raise ValueError(
-                "agentguard.scenario_compiler.max_attempts must be positive"
+                "agentguard.scenario_compiler max_attempts, max_requirements and "
+                "max_rounds must be positive"
             )
-        if scenario_compiler.context_mode not in {"full", "benign_only"}:
+        if scenario_compiler.context_mode != "benign_only":
+            # Policy generators never see attack metadata.
             raise ValueError(
-                "agentguard.scenario_compiler.context_mode must be one of: "
-                "full, benign_only"
+                "agentguard.scenario_compiler.context_mode must be benign_only"
             )
         agentguard = AgentGuardConfig(
             enabled=bool(agentguard_raw.get("enabled", False)),
@@ -2365,6 +2465,10 @@ def load_config(path: str | Path) -> AppConfig:
             ),
             remote_retries=int(agentguard_raw.get("remote_retries", 2)),
             fail_closed=bool(agentguard_raw.get("fail_closed", True)),
+            auto_start_server=bool(agentguard_raw.get("auto_start_server", False)),
+            server_startup_timeout_seconds=float(
+                agentguard_raw.get("server_startup_timeout_seconds", 30.0)
+            ),
             scenario_compiler=scenario_compiler,
         )
         if agentguard.mode not in {"block", "warn", "monitor"}:

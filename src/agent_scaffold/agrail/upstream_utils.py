@@ -1,11 +1,13 @@
 """Upstream DAS helpers used by the AGrail adapter and vendored detectors.
 
-The extraction functions preserve DAS/utils.py behavior. The LLM call uses
+The extraction functions preserve DAS/utils.py behavior, except for the
+marked ADAPTATIONs to how current models format the same answers. The LLM call uses
 this project's configured adapter through a per-call context variable.
 """
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 from contextvars import ContextVar
@@ -56,6 +58,11 @@ def format_dic_to_stry(dic):
 
 # DAS/utils.py:109-121
 def extract_step_back_content(text):
+    # ADAPTATION (reply format): newer models bold the two labels
+    # ("**Paraphrased Natural Language:**"); drop the emphasis so the upstream
+    # patterns below read the paraphrase instead of the "**" marker.
+    text = re.sub(r"\*\*\s*(Paraphrased (?:Natural|Tool Command) Language)\s*(:?)\s*\*\*\s*(:?)",
+                  lambda m: m.group(1) + ":", text)
     natural_language_pattern = r"Paraphrased Natural Language:\s*(.+)"
     tool_command_language_pattern = r"Paraphrased Tool Command Language:\s*(.+)"
 
@@ -79,11 +86,157 @@ def match_in_memory_bool(text):
     return None
 
 
+# ADAPTATION (reply format): upstream reads only blocks matching
+# r'```json\n(.*?)\n```'. gpt-5.x replies also use ```JSON or bare ```
+# fences, put the JSON on the fence line, omit the newline before the closing
+# fence, or leave a block unfenced, so upstream finds too few blocks and
+# raises IndexError. json_blocks() reads those shapes; the block order and
+# every later step (index choice, Step 2 bracket rewrite, json.loads) are
+# upstream's, so a reply that really lacks a block still raises.
+_FENCE = re.compile(r"```([A-Za-z0-9_+.-]*)")
+
+
+def _loads(block):
+    try:
+        return json.loads(block)
+    except json.JSONDecodeError:
+        # The upstream prompts show single-quoted examples; accept that
+        # literal form of the same data (never evaluates code).
+        try:
+            return ast.literal_eval(block.strip())
+        except (SyntaxError, ValueError):
+            pass
+        raise
+
+
+def _fenced(text):
+    """(start, end, info, content) for each paired ``` fence, in order."""
+    markers = list(_FENCE.finditer(text))
+    blocks = []
+    index = 0
+    while index < len(markers):
+        opening = markers[index]
+        closing = markers[index + 1] if index + 1 < len(markers) else None
+        end = closing.start() if closing else len(text)
+        blocks.append((opening.start(), closing.end() if closing else len(text),
+                       opening.group(1).lower(), text[opening.end():end].strip()))
+        index += 2
+    return blocks
+
+
+def _balanced(text, start):
+    """End offset of the bracketed value starting at text[start], or -1."""
+    pairs = {"[": "]", "{": "}"}
+    stack = []
+    quote = ""
+    escaped = False
+    for position in range(start, len(text)):
+        char = text[position]
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = ""
+        elif char in "\"'":
+            quote = char
+        elif char in pairs:
+            stack.append(pairs[char])
+        elif char in "]}":
+            if not stack or stack.pop() != char:
+                return -1
+            if not stack:
+                return position + 1
+    return -1
+
+
+def _structured(value):
+    return isinstance(value, dict) or (
+        isinstance(value, list) and bool(value)
+        and all(isinstance(item, dict) for item in value))
+
+
+def _unfenced(text, start, end):
+    """(start, content) for top-level JSON objects/arrays of objects in prose."""
+    found = []
+    position = start
+    while position < end:
+        if text[position] in "[{":
+            stop = _balanced(text, position)
+            if 0 < stop <= end:
+                candidate = text[position:stop]
+                try:
+                    if _structured(_loads(candidate)):
+                        found.append((position, candidate))
+                        position = stop
+                        continue
+                except (json.JSONDecodeError, SyntaxError, ValueError):
+                    pass
+        position += 1
+    return found
+
+
+_STEP_KEY = re.compile(r"^\s*step\s*(\d+)\b", re.I)
+
+
+def _split_steps(blocks):
+    """Expand one object holding every step ({"Step 1": ..., "Step 2": ...}).
+
+    gpt-5.x often answers a multi-step format with a single JSON object keyed
+    by step instead of one block per step. The step values are exactly the
+    blocks upstream expects, so they are re-serialized in step order.
+    """
+    expanded = []
+    for block in blocks:
+        try:
+            value = _loads(block)
+        except (json.JSONDecodeError, SyntaxError, ValueError):
+            expanded.append(block)
+            continue
+        steps = {}
+        if isinstance(value, dict) and len(value) > 1:
+            for key, item in value.items():
+                match = _STEP_KEY.match(str(key))
+                if not match:
+                    steps = {}
+                    break
+                steps[int(match.group(1))] = item
+        if steps:
+            expanded.extend(json.dumps(steps[number], ensure_ascii=False)
+                            for number in sorted(steps))
+        else:
+            expanded.append(block)
+    return expanded
+
+
+def json_blocks(output, needed=1):
+    """Upstream's JSON block list, read tolerantly (see the note above)."""
+    return _split_steps(_json_blocks(output, needed))
+
+
+def _json_blocks(output, needed=1):
+    fenced = [(start, end, info, content) for start, end, info, content in _fenced(output)
+              if info == "json" or (info == "" and content[:1] in ("[", "{"))]
+    blocks = [content for _, _, _, content in fenced]
+    if len(blocks) >= needed:
+        return blocks
+    # Too few fenced blocks: add unfenced ones between the fences.
+    ordered = [(start, content) for start, _, _, content in fenced]
+    cursor = 0
+    for start, end, _, _ in _fenced(output) + [(len(output), len(output), "", "")]:
+        ordered.extend(_unfenced(output, cursor, start))
+        cursor = end
+    return [content for _, content in sorted(ordered)]
+
+
 # DAS/guardrail.py:36-48
-def extract_json_from_text(output, index):
-    # Use regex to find JSON blocks in the text
-    json_pattern = re.compile(r'```json\n(.*?)\n```', re.DOTALL)
-    matches = json_pattern.findall(output)
+def extract_json_from_text(output, index, needed=None):
+    # Use regex to find JSON blocks in the text. ``needed`` is how many
+    # blocks the reply format has (the Executor's Step 1 and Step 2: 2).
+    if needed is None:
+        needed = index + 1 if index >= 0 else -index
+    matches = json_blocks(output, needed)
 
     # Parse each JSON block and return a list of parsed objects
     if index == -1:
@@ -91,13 +244,25 @@ def extract_json_from_text(output, index):
             matches[index] = matches[index][1:-1]
         matches[index] = matches[index].replace("[", "{").replace("]", "}")
 
-    return json.loads(matches[index])
+    return _loads(matches[index])
 
 
 # DAS/guardrail.py:51-73
+def _upstream_flags(step):
+    # Model-format adaptation: upstream's prompt shows "True"/"False" strings;
+    # current models may emit JSON booleans, which upstream's string tests
+    # would silently read as "not False" and drop every check.
+    if not isinstance(step, dict):
+        return step
+    return {
+        key: (str(value) if isinstance(value, bool) and key in ("Delete", "Tool Call") else value)
+        for key, value in step.items()
+    }
+
+
 def tool_call_from_react(output):
     reason_safety = []
-    steps = extract_json_from_text(output, -2)
+    steps = [_upstream_flags(step) for step in extract_json_from_text(output, -2)]
     tool_dic = {}
     for i in range(len(steps)):
         if steps[i]["Delete"] == "False":

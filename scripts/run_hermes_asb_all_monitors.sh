@@ -46,9 +46,11 @@ generated_config="$(mktemp "$(dirname "${source_config}")/.asb-all-monitors.XXXX
 cleanup() { rm -f "${generated_config}"; }
 trap cleanup EXIT
 
-python3 - "${source_config}" "${generated_config}" "${toolsafe_url}" "${agentdog_url}" <<'PYCONFIG'
+python3 - "${source_config}" "${generated_config}" "${toolsafe_url}" "${agentdog_url}" "${batch_dir}" "${repo_root}/scripts" <<'PYCONFIG'
 import pathlib, sys, yaml
-source, destination, toolsafe_url, agentdog_url = sys.argv[1:]
+source, destination, toolsafe_url, agentdog_url, batch_dir, scripts_dir = sys.argv[1:]
+sys.path.insert(0, scripts_dir)
+from hermes_campaign import configure
 raw = yaml.safe_load(pathlib.Path(source).read_text(encoding="utf-8"))
 asb = raw.get("agent_security_bench") or {}
 if not asb.get("enabled"):
@@ -62,28 +64,13 @@ raw.setdefault("memory_experiment", {}).update({
     "mode": "official_asb",
     "run_clean_control": True,
 })
+# Same guard set and passive modes as agents/hermes/agentdojo-all-monitors.yaml,
+# with a fresh campaign-scoped AGrail memory; recorded in campaign_manifest.json.
+configure(raw, pathlib.Path(batch_dir), source=source)
 settings = {
-    "aegis": {"enabled": True, "mode": "monitor"},
-    "progent": {"enabled": True, "mode": "monitor"},
-    "pro2guard": {"enabled": True, "mode": "monitor"},
-    "agentspec": {"enabled": True, "mode": "monitor"},
-    "llamafirewall": {"enabled": True, "mode": "monitor"},
-    "toolsafe": {
-        "enabled": True,
-        "mode": "monitor",
-        "base_url": toolsafe_url,
-    },
-    "agentguard": {
-        "enabled": True,
-        "mode": "monitor",
-        "policy": "",
-        "plugin_config": "",
-    },
-    "agentdog": {
-        "enabled": True,
-        "mode": "diagnose",
-        "base_url": agentdog_url,
-    },
+    "toolsafe": {"base_url": toolsafe_url},
+    "agentguard": {"policy": "", "plugin_config": ""},
+    "agentdog": {"base_url": agentdog_url},
     "agentsight": {"enabled": False},
 }
 for name, values in settings.items():
@@ -101,7 +88,7 @@ ASB all-monitors configuration
   Case: ${case_slug}
   Runs: ${runs}
   Target + clean control per run: enabled
-  Replay monitors: aegis, progent, pro2guard, agentspec, llamafirewall, toolsafe, agentguard, agentdog
+  Replay monitors: $(python3 -c 'import json,sys; print(", ".join(json.load(open(sys.argv[1]))["campaign"]["enabled_guards"]))' "${batch_dir}/campaign_manifest.json")
   ToolSafe: ${toolsafe_url}
   AgentDoG: ${agentdog_url}
   Output: ${batch_dir}
@@ -118,9 +105,12 @@ fi
 export AGENTGUARD_SCENARIO_API_KEY="${AGENTGUARD_SCENARIO_API_KEY:-${OPENAI_API_KEY}}"
 
 if [[ "${skip_service_checks}" != "1" ]]; then
-  python3 - "${toolsafe_url}" "${agentdog_url}" <<'PYCHECK'
-import sys, urllib.request
-for name, base in (("ToolSafe", sys.argv[1]), ("AgentDoG", sys.argv[2])):
+  python3 - "${toolsafe_url}" "${agentdog_url}" "${batch_dir}/campaign_manifest.json" <<'PYCHECK'
+import json, sys, urllib.request
+enabled = set(json.load(open(sys.argv[3]))["campaign"]["enabled_guards"])
+for guard, name, base in (("toolsafe", "ToolSafe", sys.argv[1]), ("agentdog", "AgentDoG", sys.argv[2])):
+    if guard not in enabled:
+        continue
     url = base.rstrip("/") + "/models"
     try:
         with urllib.request.urlopen(url, timeout=5) as response:
@@ -137,6 +127,7 @@ PYTHONPATH="${repo_root}/src${PYTHONPATH:+:${PYTHONPATH}}" \
     --config "${generated_config}" \
     --runs "${runs}" \
     --runs-dir "${batch_dir}"
+python3 "${repo_root}/scripts/hermes_campaign.py" finalize "${batch_dir}"
 
 python3 "${repo_root}/scripts/analyze_hermes_asb_monitors.py" "${batch_dir}"
 echo "Batch directory: ${batch_dir}"

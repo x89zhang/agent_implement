@@ -12,6 +12,7 @@ from typing import Any
 from ..config import AppConfig, LLMConfig
 from ..llm import LLMAdapter, _extract_usage
 from ..middleware import Middleware, ModelDecision, ResultDecision, ToolDecision
+from ..tool_results import unwrap_hermes_result
 from . import projection_generator as generator
 from .upstream import (
     OMITTED_MESSAGE,
@@ -54,7 +55,11 @@ class MelonMiddleware(Middleware):
     def after_tool(self, state: dict[str, Any], name: str, payload: dict[str, Any], result: str, failed: bool) -> ResultDecision:
         # AgentDojo keeps a failed call's error outside the tool message content,
         # which is all upstream copies into random.txt (pi_detector.py:324).
-        entry = {"name": name, "content": "" if failed else str(result)}
+        # random.txt holds the bare tool text: Hermes' {"result": ...} MCP envelope
+        # is removed. Hermes' own <untrusted_tool_result> notice is added only to
+        # the agent's tool message, not to this result; it is Hermes' defense, not
+        # tool output, so the masked run does not see it either.
+        entry = {"name": name, "content": "" if failed else unwrap_hermes_result(str(result))}
         if failed:
             entry["error"] = str(result)
         state.setdefault("_melon_outputs", []).append(entry)
@@ -249,15 +254,12 @@ class MelonMiddleware(Middleware):
                 projection[tool["name"]], sources[tool["name"]] = rule, "upstream"
         pending = [tool for tool in inventory if tool["name"] not in projection
                    and tool["name"] not in self.settings.projections and tool["arguments"]]
-        # Upstream fully specifies AgentDojo: the two rules above, all arguments
-        # elsewhere. Only other benchmarks, whose tools upstream never saw, get
-        # generated projections in place of hand-written rules.
-        agentdojo = bool(getattr(getattr(self.cfg, "agentdojo", None), "enabled", False))
+        # Default (upstream, pi_detector.py:18-44): the two rules above and all
+        # arguments for every other tool, on every benchmark. The opt-in `llm`
+        # mode lets a generator pick comparison arguments for the other tools.
         manifest: dict[str, Any] = {"status": "upstream_only", "context_mode": "benign_only"}
-        generate = (not agentdojo and self.settings.projection_generation == "llm"
-                    and self.settings.generator.enabled)
-        manifest["source"] = ("upstream_agentdojo" if agentdojo
-                              else "upstream+generated" if generate and pending else "upstream")
+        generate = self.settings.projection_generation == "llm" and self.settings.generator.enabled
+        manifest["source"] = "upstream+generated" if generate and pending else "upstream"
         if pending and generate:
             manifest = {**self._generate(pending, state), "source": manifest["source"]}
             for name, args in manifest.pop("projection", {}).items():

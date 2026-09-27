@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import sys
 from pathlib import Path
 from dataclasses import dataclass
@@ -9,6 +10,12 @@ from typing import Any
 
 from ..config import AppConfig
 from ..middleware import Middleware, ModelDecision, ResultDecision, ToolExecutionTerminated
+from ..tool_results import unwrap_hermes_result
+
+# Native scanners built on CustomCheckScanner call Together AI by default
+# (custom_check_scanner.py: api.together.xyz, TOGETHER_API_KEY).
+_TOGETHER_SCANNERS = {"agent_alignment", "pii_detection"}
+_TOGETHER_KEY_ENV = "TOGETHER_API_KEY"
 
 
 def guard_react_actions(turn: Any, manager: Any, state: dict[str, Any]) -> Any:
@@ -120,11 +127,39 @@ class LlamaFirewallMiddleware(Middleware):
         self.runtime = runtime
         self.firewall = firewall
         self._init_error = ""
+        self._config_error = ""
+        self._config_error_roles: set[str] = set()
         try:
             self.runtime = self.runtime or _Runtime.load()
             self.firewall = self.firewall or self.runtime.build(self.options)
         except Exception as exc:
             self._init_error = str(exc)
+        else:
+            self._check_credentials()
+
+    def _check_credentials(self) -> None:
+        """Detect a missing Together key before the first scan.
+
+        Without it every AlignmentCheck scan raises inside the library. The
+        run then has no verdict for those roles; record that as a
+        configuration error rather than as clean scans.
+        """
+        if self.options.factory or os.environ.get(_TOGETHER_KEY_ENV):
+            return  # factories configure their own scanner endpoints
+        scanners = getattr(self.firewall, "scanners", None) or {}
+        needed: set[str] = set()
+        for role, items in scanners.items():
+            names = {self._enum_value(item) for item in items} & _TOGETHER_SCANNERS
+            if names:
+                needed |= names
+                self._config_error_roles.add(self._enum_value(role))
+        if needed:
+            self._config_error = (
+                f"LlamaFirewall configuration error: scanner(s) {', '.join(sorted(needed))} "
+                f"call Together AI (the library default endpoint and model) and "
+                f"{_TOGETHER_KEY_ENV} is not set. Export {_TOGETHER_KEY_ENV} before "
+                "the run; Hermes container configs forward it through container.env."
+            )
 
     def guard_model_input(
         self, state: dict[str, Any], messages: list[dict[str, Any]]
@@ -134,13 +169,15 @@ class LlamaFirewallMiddleware(Middleware):
 
         state["_llamafirewall_initial_input_scanned"] = True
         results: list[dict[str, Any]] = []
-        # A run starts with system/user context. Later assistant and tool events are
-        # ingested by their dedicated lifecycle hooks instead of being rescanned.
+        # Upstream's tool-using agent integration (examples/langchain_agent.py)
+        # feeds the user prompt, each agent message and each tool output; the
+        # agent's system prompt is not part of the trace. Later assistant and
+        # tool events are ingested by their dedicated lifecycle hooks.
         for raw in messages:
             role = str(raw.get("role", "")).lower()
             if role == "assistant":
                 break
-            if role not in {"system", "user"}:
+            if role != "user":
                 continue
             content = str(raw.get("content") or "")
             if content:
@@ -188,7 +225,9 @@ class LlamaFirewallMiddleware(Middleware):
         result: str,
         failed: bool,
     ) -> ResultDecision:
-        scan = self._scan(state, "tool_output", "tool", result)
+        # langchain_agent.py scans str(ToolMessage.content): the tool's own
+        # output, without Hermes' {"result": ...} MCP envelope.
+        scan = self._scan(state, "tool_output", "tool", str(unwrap_hermes_result(result)))
         if self._permitted(scan):
             return ResultDecision(result=result)
         # Stop on the native verdict without feeding fabricated observations back.
@@ -203,6 +242,8 @@ class LlamaFirewallMiddleware(Middleware):
         *,
         tool_call: Any = None,
     ) -> dict[str, Any]:
+        if self._config_error and role in self._config_error_roles:
+            return self._record_config_error(state, phase, role)
         try:
             if self._init_error:
                 raise RuntimeError(self._init_error)
@@ -241,6 +282,33 @@ class LlamaFirewallMiddleware(Middleware):
             }
         state["_last_llamafirewall_decision"] = event
         state.setdefault("llamafirewall_events", []).append(event)
+        return event
+
+    def _record_config_error(
+        self, state: dict[str, Any], phase: str, role: str
+    ) -> dict[str, Any]:
+        event = {
+            "phase": phase,
+            "role": role,
+            "decision": "block" if self.options.fail_closed else "allow",
+            "reason": self._config_error,
+            "score": None,
+            "status": "error",
+            "error": self._config_error,
+            "mode": self.options.mode,
+        }
+        state["_last_llamafirewall_decision"] = event
+        if not state.get("_llamafirewall_config_error_recorded"):
+            # Once per run: a run-level guard failure, not per-message noise.
+            state["_llamafirewall_config_error_recorded"] = True
+            state.setdefault("harness", {}).setdefault("guard_errors", {})[
+                "llamafirewall"
+            ] = self._config_error
+            state.setdefault("llamafirewall_events", []).append(event)
+            state.setdefault("trace", []).append({
+                "step": "llamafirewall_configuration_error",
+                "output": {"status": "error", "error": self._config_error},
+            })
         return event
 
     def _permitted(self, result: dict[str, Any]) -> bool:

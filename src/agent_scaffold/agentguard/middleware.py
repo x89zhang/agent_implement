@@ -5,14 +5,22 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from ..config import AppConfig, ToolConfig
 from ..middleware import Middleware, ModelDecision, ResultDecision, ToolDecision
+from ..tool_results import unwrap_hermes_result
 
 _SESSION_KEY = "_agentguard_session"
 _LAST_KEY = "_last_agentguard_decision"
 _EVENTS_KEY = "agentguard_events"
+_OUTPUT_DECISION_KEY = "_agentguard_output_decision"
+
+
+# Nobody answers review tickets in a benchmark run; pending decisions return
+# at once and are treated as denials instead of waiting 600 s for a person.
+_APPROVAL_WAIT_SECONDS = 0.001
 
 
 @dataclass
@@ -20,13 +28,31 @@ class _Session:
     guard: Any
     decision_type: Any
     events: Any
+    server: Any = None
     closed: bool = False
 
     def close(self) -> None:
         if self.closed:
             return
         self.closed = True
-        self.guard.close()
+        try:
+            self.guard.close()
+        finally:
+            if self.server is not None:
+                self.server.stop()
+
+
+class _FailedDecision:
+    """Fail-closed stand-in for a decision the integration could not obtain."""
+
+    requires_user = False
+    requires_remote = False
+    is_allow = False
+    metadata: dict[str, Any] = {}
+
+    def __init__(self, reason: str) -> None:
+        self.decision_type = SimpleNamespace(value="deny")
+        self.reason = reason
 
 
 def _resolve_path(cfg: AppConfig, value: str, *, run_dir: str = "") -> str | None:
@@ -59,6 +85,70 @@ def _load_agentguard() -> tuple[Any, Any, Any, Any]:
     from agentguard.tools.metadata import ToolMetadata
 
     return AgentGuard, DecisionType, events, ToolMetadata
+
+
+def _default_plugin_config() -> Path:
+    # Upstream config/plugins.json: server rule_based_plugin at tool_before and
+    # no client plugins.
+    from .launcher import DEFAULT_PLUGIN_CONFIG
+
+    return DEFAULT_PLUGIN_CONFIG
+
+
+def _start_server(
+    cfg: AppConfig, policy: str | None, plugin_config: str, run_dir: str
+) -> Any:
+    from .launcher import start_server
+    from .scenario import _compiler_llm_config
+
+    llm = _compiler_llm_config(cfg)
+    return start_server(
+        policy_path=policy or "",
+        plugin_config=plugin_config,
+        # The server's LLM_CHECK reviewer uses the policy generator's model.
+        llm={
+            "provider": llm.provider,
+            "model": llm.model,
+            "temperature": llm.temperature,
+            "base_url": llm.base_url,
+            "api_key": llm.api_key or os.environ.get(llm.api_key_env or "", ""),
+            "api_key_env": llm.api_key_env,
+            "request_timeout": llm.request_timeout,
+        },
+        work_dir=run_dir,
+        timeout=cfg.agentguard.server_startup_timeout_seconds,
+    )
+
+
+def _llm_output_payload(
+    content: str, calls: list[dict[str, Any]]
+) -> tuple[Any, dict[str, Any]]:
+    """Normalize one assistant turn the way upstream's LangChain adapter does.
+
+    Hermes turns are OpenAI chat messages (content plus tool_calls), the shape
+    ``LangChainAgentAdapter.normalize_llm_output`` handles; it keeps the content
+    as output and extracts a thought from reasoning tags or ReAct prefixes.
+    """
+    message: dict[str, Any] = {"type": "ai", "content": content or ""}
+    if calls:
+        message["tool_calls"] = [
+            {
+                "name": call.get("name"),
+                "args": call.get("arguments") or {},
+                "id": call.get("id"),
+            }
+            for call in calls
+            if isinstance(call, dict)
+        ]
+    try:
+        from agentguard.adapters.agent.langchain import LangChainAgentAdapter
+
+        normalized = LangChainAgentAdapter().normalize_llm_output(
+            label="hermes", output=message
+        )
+    except Exception:  # noqa: BLE001 -- fall back to the raw message
+        return message, {}
+    return normalized.payload, dict(normalized.metadata)
 
 
 def _decision_dict(decision: Any, *, phase: str, mode: str) -> dict[str, Any]:
@@ -120,11 +210,24 @@ class AgentGuardMiddleware(Middleware):
             self._failure(state, "session", self._init_error)
             return None
 
+        if self.settings.compile_error:
+            self._failure(state, "session", self.settings.compile_error)
+            return None
+
         persist = state.get("_trace_persist") if isinstance(state, dict) else {}
         persist = persist if isinstance(persist, dict) else {}
         run_dir = str(persist.get("run_dir", ""))
         session_id = Path(run_dir).name if run_dir else f"{self.cfg.agent.name}-session"
+        server = None
         try:
+            policy = _resolve_path(self.cfg, self.settings.policy, run_dir=run_dir)
+            plugin_config = _resolve_path(
+                self.cfg, self.settings.plugin_config, run_dir=run_dir
+            ) or str(_default_plugin_config())
+            server_url = self.settings.server_url
+            if not server_url and self.settings.auto_start_server:
+                server = _start_server(self.cfg, policy, plugin_config, run_dir)
+                server_url = server.url
             sandbox_profile = self.settings.sandbox_profile
             if isinstance(sandbox_profile, dict):
                 from agentguard.sandbox import PermissionProfile
@@ -134,8 +237,8 @@ class AgentGuardMiddleware(Middleware):
                 session_id=session_id,
                 user_id=self.settings.user_id or None,
                 agent_id=self.cfg.agent.name,
-                policy=_resolve_path(self.cfg, self.settings.policy, run_dir=run_dir),
-                server_url=self.settings.server_url or None,
+                policy=policy,
+                server_url=server_url or None,
                 api_key=self.settings.api_key or None,
                 environment=self.settings.environment or None,
                 sandbox=self.settings.sandbox,
@@ -148,10 +251,11 @@ class AgentGuardMiddleware(Middleware):
                 ),
                 remote_timeout_s=self.settings.remote_timeout_seconds,
                 remote_retries=self.settings.remote_retries,
-                plugin_config=_resolve_path(
-                    self.cfg, self.settings.plugin_config, run_dir=run_dir
-                ),
+                plugin_config=plugin_config,
             )
+            remote = getattr(guard, "_remote", None)
+            if remote is not None and hasattr(remote, "approval_wait_timeout_s"):
+                remote.approval_wait_timeout_s = _APPROVAL_WAIT_SECONDS
             principal = {
                 "agent_id": self.cfg.agent.name,
                 "user_id": self.settings.user_id or None,
@@ -177,11 +281,16 @@ class AgentGuardMiddleware(Middleware):
             if getattr(guard, "_remote", None) and guard._remote.enabled:
                 guard._sync_remote_session()
             current = _Session(
-                guard=guard, decision_type=self._decision_type, events=self._events
+                guard=guard,
+                decision_type=self._decision_type,
+                events=self._events,
+                server=server,
             )
             state[_SESSION_KEY] = current
             return current
         except Exception as exc:  # noqa: BLE001 -- fail-open/closed boundary
+            if server is not None:
+                server.stop()
             self._failure(state, "session", f"AgentGuard initialization failed: {exc}")
             return None
 
@@ -207,17 +316,19 @@ class AgentGuardMiddleware(Middleware):
 
     def _failure(
         self, state: dict[str, Any], phase: str, reason: str
-    ) -> dict[str, Any]:
+    ) -> _FailedDecision | None:
+        """Record an integration failure; it is an error, never a verdict."""
         record = {
-            "decision_type": "deny" if self.settings.fail_closed else "allow",
+            "error": reason,
             "reason": reason,
             "phase": phase,
             "mode": self.settings.mode,
             "route": "integration_error",
+            "fail_closed": self.settings.fail_closed,
         }
         state[_LAST_KEY] = record
         state.setdefault(_EVENTS_KEY, []).append(record)
-        return record
+        return _FailedDecision(reason) if self.settings.fail_closed else None
 
     def _evaluate(
         self, state: dict[str, Any], event: Any, phase: str, *, after: bool = False
@@ -229,6 +340,11 @@ class AgentGuardMiddleware(Middleware):
             result = session.guard.runtime.guard(
                 event, phase="after" if after else "before"
             )
+            if result.route == "remote_unavailable":
+                # The per-run server did not answer: an integration failure.
+                return self._failure(
+                    state, phase, f"AgentGuard server unavailable: {result.decision.reason}"
+                )
             record = _decision_dict(
                 result.decision, phase=phase, mode=self.settings.mode
             )
@@ -242,8 +358,7 @@ class AgentGuardMiddleware(Middleware):
                 )
             return result.decision
         except Exception as exc:  # noqa: BLE001 -- fail-open/closed boundary
-            self._failure(state, phase, f"AgentGuard evaluation failed: {exc}")
-            return None
+            return self._failure(state, phase, f"AgentGuard evaluation failed: {exc}")
 
     def _enforced(self, decision: Any) -> bool:
         return (
@@ -252,64 +367,38 @@ class AgentGuardMiddleware(Middleware):
             and self.settings.mode == "block"
         )
 
-    def _local_tool_restriction(
-        self,
-        state: dict[str, Any],
-        name: str,
-        payload: dict[str, Any],
-        capabilities: list[str],
-    ) -> ToolDecision | None:
-        calls = int(state.get("_agentguard_tool_calls", 0)) + 1
-        state["_agentguard_tool_calls"] = calls
-        reason = ""
-        route = ""
-        if calls > self.settings.max_tool_calls:
-            reason = (
-                f"AgentGuard tool-call budget exceeded: {calls} > "
-                f"{self.settings.max_tool_calls}"
-            )
-            route = "local_budget"
-        elif isinstance(self.settings.sandbox_profile, dict):
-            from agentguard.sandbox import PermissionProfile, check_permissions
+    def _tool_budget_exceeded(self, state: dict[str, Any], name: str) -> ToolDecision | None:
+        """Upstream's tool-call budget (``HarnessRuntime._invoke_tool_inner``).
 
-            profile = PermissionProfile(**self.settings.sandbox_profile)
-            permission = check_permissions(profile, capabilities, payload)
-            if not permission.allowed:
-                reason = permission.reason
-                route = "local_sandbox"
-        if not reason:
+        Upstream returns a ``safe_error`` before any guard event, so this is not
+        a policy decision: it is recorded as a budget event, not a denial.
+        """
+        calls = int(state.get("_agentguard_tool_calls", 0))
+        if calls < self.settings.max_tool_calls:
+            state["_agentguard_tool_calls"] = calls + 1
             return None
-
+        reason = "tool call budget exceeded"
         record = {
-            "decision_type": "deny",
+            "event": "tool_call_budget_exceeded",
             "reason": reason,
             "phase": "tool_before",
             "mode": self.settings.mode,
-            "route": route,
-            "metadata": {"tool": name, "tool_call_count": calls},
+            "route": "local_budget",
+            "metadata": {
+                "tool": name,
+                "tool_call_count": calls,
+                "max_tool_calls": self.settings.max_tool_calls,
+            },
         }
         state[_LAST_KEY] = record
         state.setdefault(_EVENTS_KEY, []).append(record)
         if self.settings.mode != "block":
-            if self.settings.mode == "warn":
-                state["_agentguard_warning"] = f"AgentGuard warning (deny): {reason}"
             return ToolDecision()
         replacement = json.dumps(
-            {
-                "agentguard": "blocked",
-                "phase": "tool_before",
-                "decision": "deny",
-                "reason": reason,
-                "tool": name,
-            },
+            {"agentguard": "blocked", "tool": name, "reason": reason, "decision": "deny"},
             ensure_ascii=False,
         )
-        return ToolDecision(
-            False,
-            reason,
-            replacement_result=replacement,
-            decision_type="deny",
-        )
+        return ToolDecision(False, reason, replacement_result=replacement)
 
     def before_model(self, state: dict[str, Any]) -> list[str]:
         warning = state.pop("_agentguard_warning", "")
@@ -366,12 +455,22 @@ class AgentGuardMiddleware(Middleware):
                     False, state.get(_LAST_KEY, {}).get("reason", "AgentGuard failed")
                 )
             return ModelDecision(content=content, tool_call=tool_call)
-        decision = self._evaluate(
-            state,
-            session.events.llm_output(session.guard.context, content),
-            "llm_after",
-            after=True,
-        )
+        # GuardController checks parallel calls one by one; upstream emits one
+        # llm_output event per model response, so only the first call evaluates
+        # it and later calls reuse that decision.
+        if int(state.get("_model_output_index", 0) or 0) == 0:
+            payload, metadata = _llm_output_payload(
+                content, state.get("_model_output_calls") or []
+            )
+            decision = self._evaluate(
+                state,
+                session.events.llm_output(session.guard.context, payload, **metadata),
+                "llm_after",
+                after=True,
+            )
+            state[_OUTPUT_DECISION_KEY] = decision
+        else:
+            decision = state.get(_OUTPUT_DECISION_KEY)
         if not self._enforced(decision):
             return ModelDecision(content=content, tool_call=tool_call)
         dtype = decision.decision_type.value
@@ -436,26 +535,18 @@ class AgentGuardMiddleware(Middleware):
                 ),
                 reason=state.get(_LAST_KEY, {}).get("reason", "AgentGuard failed"),
             )
+        budget = self._tool_budget_exceeded(state, name)
+        if budget is not None:
+            return budget
         tool_cfg = next((tool for tool in self.cfg.tools if tool.name == name), None)
         capabilities = list(tool_cfg.capabilities) if tool_cfg else []
-        labels = dict(tool_cfg.labels) if tool_cfg else {}
         decision = self._evaluate(
             state,
             session.events.tool_invoke(
-                session.guard.context,
-                name,
-                payload,
-                capabilities=capabilities,
-                labels=labels,
+                session.guard.context, name, payload, capabilities=capabilities
             ),
             "tool_before",
         )
-        if not self._enforced(decision):
-            local_restriction = self._local_tool_restriction(
-                state, name, payload, capabilities
-            )
-            if local_restriction is not None:
-                return local_restriction
         if not self._enforced(decision):
             return ToolDecision()
         dtype = decision.decision_type.value
@@ -513,17 +604,18 @@ class AgentGuardMiddleware(Middleware):
                     False, state.get(_LAST_KEY, {}).get("reason", "AgentGuard failed")
                 )
             return ResultDecision(result=result)
-        decision = self._evaluate(
-            state,
+        # Upstream reports a failed tool as tool_result(None, error=...)
+        # (HarnessRuntime._execute).
+        event = (
             session.events.tool_result(
-                session.guard.context,
-                name,
-                result,
-                error=result if failed else None,
-            ),
-            "tool_after",
-            after=True,
+                session.guard.context, name, None, error=unwrap_hermes_result(result)
+            )
+            if failed
+            else session.events.tool_result(
+                session.guard.context, name, unwrap_hermes_result(result)
+            )
         )
+        decision = self._evaluate(state, event, "tool_after", after=True)
         if not self._enforced(decision):
             return ResultDecision(result=result)
         dtype = decision.decision_type.value

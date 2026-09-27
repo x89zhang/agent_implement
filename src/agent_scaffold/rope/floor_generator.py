@@ -1,4 +1,4 @@
-"""Generate a ROPE floor for suites without an audited upstream table.
+"""Generate ROPE's floor, upstream's hand-audited per-suite input, with an LLM.
 
 The model proposes markers for the redirectable sensitive arguments only, as in
 the audited ``scopes/_floor`` tables; tools it leaves out of the floor are
@@ -14,6 +14,7 @@ import json
 import re
 from typing import Any, Callable
 
+from ._upstream.fewshot import _POOL
 from ._upstream.markers import str_to_rule
 from ._upstream.scopes_io import load_floor, floor_to_dict
 
@@ -86,13 +87,16 @@ def _parse_json(raw: str) -> dict[str, Any]:
     return value
 
 
-def _examples() -> str:
-    return json.dumps({suite: floor_to_dict(load_floor(suite)) for suite in ("banking", "slack")},
-                      ensure_ascii=False)
+def _examples(exclude_suite: str = "") -> str:
+    """Audited floors of upstream's exemplar pool (fewshot._POOL), leaving out
+    the evaluated suite as upstream's router few-shot does. None of the pool
+    suites is run here, so every benchmark sees the same calibration."""
+    return json.dumps({suite: floor_to_dict(load_floor(suite)) for suite in _POOL
+                       if suite != exclude_suite}, ensure_ascii=False)
 
 
 def generate_floor(
-    tools: list[dict[str, Any]], complete: Callable[[str, str], str]
+    tools: list[dict[str, Any]], complete: Callable[[str, str], str], *, exclude_suite: str = ""
 ) -> dict[str, dict[str, str]]:
     """Return the generated marker floor {tool: {argument: marker}}.
 
@@ -119,7 +123,7 @@ def generate_floor(
         "or the user's own authoritative records; DEST = a filesystem write destination; EXPLICIT = "
         "the whole action is irreversible (delete, cancel, remove, reserve) and allowed only when "
         "the request explicitly authorizes it. Use only SOURCED, PROMPT, RECORD, DEST or EXPLICIT; "
-        "never invent arguments. Audited floors of other suites, for calibration: " + _examples()
+        "never invent arguments. Audited floors of other suites, for calibration: " + _examples(exclude_suite)
     )
     reply = _parse_json(complete(system, json.dumps({"tools": tools}, ensure_ascii=False)))
     rows = reply.get("tools")

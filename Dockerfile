@@ -44,6 +44,18 @@ RUN if [ "$INSTALL_PROGENT" = "true" ]; then \
       && pip install --no-cache-dir -r /tmp/requirements-progent.txt; \
     fi
 
+ARG INSTALL_DRIFT=false
+COPY requirements-drift.txt /tmp/requirements-drift.txt
+RUN if [ "$INSTALL_DRIFT" = "true" ]; then \
+      pip install --no-cache-dir -r /tmp/requirements-drift.txt; \
+    fi
+
+ARG INSTALL_AEGIS=false
+COPY requirements-aegis.txt /tmp/requirements-aegis.txt
+RUN if [ "$INSTALL_AEGIS" = "true" ]; then \
+      pip install --no-cache-dir -r /tmp/requirements-aegis.txt; \
+    fi
+
 ARG INSTALL_ROPE=false
 COPY requirements-rope.txt /tmp/requirements-rope.txt
 RUN if [ "$INSTALL_ROPE" = "true" ]; then \

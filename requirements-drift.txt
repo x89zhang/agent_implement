@@ -1,0 +1,2 @@
+# DRIFT upstream requirements.txt:43; DRIFTLLM.py repairs checklist JSON with it.
+json_repair==0.55.1

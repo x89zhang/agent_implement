@@ -18,10 +18,11 @@ class ProgentMiddleware(Middleware):
     def __init__(self, cfg: AppConfig) -> None:
         self.cfg = cfg
         self.settings = cfg.progent
-        # Upstream's ASB agent (asb/pyopenagi/agents/react_agent_attack.py:275-282,
-        # :138) registers tools without arguments, checks names only and never
-        # updates the policy.
-        self.asb = bool(getattr(cfg.agent_security_bench, "enabled", False))
+        # Every benchmark uses upstream's generic secagent mode. Upstream's ASB
+        # agent (asb/pyopenagi/agents/react_agent_attack.py:275-282, :138)
+        # registers tools without arguments, checks names only and never updates
+        # the policy; it is kept only as the explicit ``profile: asb`` option.
+        self.asb = str(getattr(self.settings, "profile", "general")) == "asb"
 
     def guard_model_input(
         self, state: dict[str, Any], messages: list[dict[str, Any]]
@@ -48,6 +49,7 @@ class ProgentMiddleware(Middleware):
                 reason=error,
                 tool=name,
                 source="error",
+                error=error,
             )
             state["_last_progent_decision"] = event
             return ToolDecision(allowed, "" if allowed else error)
@@ -56,7 +58,11 @@ class ProgentMiddleware(Middleware):
         result = runtime.check(name, {} if self.asb else payload)
         denied = not result.allowed
         # A denied call raises inside upstream's wrapper, so its update sees "".
-        state["_progent_pending_denied"] = denied
+        # Parallel calls may interleave before/after_tool, so the flag is keyed
+        # by the call itself (the hook carries no tool-call id).
+        state.setdefault("_progent_pending_denied", {}).setdefault(
+            _call_key(name, payload), []
+        ).append(denied)
         enforced = denied and self.settings.mode == "block"
         event = self._event(
             allowed=result.allowed,
@@ -86,7 +92,7 @@ class ProgentMiddleware(Middleware):
         result: str,
         failed: bool,
     ) -> ResultDecision:
-        denied = bool(state.pop("_progent_pending_denied", False))
+        denied = _pop_pending_denied(state, name, payload)
         if not self.settings.update_after_tool or self.asb:
             return ResultDecision(result=result)
         # Upstream updates once per tool batch after every call ran, with failed
@@ -112,15 +118,24 @@ class ProgentMiddleware(Middleware):
             only_allow_narrow=self.settings.only_allow_narrow,
         )
         # SECAGENT_IGNORE_UPDATE_ERROR=True (agentdojo/run.sh): a failed update
-        # keeps the previous policy and never withholds tool results.
+        # keeps the previous policy and never withholds tool results. An update
+        # never blocks a call, so it is recorded as allowed; errors that upstream
+        # would raise (decide_whether_to_update, tool.py:415-432, is not covered
+        # by ignore_update_error) become an error event, not a detection.
         state["_progent_policy"] = copy.deepcopy(update.policy)
+        values: dict[str, Any] = {
+            "status": "error" if update.error else ("updated" if update.allowed else "discarded"),
+            "source": "error" if update.error else "policy_update",
+        }
+        if update.error:
+            values["error"] = update.error
         event = self._event(
-            allowed=update.allowed,
+            allowed=True,
             enforced=False,
             phase="policy_update",
             reason=update.reason,
             tool=[item["call"]["name"] for item in batch],
-            source="policy_update",
+            **values,
         )
         state["_last_progent_decision"] = event
         state.setdefault("progent_events", []).append(event)
@@ -132,7 +147,7 @@ class ProgentMiddleware(Middleware):
             return str(state.get("_progent_init_error") or "")
         state["_progent_initialized"] = True
         started = time.time()
-        runtime = self._runtime(state, use_config_policy=True)
+        runtime = self._runtime(state, use_config_policy=True, generation=True)
         if not self.asb:
             self._register_always_allow(state, runtime)
         generated = RuntimeResult(True, policy=copy.deepcopy(runtime.policy))
@@ -146,7 +161,7 @@ class ProgentMiddleware(Middleware):
             "timestamp": started,
             "latency_ms": int((time.time() - started) * 1000),
             "input": {
-                "task": self._query(state),
+                "task": self._query(state, generation=True),
                 "tool_count": len(self._tool_definitions(state)),
             },
             "output": {
@@ -199,9 +214,14 @@ class ProgentMiddleware(Middleware):
         self, state: dict[str, Any], tools: list[dict[str, Any]]
     ) -> dict[str, Any]:
         names = [tool["name"] for tool in tools]
-        suite = self.cfg.agentdojo.suite if self.cfg.agentdojo.enabled else ""
-        upstream = always_allow.upstream_always_allow(suite)
-        if upstream is not None:
+        source = str(getattr(self.settings, "always_allow", "generate"))
+        no_arg = bool(getattr(self.settings, "allow_all_no_arg_tools", False))
+        if source == "upstream_agentdojo":
+            # Explicit non-default option: upstream's hand-written tables.
+            suite = self.cfg.agentdojo.suite if self.cfg.agentdojo.enabled else ""
+            upstream = always_allow.upstream_always_allow(suite) or {
+                "tools": [], "allow_all_no_arg_tools": False
+            }
             return {
                 "status": "upstream",
                 "suite": suite,
@@ -209,11 +229,11 @@ class ProgentMiddleware(Middleware):
                 "missing": [name for name in upstream["tools"] if name not in names],
                 "allow_all_no_arg_tools": upstream["allow_all_no_arg_tools"],
             }
-        if not self.settings.generate_always_allow:
-            return {"status": "disabled", "tools": [], "allow_all_no_arg_tools": False}
+        if source == "none" or not self.settings.generate_always_allow:
+            return {"status": "disabled", "tools": [], "allow_all_no_arg_tools": no_arg}
         cached = state.get("_progent_always_allow")
         if isinstance(cached, list):
-            return {"status": "run_cache", "tools": list(cached), "allow_all_no_arg_tools": False}
+            return {"status": "run_cache", "tools": list(cached), "allow_all_no_arg_tools": no_arg}
         inventory = always_allow.inventory(tools)
         llm_cfg = _policy_llm_config(self.cfg)
         identity = {"provider": llm_cfg.provider, "model": llm_cfg.model, "seed": 0}
@@ -222,7 +242,7 @@ class ProgentMiddleware(Middleware):
         hit = always_allow.load_cached(cache, key, inventory)
         if hit is not None:
             state["_progent_always_allow"] = hit
-            return {"status": "cache", "tools": hit, "allow_all_no_arg_tools": False,
+            return {"status": "cache", "tools": hit, "allow_all_no_arg_tools": no_arg,
                     "cache_path": str(cache), "context_mode": "benign_only"}
         llm = LLMAdapter(llm_cfg)
         usage: dict[str, int] = {}
@@ -238,17 +258,21 @@ class ProgentMiddleware(Middleware):
         except Exception as exc:
             # Without a list upstream registers no always-allowed tools.
             return {"status": "failed", "error": f"{type(exc).__name__}: {exc}",
-                    "tools": [], "allow_all_no_arg_tools": False, "usage": usage}
+                    "tools": [], "allow_all_no_arg_tools": no_arg, "usage": usage}
         always_allow.store_cached(cache, key, generated)
         state["_progent_always_allow"] = generated
         self._write_artifact(state, "progent_always_allow_raw.json", transcript)
-        return {"status": "llm", "tools": generated, "allow_all_no_arg_tools": False,
+        return {"status": "llm", "tools": generated, "allow_all_no_arg_tools": no_arg,
                 "context_mode": "benign_only", "attempts": len(transcript),
                 "llm": {"provider": llm_cfg.provider, "model": llm_cfg.model},
                 "usage": usage}
 
     def _runtime(
-        self, state: dict[str, Any], *, use_config_policy: bool = False
+        self,
+        state: dict[str, Any],
+        *,
+        use_config_policy: bool = False,
+        generation: bool = False,
     ) -> ProgentRuntime:
         policy = (
             _configured_policy(self.settings)
@@ -266,7 +290,7 @@ class ProgentMiddleware(Middleware):
             tools = [{**tool, "args": {}} for tool in tools]
         return ProgentRuntime(
             tools=tools,
-            query=self._query(state),
+            query=self._query(state, generation=generation),
             policy=policy,
             completion=complete,
             policy_model=llm_cfg.model,
@@ -277,10 +301,18 @@ class ProgentMiddleware(Middleware):
         tools = state.get("_progent_tools")
         return copy.deepcopy(tools) if isinstance(tools, list) else tool_definitions_from_config(self.cfg)
 
-    def _query(self, state: dict[str, Any]) -> str:
-        configured = state.get("_progent_user_request")
-        if configured:
-            return str(configured)
+    def _query(self, state: dict[str, Any], *, generation: bool = False) -> str:
+        """USER_QUERY: the prompt the agent received (upstream passes the task
+        prompt to ``generate_security_policy``, basic_elements.py:24).
+
+        Generation reads the clean task and the runtime prompts (updates and
+        denial messages) read the prompt actually delivered; the two are
+        identical except in ASB memory-poison phases.
+        """
+        key = "_generation_task" if generation else "_runtime_user_request"
+        for name in (key, "_progent_user_request"):
+            if state.get(name):
+                return str(state[name])
         for message in state.get("messages", []):
             if message.get("role") == "user" and message.get("content"):
                 return str(message["content"])
@@ -300,6 +332,7 @@ class ProgentMiddleware(Middleware):
             phase="model_input",
             reason=error,
             source="error",
+            error=error,
         )
         state["_last_progent_decision"] = event
         if self.settings.fail_closed:
@@ -367,6 +400,26 @@ class ProgentMiddleware(Middleware):
             encoding="utf-8",
         )
         temporary.replace(path)
+
+
+def _call_key(name: str, arguments: Any) -> str:
+    return json.dumps([name, arguments], sort_keys=True, default=str)
+
+
+def _pop_pending_denied(state: dict[str, Any], name: str, payload: Any) -> bool:
+    pending = state.get("_progent_pending_denied")
+    if not isinstance(pending, dict) or not pending:
+        return False
+    key = _call_key(name, payload)
+    if key not in pending and len(pending) == 1:
+        # Another guard rewrote this call's arguments between the hooks; with a
+        # single outstanding call the flag is unambiguous.
+        key = next(iter(pending))
+    queue = pending.get(key) or []
+    denied = bool(queue.pop(0)) if queue else False
+    if not queue:
+        pending.pop(key, None)
+    return denied
 
 
 def _configured_policy(settings: Any) -> dict[str, Any]:

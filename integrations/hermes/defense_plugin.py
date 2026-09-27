@@ -153,9 +153,10 @@ class DefensePlugin:
                 "model_output", content=message.content or "", tool_calls=calls
             )
             if after.get("retry"):
+                # Neutral header: the guard's own feedback says what to do
+                # next (e.g. DRIFT asks the agent to call other functions).
                 feedback = (
-                    "Safety middleware requested a final-response revision. Do not call tools unless "
-                    "the feedback explicitly concerns a proposed tool action.\n"
+                    "Safety middleware requested a revision of the previous response.\n"
                     + after.get("feedback", "")
                 )
                 if not self.agent.redirect(feedback):

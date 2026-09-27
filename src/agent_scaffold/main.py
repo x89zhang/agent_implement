@@ -582,7 +582,7 @@ def run_once(
                 "enabled": bool(cfg.pro2guard.enabled),
                 "status": "pending" if cfg.pro2guard.enabled else "disabled",
                 "mode": cfg.pro2guard.mode,
-                "unsafe_states": list(cfg.pro2guard.unsafe_states),
+                "model_dir": cfg.pro2guard.resolved_model_dir,
                 "policy_generator": pro2guard_generation.to_trace(),
             },
             "agentspec": {

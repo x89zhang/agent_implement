@@ -1,7 +1,9 @@
-"""AEGIS Gateway adapter for pre-execution checks and action traces.
+"""AEGIS adapter: Gateway L1 plus the paper's L2/L3 cascade.
 
 Classification, policies, DSL rules, and anomaly detection run in the original
-AEGIS Gateway. This module only translates the project's tool lifecycle.
+AEGIS Gateway (L1). When ``aegis.cascade`` is on, calls the Gateway allows go
+through the paper's L2 XGBoost classifier and, in its ambiguous band, the L3
+LLM judge (``aegis/cascade.py``, from ``research/cascade/pipeline.py``).
 """
 
 from __future__ import annotations
@@ -10,16 +12,24 @@ import hashlib
 import json
 import os
 import time
+import urllib.error
 import urllib.request
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
-from .config import AppConfig
+from .config import AppConfig, LLMConfig
+from .llm import LLMAdapter
 
 
 RISK_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
+# Upstream's research client retries 429 (aegis_rules_http.py:61-67); gateway
+# restarts and proxies also surface as these transient statuses.
+_TRANSIENT_HTTP = {429, 502, 503, 504}
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_L2_MODELS: dict[str, Any] = {}
 
 
 @dataclass
@@ -37,15 +47,26 @@ class AegisDecision:
     error: str = ""
     anomaly: dict[str, Any] | None = None
     dsl: dict[str, Any] | None = None
+    # Cascade verdict (L1 -> L2 -> L3) and the layer that produced it.
+    cascade_decision: str = ""
+    layer_fired: str = ""
+    l2_score: float | None = None
+    l2_thresholds: dict[str, float] | None = None
+    l3: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
 def _identity(cfg: AppConfig, state: dict[str, Any]) -> tuple[str, str]:
-    agent_id = cfg.aegis.agent_id or str(
-        uuid.uuid5(uuid.NAMESPACE_URL, f"agent-scaffold:{cfg.agent.name}")
-    )
+    # One Gateway agent per run: the Gateway's behavioral profile
+    # (check.ts:162-230) would otherwise carry state across runs and
+    # conditions. A fixed aegis.agent_id restores a shared profile.
+    agent_id = cfg.aegis.agent_id or state.get("_aegis_agent_id")
+    if not agent_id:
+        run_dir = str((state.get("_trace_persist") or {}).get("run_dir") or "")
+        seed = f"agent-scaffold:{cfg.agent.name}:{run_dir}" if run_dir else str(uuid.uuid4())
+        agent_id = state["_aegis_agent_id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, seed))
     uuid.UUID(agent_id)  # Required by the upstream action-trace schema.
     session_id = state.setdefault("_aegis_session_id", str(uuid.uuid4()))
     return agent_id, session_id
@@ -81,8 +102,19 @@ def _request(
         headers=_headers(cfg, agent_id, session_id),
         method=method,
     )
-    with urllib.request.urlopen(request, timeout=cfg.aegis.timeout_seconds) as response:
-        result = json.loads(response.read())
+    attempts = max(1, int(getattr(cfg.aegis, "max_retries", 5)))
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(request, timeout=cfg.aegis.timeout_seconds) as response:
+                result = json.loads(response.read())
+            break
+        except urllib.error.HTTPError as exc:
+            if exc.code not in _TRANSIENT_HTTP or attempt == attempts - 1:
+                raise
+        except (urllib.error.URLError, ConnectionError, TimeoutError):
+            if attempt == attempts - 1:
+                raise
+        time.sleep(0.1 * (2 ** attempt))
     if not isinstance(result, dict) or result.get("error"):
         raise ValueError(f"AEGIS Gateway returned an invalid response: {result!r}")
     return result
@@ -100,6 +132,78 @@ def _resolve_pending(cfg: AppConfig, state: dict[str, Any], check_id: str) -> di
             raise ValueError(f"AEGIS returned unknown approval decision: {result!r}")
         time.sleep(min(cfg.aegis.poll_interval_seconds, max(0, deadline - time.monotonic())))
     return {"decision": "block", "reason": "AEGIS approval timed out"}
+
+
+def _l2_model(cfg: AppConfig) -> Any:
+    from .aegis import cascade as aegis_cascade
+
+    path = Path(cfg.aegis.l2_model_path)
+    path = path if path.is_absolute() else _REPO_ROOT / path
+    key = str(path)
+    if key not in _L2_MODELS:
+        _L2_MODELS[key] = aegis_cascade.L2Model.load(path)
+    return _L2_MODELS[key]
+
+
+def _judge_llm_config(cfg: AppConfig) -> LLMConfig:
+    settings, base = cfg.aegis, cfg.llm
+    return LLMConfig(
+        provider=settings.judge_provider or base.provider,
+        model=settings.judge_model or base.model,
+        # llm_judge.py calls the judge with temperature=0.0.
+        temperature=0.0,
+        base_url=settings.judge_base_url or base.base_url,
+        api_key=(os.environ.get(settings.judge_api_key_env, "")
+                 if settings.judge_api_key_env else base.api_key),
+        api_key_env=settings.judge_api_key_env or base.api_key_env,
+        request_timeout=getattr(base, "request_timeout", 120),
+    )
+
+
+def _judge(cfg: AppConfig, state: dict[str, Any], name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """L3: research/baselines/llm_judge.py on the inherited model."""
+    from .aegis import cascade as aegis_cascade
+
+    llm_cfg = _judge_llm_config(cfg)
+    user_query = str(state.get("_runtime_user_request") or state.get("_aegis_user_request")
+                     or cfg.agent.task or "")
+    response = LLMAdapter(llm_cfg).chat([
+        {"role": "system", "content": aegis_cascade.SYSTEM_PROMPT},
+        {"role": "user", "content": aegis_cascade.build_prompt(
+            name, payload, cfg.aegis.framework, user_query)},
+    ])
+    content = response.content
+    if isinstance(content, list):
+        content = "\n".join(
+            block.get("text", "") for block in content
+            if isinstance(block, dict) and block.get("type") in {"text", "output_text"}
+        )
+    decision, risk, rationale, parse_error = aegis_cascade.parse_decision(str(content or ""))
+    return {
+        "decision": decision, "risk_score": risk, "rationale": rationale,
+        "parse_error": parse_error, "model": llm_cfg.model, "usage": response.usage,
+    }
+
+
+def _run_cascade(
+    cfg: AppConfig, state: dict[str, Any], name: str, payload: dict[str, Any],
+    gateway_decision: str,
+) -> dict[str, Any]:
+    """research/cascade/pipeline.py:CascadePipeline.predict after the Gateway."""
+    from .aegis import cascade as aegis_cascade
+
+    if gateway_decision in {"block", "pending"}:
+        return aegis_cascade.aggregate(gateway_decision, None, 1.0, 0.0)
+    model = _l2_model(cfg)
+    score = model.score(payload)
+    judge = (lambda: _judge(cfg, state, name, payload)) if cfg.aegis.use_l3 else None
+    result = aegis_cascade.aggregate(
+        gateway_decision, score, model.tau_high, model.tau_low,
+        judge=judge, disable_l2_block=cfg.aegis.disable_l2_block,
+    )
+    result["l2_score"] = score
+    result["l2_thresholds"] = {"tau_high": model.tau_high, "tau_low": model.tau_low}
+    return result
 
 
 def check_tool_call(cfg: AppConfig, state: dict[str, Any], name: str, payload: Any) -> AegisDecision:
@@ -140,9 +244,30 @@ def check_tool_call(cfg: AppConfig, state: dict[str, Any], name: str, payload: A
             raise ValueError(f"Unknown AEGIS risk_threshold: {threshold!r}")
         above_threshold = RISK_ORDER[risk] >= RISK_ORDER[threshold]
         allowed = mode != "block" or resolved == "allow" or not above_threshold
+        reason = str(final.get("reason") or result.get("reason") or "")
+        cascade: dict[str, Any] = {}
+        error = ""
+        if cfg.aegis.cascade:
+            try:
+                cascade = _run_cascade(cfg, state, name, payload, gateway_decision)
+            except Exception as exc:
+                error = f"AEGIS cascade failed: {type(exc).__name__}: {exc}"
+                cascade = {"decision": "error", "layer_fired": "error"}
+        layer = cascade.get("layer_fired", "L1")
+        if error:
+            resolved, reason = "error", error
+            allowed = mode != "block" or not cfg.aegis.fail_closed
+        elif layer in {"L2", "L3"}:
+            # L2/L3 verdicts are the research pipeline's; the SDK threshold
+            # only filters Gateway risk levels.
+            resolved = cascade["decision"]
+            allowed = mode != "block" or resolved == "allow"
+            l3 = cascade.get("l3") or {}
+            reason = (f"AEGIS L3 judge: {l3.get('rationale', '')}" if layer == "L3"
+                      else f"AEGIS L2 P(malicious)={cascade['l2_score']:.4f}")
         decision = AegisDecision(
             allowed=allowed,
-            reason=str(final.get("reason") or result.get("reason") or ""),
+            reason=reason,
             risk_level=risk,
             category=str(result.get("category") or "unknown"),
             signals=list(result.get("signals") or []),
@@ -151,8 +276,14 @@ def check_tool_call(cfg: AppConfig, state: dict[str, Any], name: str, payload: A
             decision=resolved,
             gateway_decision=gateway_decision,
             check_id=check_id,
+            error=error,
             anomaly=result.get("anomaly"),
             dsl=result.get("dsl"),
+            cascade_decision=str(cascade.get("decision") or gateway_decision),
+            layer_fired=layer,
+            l2_score=cascade.get("l2_score"),
+            l2_thresholds=cascade.get("l2_thresholds"),
+            l3=cascade.get("l3"),
         )
         state.setdefault("_aegis_pending_traces", []).append({
             "name": name, "arguments": payload, "decision": decision.to_dict(),
@@ -169,6 +300,8 @@ def check_tool_call(cfg: AppConfig, state: dict[str, Any], name: str, payload: A
             decision="error",
             gateway_decision="error",
             error=error,
+            cascade_decision="error",
+            layer_fired="error",
         )
 
 

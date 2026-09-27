@@ -1,3 +1,24 @@
+"""Learn per-task ProbGuard DTMCs from recorded Hermes lifecycles.
+
+Mirrors upstream ``safereach/build_model.py`` (state encoding, validity-aware
+Laplace smoothing, PRISM export) and ``embodied/build.py`` (one abstraction and
+one DTMC per task, each trace ending in the absorbing ``FINISH`` state).
+
+Input traces are ``guard_lifecycle.jsonl`` files written by Hermes runs under
+``jobs/``. Only the executed steps (``after_tool`` events: tool, arguments,
+result) are used. No benchmark outcome or attack label is read; unsafe states
+come from the generated specification. Traces must come from runs that are
+disjoint from the runs later evaluated with the model; ``trace_sources`` is
+stored in ``model.json`` and the runtime refuses a model trained on the run it
+is evaluating.
+
+Usage::
+
+    PYTHONPATH=src python -m agent_scaffold.pro2guard.build_model \\
+        --config agents/hermes/agentdojo-all-monitors.yaml \\
+        --output models/pro2guard/trained jobs/PROBGUARD_TRAINING_SPLIT
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -7,272 +28,247 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from .abstraction import ToolTraceAbstraction
+from .abstraction import FINISH, PredicateAbstraction, step_observation
+from .generator import (
+    ABSTRACTION_FILE,
+    INDEX_FILE,
+    MODEL_FILE,
+    PRISM_FILE,
+    generate_abstraction,
+    task_key,
+)
 
 
-ATTACK_SUCCESS_STATE = "ATTACK_SUCCESS"
-SAFE_TERMINAL_STATE = "SAFE_TERMINAL"
+def build_model(logs: list[list[Any]], abs: PredicateAbstraction, alpha: float = 1.0) -> dict[str, Any]:
+    """Upstream ``build_model``: encode observations, count, Laplace-smooth.
 
-
-def build_model_from_traces(
-    paths: list[str], *, alpha: float = 1.0, abstraction_policy_path: str = "",
-) -> dict[str, Any]:
-    """Apply upstream validity-aware Laplace counts to Hermes trace states."""
+    ``logs`` holds, per trace, the agent state after each step (a list of step
+    observations) followed by ``FINISH``.
+    """
     if alpha < 0:
         raise ValueError("alpha must be nonnegative")
-    abstraction = (ToolTraceAbstraction.from_policy_file(abstraction_policy_path)
-                   if abstraction_policy_path else ToolTraceAbstraction())
-    sequences: list[list[str]] = []
-    trace_paths = _resolve_trace_paths(paths)
-    if not trace_paths:
-        raise ValueError("No trace_agentdojo.json files matched the supplied inputs")
-    for trace_path in trace_paths:
-        sequence = _states_from_trace(trace_path, abstraction)
-        if sequence:
-            sequences.append(sequence)
+    state_transitions: list[list[str]] = []
+    state_space: list[str] = []
+    seen: set[str] = set()
+    for log in logs:
+        state_tran = []
+        for obs in log:
+            state = abs.encode(obs)
+            state_tran.append(state)
+            if state not in seen:
+                seen.add(state)
+                state_space.append(state)
+        state_transitions.append(state_tran)
+    state_space.sort()
+    K = len(state_space)
+    abs.state_idx = None
+    abs.state_interpretation = None
+    state_idx = abs.get_state_idx(state_space)
+    state_interpret = abs.get_state_interpretation(state_space)
+    counts = [[0] * K for _ in range(K)]
+    for state_tran in state_transitions:
+        for prev, state in zip(state_tran, state_tran[1:]):
+            counts[state_idx[prev]][state_idx[state]] += 1
 
-    states = sorted({state for sequence in sequences for state in sequence})
-    state_index = {state: idx for idx, state in enumerate(states)}
-    counts: dict[int, dict[int, int]] = defaultdict(lambda: defaultdict(int))
-    for sequence in sequences:
-        for left, right in zip(sequence, sequence[1:]):
-            counts[state_index[left]][state_index[right]] += 1
-
-    transition_probs = smooth_transition_counts(states, state_index, counts, alpha=alpha)
-
+    transition_probs: dict[int, dict[int, str]] = {}
+    for s_from in state_space:
+        i = state_idx[s_from]
+        # Validity-aware Laplace smoothing: alpha is added to the denominator
+        # only for valid successors (FINISH has none, so it stays absorbing).
+        denom = sum(
+            counts[i][state_idx[s_to]] + (alpha if abs.valid_trans(s_from, s_to) else 0)
+            for s_to in state_space
+        )
+        transition_probs[i] = {
+            state_idx[s_to]: _fraction(counts[i][state_idx[s_to]] + alpha, denom)
+            for s_to in state_space
+            if denom != 0 and abs.valid_trans(s_from, s_to)
+        }
+        if not transition_probs[i]:
+            transition_probs[i][i] = "1.0"
     return {
-        "states": states,
-        "alpha": alpha,
-        "state_index": state_index,
-        "transition_counts": {str(src): {str(dst): count for dst, count in row.items()} for src, row in counts.items()},
-        "transition_probs": transition_probs,
-        "terminal_states": {
-            "attack_success": ATTACK_SUCCESS_STATE,
-            "safe": SAFE_TERMINAL_STATE,
+        "states": state_space,
+        "state_index": state_idx,
+        "state_interpret": state_interpret,
+        "transition_counts": {
+            i: {j: counts[i][j] for j in range(K) if counts[i][j] > 0}
+            for i in range(K) if any(counts[i])
         },
-        "format": "agent_scaffold.pro2guard.json_dtmc.v1",
+        "transition_probs": transition_probs,
     }
 
 
+def _fraction(numerator: float, denominator: float) -> str:
+    if float(numerator).is_integer() and float(denominator).is_integer():
+        return f"{int(numerator)}/{int(denominator)}"
+    return f"{numerator}/{denominator}"
 
-def smooth_transition_counts(
-    states: list[str], state_index: dict[str, int],
-    counts: dict[int, dict[int, int]], *, alpha: float = 1.0,
-) -> dict[str, dict[str, str]]:
-    """Upstream-style Laplace probabilities with benchmark terminal semantics."""
-    if alpha < 0:
-        raise ValueError("alpha must be nonnegative")
-    transition_probs: dict[str, dict[str, str]] = {}
-    for state, src in state_index.items():
-        if state in {ATTACK_SUCCESS_STATE, SAFE_TERMINAL_STATE}:
-            # Domain-specific valid_trans: benchmark outcome states end a run.
-            transition_probs[str(src)] = {str(src): "1.0"}
+
+def export_dtmc_to_prism(model: dict[str, Any], file_path: str | Path, initial_state: int = 0) -> None:
+    """Upstream ``export_dtmc_to_prism`` (extra unobserved state K included)."""
+    K = len(model["states"])
+    lines = ["dtmc", "", "module dtmc_model", "", f"    s : [0..{K}] init {initial_state};", ""]
+    for i, row in model["transition_probs"].items():
+        transitions = [f"{prob} : (s'={j})" for j, prob in row.items()]
+        if transitions:
+            lines.append(f"    [] s={i} -> {' + '.join(transitions)};")
+    lines += [f"    [] s={K} -> 1.0: (s'={K});", "", "endmodule", ""]
+    Path(file_path).write_text("\n".join(lines), encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Hermes lifecycles.
+
+def read_lifecycle(path: str | Path) -> dict[str, Any]:
+    """Return the task, tool inventory and executed steps of one lifecycle."""
+    path = Path(path)
+    task, tools, steps = "", [], []
+    initialized = False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
             continue
-        row = counts.get(src, {})
-        # In upstream build_model, valid_trans contributes alpha to each
-        # allowed successor. Hermes states have no additional transition
-        # restrictions, so every observed state is an allowed successor.
-        denominator = sum(row.values()) + alpha * len(states)
-        if denominator == 0:
-            transition_probs[str(src)] = {str(src): "1.0"}
-        else:
-            transition_probs[str(src)] = {
-                str(dst): f"{row.get(dst, 0) + alpha}/{denominator}"
-                for dst in range(len(states)) if row.get(dst, 0) + alpha > 0
-            }
-    return transition_probs
+        event = json.loads(line)
+        op = event.get("op")
+        if op == "initialize":
+            initialized = True
+            # Generators and model keys use the clean task, as at runtime.
+            task = str(event.get("generation_task") or event.get("task") or "")
+            tools = list(event.get("tools") or [])
+        elif op == "after_tool":
+            steps.append(step_observation(
+                str(event.get("name", "")), event.get("arguments", {}),
+                event.get("result", ""), bool(event.get("failed", False)),
+            ))
+    if not initialized:
+        raise ValueError(f"lifecycle has no initialize event: {path}")
+    return {"task": task, "tools": tools, "steps": steps, "path": str(path.resolve())}
 
 
-def _resolve_trace_paths(inputs: list[str]) -> list[Path]:
-    resolved: dict[str, Path] = {}
+def trace_log(steps: list[dict[str, Any]]) -> list[Any]:
+    """Agent state after each step, then ``FINISH`` (embodied/build.py:17-18)."""
+    return [steps[: index + 1] for index in range(len(steps))] + [FINISH]
+
+
+def find_lifecycles(inputs: list[str], exclude: list[str] | None = None) -> list[Path]:
+    found: dict[str, Path] = {}
     for value in inputs:
         direct = Path(value)
-        matches = (
-            [direct]
-            if direct.exists()
-            else [Path(item) for item in glob.glob(value, recursive=True)]
-        )
+        matches = [direct] if direct.exists() else [Path(item) for item in glob.glob(value, recursive=True)]
         for match in matches:
-            candidates = (
-                match.rglob("trace_agentdojo.json") if match.is_dir() else [match]
-            )
+            candidates = match.rglob("guard_lifecycle.jsonl") if match.is_dir() else [match]
             for candidate in candidates:
                 if candidate.is_file():
-                    resolved[str(candidate.resolve())] = candidate
-    return [resolved[key] for key in sorted(resolved)]
+                    found[str(candidate.resolve())] = candidate.resolve()
+    excluded: set[str] = set()
+    for pattern in exclude or []:
+        for item in glob.glob(pattern, recursive=True):
+            path = Path(item)
+            targets = path.rglob("guard_lifecycle.jsonl") if path.is_dir() else [path]
+            excluded |= {str(target.resolve()) for target in targets}
+    return [found[key] for key in sorted(found) if key not in excluded]
 
 
-def _states_from_trace(path: Path, abstraction: ToolTraceAbstraction) -> list[str]:
-    # In replay mode trace_agentdojo.json concatenates one copy of the same
-    # Hermes trajectory for every monitor. Use the original tool journal so
-    # each tool call contributes exactly once to the learned DTMC.
-    lifecycle = path.parent / "target" / "guard_lifecycle.jsonl"
-    journal = path.parent / "target" / "tool_calls.jsonl"
-    evaluation = path.parent / "target" / "evaluation.json"
-    if path.name == "trace_agentdojo.json" and lifecycle.exists():
-        if not evaluation.exists():
-            raise ValueError(f"ProbGuard training run has no evaluation label: {path}")
-        sequence: list[str] = []
-        previous_outcome = "unknown"
-        pending: tuple[str, Any] | None = None
-        for line in lifecycle.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            event = json.loads(line)
-            if event.get("op") == "before_tool":
-                if pending is not None:
-                    raise ValueError(f"Unmatched ProbGuard tool call in {lifecycle}")
-                name = str(event.get("name", ""))
-                payload = event.get("arguments", {})
-                sequence.append(abstraction.encode_tool_call(
-                    {"_pro2guard_last_outcome": previous_outcome}, name, payload,
-                ))
-                pending = (name, payload)
-            elif event.get("op") == "after_tool":
-                if pending != (str(event.get("name", "")), event.get("arguments", {})):
-                    raise ValueError(f"Unmatched ProbGuard tool result in {lifecycle}")
-                previous_outcome = "failed" if event.get("failed") else "ok"
-                pending = None
-        if pending is not None:
-            raise ValueError(f"Unfinished ProbGuard tool call in {lifecycle}")
-        if sequence:
-            label = json.loads(evaluation.read_text(encoding="utf-8"))
-            _append_agentdojo_terminal(sequence, {"harness": {"agentdojo": label}})
-        return sequence
-    if path.name == "trace_agentdojo.json" and journal.exists():
-        if not evaluation.exists():
-            raise ValueError(f"ProbGuard training run has no evaluation label: {path}")
-        completed: dict[int, dict[str, Any]] = {}
-        for line in journal.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            event = json.loads(line)
-            if event.get("status") in {"completed", "failed"}:
-                completed[int(event["sequence"])] = event
-        if sorted(completed) != list(range(len(completed))):
-            raise ValueError(f"ProbGuard training tool journal is incomplete: {journal}")
-        sequence: list[str] = []
-        previous_outcome = "unknown"
-        for event in (completed[index] for index in sorted(completed)):
-            sequence.append(abstraction.encode_tool_call(
-                {"_pro2guard_last_outcome": previous_outcome},
-                str(event.get("tool", "")), event.get("arguments", {}),
-            ))
-            previous_outcome = "failed" if event["status"] == "failed" else "ok"
-        if sequence:
-            label = json.loads(evaluation.read_text(encoding="utf-8"))
-            _append_agentdojo_terminal(sequence, {"harness": {"agentdojo": label}})
-        return sequence
-
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    sequence: list[str] = []
-    previous_outcome = "unknown"
-
-    def append_tool(name: str, payload: Any, result: str, failed: bool,
-                    recorded_state: str = "") -> None:
-        nonlocal previous_outcome
-        if recorded_state:
-            sequence.append(recorded_state)
+def build_models(
+    cfg: Any,
+    inputs: list[str],
+    output: str | Path,
+    *,
+    alpha: float = 1.0,
+    granularity: str = "task",
+    exclude: list[str] | None = None,
+    regenerate: bool = False,
+    llm: Any | None = None,
+) -> dict[str, Any]:
+    """Group lifecycles by task key and write one model directory per group."""
+    output = Path(output)
+    output.mkdir(parents=True, exist_ok=True)
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for path in find_lifecycles(inputs, exclude):
+        record = read_lifecycle(path)
+        groups[task_key(record["task"], record["tools"], granularity)].append(record)
+    if not groups:
+        raise ValueError("No guard_lifecycle.jsonl files matched the supplied inputs")
+    index_path = output / INDEX_FILE
+    index = json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists() else {}
+    index.setdefault("models", {})
+    summary: dict[str, Any] = {}
+    for key, records in sorted(groups.items()):
+        model_dir = output / key
+        model_dir.mkdir(exist_ok=True)
+        abstraction_path = model_dir / ABSTRACTION_FILE
+        first = records[0]
+        task = first["task"] if granularity == "task" else ""
+        # Generation sees every tool any run of this task could call.
+        tools = sorted(
+            {str(tool.get("name", "")): tool for record in records for tool in record["tools"]}.values(),
+            key=lambda tool: str(tool.get("name", "")),
+        )
+        if abstraction_path.exists() and not regenerate:
+            # Keep the predicates fixed when more traces are added later.
+            stored = json.loads(abstraction_path.read_text(encoding="utf-8"))
+            abstraction = PredicateAbstraction.from_dict(stored)
+            generation = stored.get("generation") or {}
         else:
-            # The runtime queries before_tool, before the current result exists.
-            sequence.append(abstraction.encode_tool_call(
-                {"_pro2guard_last_outcome": previous_outcome}, name, payload,
-            ))
-        previous_outcome = "failed" if failed else "ok"
-
-    for entry in raw.get("trace", []) if isinstance(raw, dict) else []:
-        if not isinstance(entry, dict):
-            continue
-        if entry.get("step") == "tool":
-            tool_input = entry.get("input") or {}
-            output = entry.get("output") or ""
-            # Hermes lifecycle events store the tool name at the top level and
-            # arguments directly in input. Older scaffold traces nest both.
-            name = str(entry.get("tool") or tool_input.get("tool", ""))
-            payload = (tool_input.get("args", {}) if "tool" in tool_input
-                       else tool_input)
-            result = str(output.get("result", "") if isinstance(output, dict)
-                         else output)
-            failed = (entry.get("status") == "failed" or bool(entry.get("is_error"))
-                      or result.startswith("Tool execution failed:")
-                      or result.startswith("Tool not found:"))
-            append_tool(name, payload, result, failed)
-        elif entry.get("step") == "langchain_react":
-            for step in (entry.get("output") or {}).get("intermediate_steps", []) or []:
-                if not isinstance(step, dict):
-                    continue
-                name = str(step.get("tool", ""))
-                payload = step.get("tool_input", {})
-                result = str(step.get("observation", ""))
-                failed = (bool(step.get("blocked"))
-                          or result.startswith("Tool execution failed:")
-                          or result.startswith("Tool not found:"))
-                recorded_state = str((step.get("pro2guard") or {}).get("state") or "")
-                append_tool(name, payload, result, failed, recorded_state)
-    if sequence:
-        _append_agentdojo_terminal(sequence, raw)
-        return sequence
-
-    for message in raw.get("messages", []) if isinstance(raw, dict) else []:
-        extra = message.get("extra") if isinstance(message, dict) else None
-        if not isinstance(extra, dict) or "tool" not in extra:
-            continue
-        append_tool(str(extra.get("tool", "")),
-                    extra.get("args", extra.get("tool_input", {})),
-                    str(extra.get("raw_output", "")), bool(extra.get("returncode")))
-    _append_agentdojo_terminal(sequence, raw)
-    return sequence
-
-
-def _append_agentdojo_terminal(sequence: list[str], raw: dict[str, Any]) -> None:
-    attack_success = _agentdojo_attack_success(raw)
-    if attack_success is True:
-        sequence.append(ATTACK_SUCCESS_STATE)
-    elif attack_success is False:
-        sequence.append(SAFE_TERMINAL_STATE)
-
-
-def _agentdojo_attack_success(raw: dict[str, Any]) -> bool | None:
-    for entry in raw.get("trace", []) if isinstance(raw, dict) else []:
-        if not isinstance(entry, dict) or entry.get("step") != "agentdojo_eval":
-            continue
-        output = entry.get("output")
-        if isinstance(output, dict) and "attack_success" in output:
-            return bool(output.get("attack_success"))
-    final = str((raw.get("info") or {}).get("final", "") or raw.get("final", ""))
-    if "attack_success=True" in final:
-        return True
-    if "attack_success=False" in final:
-        return False
-    harness_eval = (raw.get("harness") or {}).get("agentdojo") if isinstance(raw, dict) else None
-    if isinstance(harness_eval, dict) and "attack_success" in harness_eval:
-        return bool(harness_eval.get("attack_success"))
-    return None
+            abstraction, generation = generate_abstraction(cfg, task, tools, llm=llm)
+            abstraction_path.write_text(json.dumps({
+                "version": 2,
+                "task_key": key,
+                "granularity": granularity,
+                "task": task,
+                "tools": [str(tool.get("name", "")) for tool in tools],
+                **abstraction.to_dict(),
+                "generation": generation,
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
+        logs = [trace_log(record["steps"]) for record in records]
+        model = build_model(logs, abstraction, alpha)
+        unsafe = sorted(model["state_index"][s] for s in abstraction.unsafe_states(model["states"]))
+        model.update({
+            "format": "agent_scaffold.pro2guard.probguard.v2",
+            "task_key": key,
+            "granularity": granularity,
+            "alpha": alpha,
+            "unsafe_state_indices": unsafe,
+            "trace_count": len(records),
+            "trace_sources": sorted(record["path"] for record in records),
+        })
+        (model_dir / MODEL_FILE).write_text(json.dumps(model, ensure_ascii=False, indent=2), encoding="utf-8")
+        export_dtmc_to_prism(model, model_dir / PRISM_FILE)
+        index["models"][key] = {
+            "dir": key,
+            "task_preview": task[:200],
+            "trace_count": len(records),
+            "state_count": len(model["states"]),
+            "unsafe_state_count": len(unsafe),
+        }
+        summary[key] = index["models"][key]
+    index_path.write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
+    return summary
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build a Pro2Guard JSON DTMC from scaffold trace files.")
-    parser.add_argument(
-        "traces",
-        nargs="+",
-        help="Trace JSON files, glob patterns, or directories searched recursively.",
-    )
-    parser.add_argument("--output", required=True, help="Output JSON DTMC path.")
-    parser.add_argument("--alpha", type=float, default=1.0, help="Upstream Laplace smoothing strength.")
-    parser.add_argument(
-        "--abstraction-policy", default="",
-        help="Fixed JSON tool profiles also used by the runtime abstraction.",
-    )
+    parser = argparse.ArgumentParser(description="Learn per-task ProbGuard DTMCs from Hermes guard lifecycles.")
+    parser.add_argument("traces", nargs="+", help="guard_lifecycle.jsonl files, globs, or directories searched recursively.")
+    parser.add_argument("--config", required=True, help="Agent YAML whose llm / pro2guard.generator settings generate the spec.")
+    parser.add_argument("--output", required=True, help="Model directory (pro2guard.model_dir).")
+    parser.add_argument("--alpha", type=float, default=1.0, help="Laplace smoothing strength (upstream 1.0).")
+    parser.add_argument("--granularity", choices=["task", "tools"], default=None,
+                        help="One model per task (upstream, default) or per tool inventory.")
+    parser.add_argument("--exclude", action="append", default=[],
+                        help="Glob of runs to leave out, e.g. the evaluation split.")
+    parser.add_argument("--regenerate", action="store_true", help="Regenerate existing abstractions.")
     args = parser.parse_args()
 
-    model = build_model_from_traces(
-        args.traces, alpha=args.alpha,
-        abstraction_policy_path=args.abstraction_policy,
+    from ..config import load_config
+
+    cfg = load_config(args.config)
+    summary = build_models(
+        cfg, args.traces, args.output, alpha=args.alpha,
+        granularity=args.granularity or cfg.pro2guard.granularity,
+        exclude=args.exclude, regenerate=args.regenerate,
     )
-    output = Path(args.output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(model, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Wrote {len(model['states'])} states to {output}")
+    for key, entry in summary.items():
+        print(f"{key}: {entry['trace_count']} traces, {entry['state_count']} states, "
+              f"{entry['unsafe_state_count']} unsafe states")
 
 
 if __name__ == "__main__":

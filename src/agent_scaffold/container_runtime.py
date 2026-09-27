@@ -153,6 +153,10 @@ def _effective_build_args(cfg: Any) -> dict[str, str]:
         build_args["INSTALL_SAFEAGENT"] = "true"
     if getattr(getattr(cfg, "agrail", None), "enabled", False):
         build_args["INSTALL_AGRAIL"] = "true"
+    if getattr(getattr(cfg, "drift", None), "enabled", False):
+        build_args["INSTALL_DRIFT"] = "true"
+    if getattr(getattr(cfg, "aegis", None), "enabled", False):
+        build_args["INSTALL_AEGIS"] = "true"
     if _clawsentry_managed(cfg):
         build_args["INSTALL_CLAWSENTRY"] = "true"
     return build_args
@@ -362,7 +366,7 @@ def run_once_in_container(
     resume_messages: list[dict[str, str]] | None,
     workspace_root: Path,
     run_dir: Path,
-    extra_mounts: list[tuple[str, str]] | None = None,
+    extra_mounts: list[tuple[str, ...]] | None = None,
     image_ready: bool = False,
     run_as_host_user: bool = False,
 ) -> dict[str, Any]:
@@ -424,8 +428,10 @@ def run_once_in_container(
     if network:
         cmd.extend(["--network", network])
     cmd.extend(["-v", f"{workspace_root}:{container_workdir}", "-w", container_workdir])
-    for host, target in extra_mounts or []:
-        cmd.extend(["--mount", f"type=bind,src={host},dst={target},readonly"])
+    for host, target, *mode in extra_mounts or []:
+        # Inputs are read-only; ("host", "target", "rw") marks writable state.
+        suffix = "" if mode == ["rw"] else ",readonly"
+        cmd.extend(["--mount", f"type=bind,src={host},dst={target}{suffix}"])
     cmd.extend(["-e", "PYTHONPATH=src", "-e", "AGENT_CONTAINERIZED=1"])
     cmd.extend(["-e", f"AGENT_JOB_DIR={run_dir_in_container}"])
     cmd.extend(["-e", f"AGENT_RESULT_PATH={run_dir_in_container}/_container_result.json"])
@@ -486,6 +492,11 @@ def run_once_in_container(
     )
     if clawsentry_api_key_env and clawsentry_api_key_env not in env_names:
         env_names.append(clawsentry_api_key_env)
+    if getattr(getattr(cfg, "clawsentry", None), "enabled", False):
+        # ClawSentry's L2/L3 LLM tiers read their provider settings from CS_LLM_*.
+        for env_name in sorted(os.environ):
+            if env_name.startswith("CS_LLM_") and env_name not in env_names:
+                env_names.append(env_name)
     janus_api_key_env = str(
         getattr(getattr(cfg, "janus", None), "api_key_env", "") or ""
     )
@@ -507,9 +518,9 @@ def run_once_in_container(
     if safeagent_generator_key_env and safeagent_generator_key_env not in env_names:
         env_names.append(safeagent_generator_key_env)
     if getattr(getattr(cfg, "adr", None), "enabled", False):
-        for name in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
-            if name not in env_names:
-                env_names.append(name)
+        for env_name in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
+            if env_name not in env_names:
+                env_names.append(env_name)
     scenario_api_key_env = str(
         getattr(cfg.agentguard.scenario_compiler, "api_key_env", "") or ""
     )

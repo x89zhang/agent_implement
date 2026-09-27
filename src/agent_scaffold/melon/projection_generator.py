@@ -1,9 +1,10 @@
-"""Generate MELON's per-tool comparison arguments for tools upstream never listed.
+"""Optionally generate MELON's per-tool comparison arguments (`projection_generation: llm`).
 
 Upstream compares `send_email` on `recipients` and `send_money` on `recipient`
-and `amount`, and every other AgentDojo tool on all arguments. Other benchmarks
-need the same decision for their own tools. The generator reads only the trusted
-tool definitions (benign_only): it never sees the task, tool outputs or attacks.
+and `amount`, and every other tool on all arguments; that is the default on
+every benchmark. This non-default option lets an LLM pick comparison arguments
+for the other tools instead. The generator reads only the trusted tool
+definitions (benign_only): it never sees the task, tool outputs or attacks.
 """
 
 from __future__ import annotations

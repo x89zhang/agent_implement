@@ -161,6 +161,10 @@ class GuardController:
         ]
         self.task = payload.get("task", self.task)
         generation_task = payload.get("generation_task", self.task)
+        # Generators must see the clean task; runtime checks judge the prompt
+        # the agent actually received. They differ only in memory-poison phases.
+        self.state["_generation_task"] = generation_task
+        self.state["_runtime_user_request"] = self.task
         self.state["_progent_tools"] = copy.deepcopy(payload["tools"])
         self.state["_progent_user_request"] = generation_task
         self.state["_drift_tools"] = copy.deepcopy(payload["tools"])
@@ -184,27 +188,64 @@ class GuardController:
         self.state["_toolsafe_user_request"] = self.task
         self.state["_toolsafe_tools"] = copy.deepcopy(payload["tools"])
         self.state["_agentspec_user_request"] = self.task
-        airguard_generation = compile_airguard_authority(
-            self.cfg, generation_task, self.directory
-        )
-        if airguard_generation.enabled:
-            self.state["trace"].append({
-                "step": "airguard_authority_generate",
-                "output": airguard_generation.to_trace(),
-            })
-        for compiler in (
-            compile_pro2guard_policy,
-            compile_agentspec_rules,
-            compile_agentguard_scenario,
-            compile_safeagent_rules,
-        ):
-            result = compiler(
+        # Pro2Guard keys its per-task model on the model-visible schemas.
+        self.cfg.pro2guard.tool_inventory = copy.deepcopy(payload["tools"])
+        def generator(compiler):
+            return lambda: compiler(
                 self.cfg, generation_task, self.directory, user_input=""
             )
-            if result.enabled:
-                self.state["trace"].append(
-                    {"step": compiler.__name__, "output": result.to_trace()}
+
+        compilers = [
+            (
+                "airguard",
+                "airguard_authority_generate",
+                lambda: compile_airguard_authority(
+                    self.cfg, generation_task, self.directory
+                ),
+            ),
+            *(
+                (name, compiler.__name__, generator(compiler))
+                for name, compiler in (
+                    ("pro2guard", compile_pro2guard_policy),
+                    ("agentspec", compile_agentspec_rules),
+                    ("safeagent", compile_safeagent_rules),
                 )
+            ),
+            (
+                "agentguard",
+                compile_agentguard_scenario.__name__,
+                # The catalog needs inputSchema names for tool.<param> rules.
+                lambda: compile_agentguard_scenario(
+                    self.cfg, generation_task, self.directory, user_input="",
+                    tools=copy.deepcopy(payload["tools"]),
+                ),
+            ),
+        ]
+        for name, step, compiler in compilers:
+            try:
+                result = compiler()
+            except Exception as exc:
+                # One compiler failure disables only its own guard; the run is
+                # reported as errored for that guard and its peers continue.
+                error = f"{type(exc).__name__}: {exc}"
+                if not getattr(self.cfg, name).enabled:
+                    self.state["trace"].append(
+                        {"step": step, "output": {"status": "failed", "error": error}}
+                    )
+                    continue
+                getattr(self.cfg, name).enabled = False
+                self.state["harness"].setdefault("guard_errors", {})[name] = error
+                self.state[f"_last_{name}_decision"] = {
+                    "phase": "initialize",
+                    "source": "error",
+                    "error": error,
+                }
+                self.state["trace"].append(
+                    {"step": step, "output": {"status": "failed", "error": error}}
+                )
+                continue
+            if result.enabled:
+                self.state["trace"].append({"step": step, "output": result.to_trace()})
         self.manager = build_middleware_manager(self.cfg)
         return {"enabled": [name for name in GUARDS if getattr(self.cfg, name).enabled]}
 
@@ -236,6 +277,9 @@ class GuardController:
                 "output": result,
                 "decisions": current_decisions,
             }
+            snapshots = self.state.pop("_decision_snapshots", None)
+            if snapshots:
+                entry["decisions_per_call"] = snapshots
             with (self.directory / "defense_events.jsonl").open("a") as stream:
                 stream.write(
                     json.dumps(redact_config_snapshot(entry), default=str) + "\n"
@@ -253,7 +297,9 @@ class GuardController:
         state, manager = self.state, self.manager
         if op == "model_input":
             messages = copy.deepcopy(payload["messages"])
-            state["messages"] = messages
+            # Guard warnings are added only to the outgoing copy, so guards that
+            # rebuild the agent context from state never see other guards' text.
+            state["messages"] = copy.deepcopy(messages)
             state["trace_messages"] = copy.deepcopy(messages)
             state["iterations"] += 1
             chunks = manager.before_model(state)
@@ -267,10 +313,21 @@ class GuardController:
             calls = payload.get("tool_calls") or []
             accepted = []
             decision = None
-            # The project contract is one candidate action per check. Check all parallel calls.
-            for call in calls or [None]:
+            # The project contract is one candidate action per check. Check all
+            # parallel calls; guards that judge a whole turn read the turn below.
+            state["_model_output_content"] = content
+            state["_model_output_calls"] = copy.deepcopy(calls)
+            snapshots = state.setdefault("_decision_snapshots", [])
+            for index, call in enumerate(calls or [None]):
+                state["_model_output_index"] = index
                 candidate = (call["name"], call["arguments"]) if call else None
                 decision = manager.guard_model_output(state, content, candidate)
+                # A later call must not hide an earlier call's decision.
+                snapshots.append(
+                    copy.deepcopy(
+                        {k: v for k, v in state.items() if k.startswith("_last_")}
+                    )
+                )
                 content = decision.content if decision.content is not None else content
                 if decision.retry or decision.terminate or not decision.allowed:
                     break

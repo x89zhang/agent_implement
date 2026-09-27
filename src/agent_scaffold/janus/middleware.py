@@ -1,15 +1,22 @@
-"""JANUS/Vanguard anticipation and adjudication at action boundaries."""
+"""JANUS/Vanguard anticipation and adjudication before each assistant step.
+
+Upstream's Vanguard runtime (``eval_framework_offline/.../vllm_guard.py``)
+judges a trajectory prefix ending in the step under review. Here the prefix is
+the full conversation the agent sent to the model plus the proposed assistant
+step with all of its tool calls, judged once; the verdict applies to every
+call of the turn.
+"""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import time
 from typing import Any
 
 from ..config import AppConfig
-from ..middleware import Middleware, ModelDecision, ToolDecision
+from ..middleware import Middleware, ModelDecision
+from ..tool_results import unwrap_hermes_result
 from .client import VanguardClient
 
 
@@ -18,16 +25,23 @@ class JanusMiddleware(Middleware):
         self.settings = cfg.janus
         api_key = self.settings.api_key or os.environ.get(self.settings.api_key_env, "")
         self.client = client or VanguardClient(self.settings, api_key=api_key)
-        self.task = cfg.agent.task
 
     def guard_model_output(
         self, state: dict[str, Any], content: str, tool_call: Any
     ) -> ModelDecision:
-        candidate = _candidate(content, tool_call)
-        event = self._check(state, candidate, "model_output")
-        if tool_call is not None and not event["blocked"]:
-            key = _action_key(tool_call[0], tool_call[1])
-            state.setdefault("_janus_checked_actions", {})[key] = event
+        index = int(state.get("_model_output_index", 0) or 0)
+        if index == 0 or "_janus_turn_event" not in state:
+            calls = state.get("_model_output_calls")
+            if calls is None:
+                # Native project graph: one candidate per model output.
+                calls = [] if tool_call is None else [
+                    {"id": "", "name": tool_call[0], "arguments": tool_call[1]}
+                ]
+            content = str(state.get("_model_output_content", content) or "")
+            state["_janus_turn_event"] = self._check(state, trajectory(state, content, calls), len(calls))
+        # One judgment per assistant step, recorded for each of its calls.
+        event = dict(state["_janus_turn_event"], call_index=index)
+        state["_last_janus_decision"] = event
         if event["blocked"]:
             return ModelDecision(
                 allowed=False,
@@ -39,46 +53,29 @@ class JanusMiddleware(Middleware):
             )
         return ModelDecision(content=content, tool_call=tool_call)
 
-    def before_tool(
-        self, state: dict[str, Any], name: str, payload: dict[str, Any]
-    ) -> ToolDecision:
-        cached = state.setdefault("_janus_checked_actions", {}).pop(
-            _action_key(name, payload), None
-        )
-        event = cached or self._check(
-            state, {"role": "assistant", "tool_calls": [{"name": name, "arguments": payload}]},
-            "before_tool",
-        )
-        state["_last_janus_decision"] = event
-        return ToolDecision(
-            allowed=not event["blocked"],
-            reason=event["reason"] if event["blocked"] else "",
-            decision_type="janus" if event["blocked"] else "",
-        )
-
     def before_model(self, state: dict[str, Any]) -> list[str]:
         warning = state.pop("_janus_warning", "")
         return [f"JANUS safety warning: {warning}"] if warning else []
 
-    def _check(
-        self, state: dict[str, Any], candidate: dict[str, Any], phase: str
-    ) -> dict[str, Any]:
+    def _check(self, state: dict[str, Any], history: list[dict[str, Any]], call_count: int) -> dict[str, Any]:
         started = time.monotonic()
         try:
-            observed = _observed(state, candidate, self.settings.max_history_steps)
-            instruction = str(state.get("_janus_user_request") or self.task)
-            verdict = self.client.judge(instruction, observed)
+            verdict = self.client.judge(history)
             label = verdict.label
+            if verdict.parse_error:
+                raise ValueError(verdict.parse_error)
             if label not in {"safe", "potential_unsafe", "unsafe"}:
                 raise ValueError(f"Invalid JANUS label: {label}")
+            # Upstream lenient mode blocks unsafe only; strict also blocks
+            # potential_unsafe (cli.py --mode).
             flagged = label == "unsafe" or (
                 self.settings.strict and label == "potential_unsafe"
             )
-            blocked = flagged and self.settings.mode == "block"
             reason = f"JANUS classified candidate as {label}" if flagged else ""
             event = {
-                "phase": phase, "label": label, "flagged": flagged,
-                "blocked": blocked, "reason": reason, "error": "",
+                "phase": "model_output", "label": label, "flagged": flagged,
+                "blocked": flagged and self.settings.mode == "block",
+                "reason": reason, "error": "",
                 "predicted_future": verdict.predicted_future,
                 "reasoning": verdict.reasoning,
                 "usage": verdict.usage,
@@ -88,18 +85,21 @@ class JanusMiddleware(Middleware):
             for key, value in verdict.usage.items():
                 stats[key] = int(stats.get(key, 0)) + int(value)
         except Exception as exc:
+            # Upstream fails open (request_error / parse_error verdicts are
+            # not flagged); fail_closed is an explicit project option.
             reason = f"JANUS guard failed: {type(exc).__name__}: {exc}"
             event = {
-                "phase": phase, "label": None, "flagged": False,
+                "phase": "model_output", "label": None, "flagged": False,
                 "blocked": self.settings.fail_closed,
                 "reason": reason, "error": reason,
                 "predicted_future": "", "reasoning": "", "usage": {},
             }
         event.update({
+            "step_index": history[-1]["index"] if history else None,
+            "call_count": call_count,
             "mode": self.settings.mode,
             "latency_ms": round((time.monotonic() - started) * 1000),
         })
-        state["_last_janus_decision"] = event
         state.setdefault("janus_events", []).append(event)
         state.setdefault("trace", []).append({
             "step": "janus_judgment", "timestamp": time.time(), "output": event,
@@ -114,30 +114,66 @@ class JanusMiddleware(Middleware):
         return event
 
 
-def _candidate(content: str, tool_call: Any) -> dict[str, Any]:
-    item: dict[str, Any] = {"role": "assistant", "content": content}
-    if tool_call is not None:
-        item["tool_calls"] = [{"name": tool_call[0], "arguments": tool_call[1]}]
-    return item
+def _content(value: Any) -> str:
+    # agentdojo loader: non-string content is JSON-encoded.
+    if value is None:
+        return ""
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
 
 
-def _action_key(name: str, payload: Any) -> str:
-    encoded = json.dumps([name, payload], sort_keys=True, ensure_ascii=False, default=str)
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+def _arguments(value: Any) -> dict[str, Any]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value) if value.strip() else {}
+        except ValueError:
+            return {"_raw": value}
+    return dict(value) if isinstance(value, dict) else {}
 
 
-def _observed(
-    state: dict[str, Any], candidate: dict[str, Any], limit: int
-) -> list[dict[str, Any]]:
+def _tool_calls(calls: list[Any]) -> list[dict[str, Any]] | None:
+    normalized = []
+    for call in calls or []:
+        if not isinstance(call, dict):
+            continue
+        function = call.get("function") if isinstance(call.get("function"), dict) else call
+        normalized.append({
+            "name": str(function.get("name", "")),
+            "arguments": _arguments(function.get("arguments")),
+            "call_id": call.get("id"),
+        })
+    return normalized or None
+
+
+def trajectory(state: dict[str, Any], content: str, calls: list[Any]) -> list[dict[str, Any]]:
+    """Upstream ``Step`` sequence (agentdojo loader ``_parse_messages``) for the
+    conversation so far plus the proposed assistant step."""
     source = state.get("trace_messages") or state.get("messages") or []
-    observed = [
-        {key: message[key] for key in ("role", "content", "tool_calls", "extra") if key in message}
-        for message in source
-        if isinstance(message, dict)
-    ]
-    first_user = next((item for item in observed if item.get("role") == "user"
-                       and str(item.get("content") or "").strip()), None)
-    recent = observed[-max(1, limit - 1):]
-    if first_user is not None and first_user not in recent:
-        recent = [first_user, *recent]
-    return recent + [candidate]
+    steps: list[dict[str, Any]] = []
+    names: dict[str, str] = {}
+    # Absolute message positions, as the loader's enumerate(raw_messages).
+    for index, message in enumerate(source):
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+        if role == "assistant":
+            tool_calls = _tool_calls(message.get("tool_calls") or [])
+            for call in tool_calls or []:
+                if call["call_id"]:
+                    names[str(call["call_id"])] = call["name"]
+            steps.append({"index": index, "role": "assistant",
+                          "content": _content(message.get("content")), "tool_calls": tool_calls})
+        elif role == "tool":
+            call_id = message.get("tool_call_id")
+            steps.append({
+                "index": index, "role": "tool",
+                "content": unwrap_hermes_result(_content(message.get("content"))),
+                "tool_name": message.get("name") or names.get(str(call_id or "")),
+                "tool_call_id": call_id,
+            })
+        elif role in ("system", "user"):
+            steps.append({"index": index, "role": role, "content": _content(message.get("content"))})
+    steps.append({
+        "index": len(source), "role": "assistant", "content": content,
+        "tool_calls": _tool_calls(calls),
+    })
+    return steps

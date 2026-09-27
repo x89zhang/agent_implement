@@ -392,4 +392,7 @@ def output_revision_limit(cfg: AppConfig) -> int:
         limits.append(cfg.safeagent.max_replans)
     if cfg.drift.enabled and cfg.drift.dynamic_validation and cfg.drift.mode == "block":
         limits.append(cfg.drift.max_revisions)
+    if cfg.stepguard.enabled and cfg.stepguard.mode == "block":
+        # StepGuard counts its own replans and then allows the turn.
+        limits.append(cfg.stepguard.max_replans)
     return max(limits)

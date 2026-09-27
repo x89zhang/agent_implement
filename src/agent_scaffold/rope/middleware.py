@@ -8,6 +8,7 @@ from typing import Any
 from ..config import AppConfig, LLMConfig
 from ..llm import LLMAdapter
 from ..middleware import Middleware, ModelDecision, ResultDecision, ToolDecision
+from ..tool_results import unwrap_hermes_result
 from ._upstream import markers, origin, scopes_io
 from ._upstream.clamp import _more_permissive
 from ._upstream.enforce import Enforcer
@@ -18,23 +19,7 @@ from ._upstream.router import route_and_scope
 from .floor_generator import _parse_json, generate_floor, inventory_from_config
 
 
-def _unwrap_hermes_result(result: str) -> str:
-    """Return the bare tool text inside Hermes' MCP envelope.
-
-    Hermes renders an MCP result as ``{"result": text}``, optionally with
-    ``structuredContent``/``_meta`` (tools/mcp_tool_handlers.py). Upstream's
-    tracker expects the bare tool text (origin.py ``_absorb``).
-    """
-    try:
-        value = json.loads(result)
-    except (TypeError, ValueError):
-        return result
-    if not isinstance(value, dict) or "result" not in value or set(value) - {"result", "structuredContent", "_meta"}:
-        return result
-    inner = value["result"]
-    if isinstance(inner, str):
-        return inner
-    return json.dumps(inner, ensure_ascii=False)
+_unwrap_hermes_result = unwrap_hermes_result
 
 
 class _SharedLLMCache(LLMCache):
@@ -81,9 +66,8 @@ class RopeMiddleware(Middleware):
         try:
             floor = scopes_io.floor_from_dict(state.get("_rope_floor") or {})
             if name not in floor:
-                if name in state.get("_rope_blocked_tools", []):
-                    return self._record(state, name, False, "ROPE floor generation failed for this tool", "floor")
-                # Upstream default-allows every tool outside the floor (pipeline.py).
+                # Upstream default-allows every tool outside the floor (pipeline.py:84).
+                # A tool whose generated rule failed validation is outside it too.
                 return self._record(state, name, True, "tool is outside the ROPE floor", "floor")
             scope_data = state.get("_rope_scope")
             if not scope_data:
@@ -94,13 +78,8 @@ class RopeMiddleware(Middleware):
                 floor, scope, origin_map=origins,
                 prompt_ids=origin.tokenize_identifiers(self._query(state)),
             )
-            # The upstream enforcer only checks arguments that are present. A missing
-            # sensitive parameter must not evade its floor rule.
-            required = (state.get("_rope_required_arguments") or {}).get(name)
-            protected = set(floor[name]) if required is None else set(floor[name]) & set(required)
-            missing = sorted(protected - set(payload))
-            if missing:
-                raise ValueError(f"missing sensitive parameter(s): {', '.join(missing)}")
+            # As upstream (enforce.py), only arguments present in the call are
+            # checked; a call missing one is left to fail in the tool itself.
             enforcer = Enforcer()
             enforcer.set_user_query(self._query(state))
             enforcer.update_security_policy(policy)
@@ -167,7 +146,7 @@ class RopeMiddleware(Middleware):
             scope = self._scope(query, floor)
             if scope is not None:
                 self._validate_scope(scope, floor)
-                scope = self._clamp_generated_scope(scope, state, query)
+                # Upstream clamps only with --clamp (run_eval.py:57 clamp=False).
                 if self.settings.clamp:
                     scope = self._clamp(scope, floor)
             state["_rope_scope"] = markers.scope_to_dict(scope) if scope else None
@@ -207,31 +186,25 @@ class RopeMiddleware(Middleware):
     def _prepare_floor(self, state: dict[str, Any]) -> dict:
         inventory = inventory_from_config(self.cfg, state)
         state["_rope_known_tools"] = [tool["name"] for tool in inventory]
-        state["_rope_required_arguments"] = {
-            tool["name"]: tool["required_arguments"] for tool in inventory
-        }
         floor: dict = {}
         source = "none"
         if self.settings.floor_path:
             path = self._path(self.settings.floor_path)
             floor = scopes_io.floor_from_dict(json.loads(path.read_text(encoding="utf-8")))
             source = "configured"
-        elif self._suite():
-            try:
-                floor = scopes_io.load_floor(self._suite())
-                source = "audited"
-            except FileNotFoundError:
-                if self.settings.floor_generation != "llm":
-                    raise
-        elif self.settings.floor_generation != "llm":
-            raise ValueError("set rope.suite or rope.floor_path")
+        elif self.settings.floor_generation == "audited":
+            # Non-default: upstream's hand-audited table for rope.suite.
+            if not self._suite():
+                raise ValueError("floor_generation: audited requires rope.suite")
+            floor = scopes_io.load_floor(self._suite())
+            source = "audited"
         generated: dict[str, dict[str, str]] = {}
-        blocked: list[str] = []
+        ungenerated: list[str] = []
         generation_errors: dict[str, str] = {}
         batch_error = ""
-        # An audited or configured floor is used as-is, with every other tool
-        # default-allowed (upstream pipeline.py). Only suites without one get
-        # an LLM-generated floor, from the trusted tool definitions alone.
+        # Upstream's floor is a hand-audited input; by default an LLM writes it
+        # for every benchmark from the trusted tool definitions alone. Every
+        # tool outside the floor is default-allowed (upstream pipeline.py:84).
         if source == "none":
             names = [tool["name"] for tool in inventory]
             if not names:
@@ -247,23 +220,23 @@ class RopeMiddleware(Middleware):
                 return raw_response
 
             try:
-                generated = generate_floor(inventory, recorded)
+                generated = generate_floor(inventory, recorded, exclude_suite=self._suite())
             except (ValueError, TypeError) as exc:
                 batch_error = str(exc)
-                generated, blocked, generation_errors = self._isolate_floor_errors(
+                generated, ungenerated, generation_errors = self._isolate_floor_errors(
                     inventory, raw_response, batch_error
                 )
             floor = scopes_io.floor_from_dict(generated)
             source = "llm"
         state["_rope_floor"] = scopes_io.floor_to_dict(floor)
         state["_rope_floor_source"] = source
-        state["_rope_blocked_tools"] = blocked
+        state["_rope_ungenerated_tools"] = ungenerated
         state["_rope_generated_tools"] = sorted(generated)
         state["_rope_floor_errors"] = generation_errors
         state.setdefault("trace", []).append({
             "step": "rope_floor_generate", "output": {
                 "source": source, "floor": state["_rope_floor"],
-                "blocked_tools": blocked,
+                "ungenerated_tools": ungenerated,
                 "batch_error": batch_error, "generation_errors": generation_errors,
             },
         })
@@ -277,33 +250,37 @@ class RopeMiddleware(Middleware):
     def _isolate_floor_errors(
         self, tools: list[dict[str, Any]], raw_response: str, batch_error: str
     ) -> tuple[dict[str, dict[str, str]], list[str], dict[str, str]]:
-        """Keep valid tool rules from one LLM response; fail closed only bad tools."""
-        try:
-            rows = _parse_json(raw_response).get("tools")
-        except (ValueError, TypeError):
-            rows = None
+        """Keep valid tool rules from one LLM response.
+
+        A tool whose rule is missing or invalid stays outside the floor and so
+        is default-allowed, like every non-floor tool upstream; the error is
+        recorded and the run marked degraded. A reply with no usable rule at
+        all fails initialization like a malformed upstream router reply.
+        """
+        rows = _parse_json(raw_response).get("tools")
         if not isinstance(rows, list):
-            names = [tool["name"] for tool in tools]
-            return {}, names, {name: batch_error for name in names}
+            raise ValueError(f"ROPE floor generation failed: {batch_error}")
         generated: dict[str, dict[str, str]] = {}
-        blocked: list[str] = []
+        ungenerated: list[str] = []
         errors: dict[str, str] = {}
         for tool in tools:
             name = tool["name"]
             matches = [row for row in rows if isinstance(row, dict) and row.get("name") == name]
             if len(matches) != 1:
-                blocked.append(name)
+                ungenerated.append(name)
                 errors[name] = f"expected one generated rule for {name!r}, found {len(matches)}"
                 continue
             one_reply = json.dumps({"tools": matches}, ensure_ascii=False)
             try:
                 rules = generate_floor([tool], lambda _system, _user: one_reply)
             except (ValueError, TypeError) as exc:
-                blocked.append(name)
+                ungenerated.append(name)
                 errors[name] = str(exc)
                 continue
             generated.update(rules)
-        return generated, blocked, errors
+        if len(ungenerated) == len(tools):
+            raise ValueError(f"ROPE floor generation failed for every tool: {batch_error}")
+        return generated, ungenerated, errors
 
     def _scope(self, query: str, floor: dict) -> TaskScope | None:
         if self.settings.router == "static":
@@ -369,18 +346,6 @@ class RopeMiddleware(Middleware):
             for arg, rule in args.items():
                 if not _more_permissive(markers.marker_to_str(rule), markers.marker_to_str(floor[tool][arg])):
                     kept.setdefault(tool, {})[arg] = rule
-        return TaskScope(scope.bucket, scope.named_source, kept)
-
-    def _clamp_generated_scope(self, scope: TaskScope, state: dict[str, Any], query: str) -> TaskScope:
-        """A router override must not loosen a generated floor rule, even unclamped."""
-        defaults = state.get("_rope_floor") or {}
-        generated = set(state.get("_rope_generated_tools") or [])
-        kept: dict = {}
-        for tool, args in scope.overrides.items():
-            for arg, rule in args.items():
-                if tool in generated and _more_permissive(markers.marker_to_str(rule), defaults[tool][arg]):
-                    continue
-                kept.setdefault(tool, {})[arg] = rule
         return TaskScope(scope.bucket, scope.named_source, kept)
 
     def _query(self, state: dict[str, Any]) -> str:

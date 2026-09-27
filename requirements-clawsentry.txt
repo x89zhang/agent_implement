@@ -1,1 +1,1 @@
-clawsentry==0.8.7
+clawsentry[llm]==0.8.7

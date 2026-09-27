@@ -429,6 +429,9 @@ cp "${config}" "${campaign_dir}/source-asb.yaml"
 printf '%s\n' "${keep_defenses}" > "${campaign_dir}/keep_defenses.txt"
 printf '%s\n' "${run_clean_control}" > "${campaign_dir}/run_clean_control.txt"
 printf '%s\n' "${runs_per_case}" > "${campaign_dir}/runs_per_case.txt"
+# One AGrail memory per campaign (upstream: a new memory file per dataset run);
+# a resumed campaign keeps its file. Path and hashes: campaign_manifest.json.
+agrail_memory="$(python3 "${repo_root}/scripts/hermes_campaign.py" memory "${campaign_dir}")"
 case_count="$(( $(wc -l < "${manifest}") - 1 ))"
 echo "Config: ${config}"
 echo "Cases: ${case_count}"
@@ -457,15 +460,17 @@ while IFS=$'\t' read -r case_id agent_name task_index attacker_tool attack_type 
   "${python_bin}" - \
     "${config}" "${case_config}" "${agent_name}" \
     "${task_index}" "${attacker_tool}" "${attack_type}" \
-    "${keep_defenses}" "${run_clean_control}" <<'PY'
+    "${keep_defenses}" "${run_clean_control}" "${agrail_memory}" "${repo_root}/scripts" <<'PY'
 import pathlib
 import sys
 import yaml
 
 (
     source, destination, agent_name, task_index, attacker_tool,
-    attack_type, keep_defenses, run_clean_control,
+    attack_type, keep_defenses, run_clean_control, agrail_memory, scripts_dir,
 ) = sys.argv[1:]
+sys.path.insert(0, scripts_dir)
+from hermes_monitor_rules import METHODS
 raw = yaml.safe_load(pathlib.Path(source).read_text(encoding="utf-8"))
 asb = raw.setdefault("agent_security_bench", {})
 if str(asb.get("implementation") or "") != "official_bridge":
@@ -492,11 +497,11 @@ memory.update({
 })
 memory.pop("poisoning_input_file", None)
 if keep_defenses != "1":
-    for name in (
-        "aegis", "progent", "pro2guard", "agentspec", "llamafirewall",
-        "toolsafe", "agentdog", "agentguard", "agentsight",
-    ):
+    # The baseline disables every guard, not only a subset.
+    for name in (*METHODS, "agentsight"):
         raw.setdefault(name, {})["enabled"] = False
+if (raw.get("agrail") or {}).get("enabled"):
+    raw["agrail"]["memory_path"] = agrail_memory
 pathlib.Path(destination).write_text(
     yaml.safe_dump(raw, sort_keys=False, allow_unicode=True), encoding="utf-8"
 )

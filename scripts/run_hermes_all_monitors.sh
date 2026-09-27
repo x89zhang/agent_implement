@@ -38,14 +38,31 @@ root="jobs/agentdojo_${case_id}/Hermes/gpt"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 batch="${stamp}_hermes-agentdojo_batch"
 
-PYTHONPATH=src python src/agent_scaffold/main.py \
-  --config agents/hermes/agentdojo-all-monitors.yaml \
-  --runs "${runs}" \
-  --runs-dir "${root}/all_monitors/skill_injection/${batch}"
+on_dir="${root}/all_monitors/skill_injection/${batch}"
+off_dir="${root}/all_monitors/no_injection/${batch}"
+mkdir -p "${on_dir}" "${off_dir}"
+# Kept beside the source YAMLs so relative paths resolve the same way.
+on_config="$(mktemp agents/hermes/.agentdojo-all-monitors.XXXXXX.yaml)"
+off_config="$(mktemp agents/hermes/.agentdojo-all-monitors-no-injection.XXXXXX.yaml)"
+cleanup() { rm -f "${on_config}" "${off_config}"; }
+trap cleanup EXIT
+# Each condition starts from a fresh AGrail memory under its batch directory;
+# its path and hashes are recorded in campaign_manifest.json.
+python3 scripts/hermes_campaign.py configure --keep-guards \
+  agents/hermes/agentdojo-all-monitors.yaml "${on_config}" "${on_dir}"
+python3 scripts/hermes_campaign.py configure --keep-guards \
+  agents/hermes/agentdojo-all-monitors-no-injection.yaml "${off_config}" "${off_dir}"
 
 PYTHONPATH=src python src/agent_scaffold/main.py \
-  --config agents/hermes/agentdojo-all-monitors-no-injection.yaml \
+  --config "${on_config}" \
   --runs "${runs}" \
-  --runs-dir "${root}/all_monitors/no_injection/${batch}"
+  --runs-dir "${on_dir}"
+python3 scripts/hermes_campaign.py finalize "${on_dir}"
+
+PYTHONPATH=src python src/agent_scaffold/main.py \
+  --config "${off_config}" \
+  --runs "${runs}" \
+  --runs-dir "${off_dir}"
+python3 scripts/hermes_campaign.py finalize "${off_dir}"
 
 python3 scripts/analyze_hermes_agentdojo_monitors.py --root "${root}" --batch "${batch}"

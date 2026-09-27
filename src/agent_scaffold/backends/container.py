@@ -50,6 +50,8 @@ def ensure_hermes_image(cfg, workspace):
         ("agentspec", "INSTALL_AGENTSPEC"),
         ("progent", "INSTALL_PROGENT"),
         ("rope", "INSTALL_ROPE"),
+        ("drift", "INSTALL_DRIFT"),
+        ("aegis", "INSTALL_AEGIS"),
         ("airguard", "INSTALL_AIRGUARD"),
         ("adr", "INSTALL_ADR"),
     ):
@@ -136,13 +138,39 @@ def ensure_hermes_image(cfg, workspace):
     return image
 
 
+# Persistent cross-run state files (they may not exist yet). They must resolve
+# against the config directory on the host, not the per-job container YAML.
+STATE_PATH_KEYS = frozenset({"memory_path", "router_cache_path"})
+
+
 def prepare_container_config(cfg, cfg_path, workspace, run_dir):
-    """Resolve host paths before moving YAML; external inputs get read-only mounts."""
+    """Resolve host paths before moving YAML; external inputs get read-only mounts.
+
+    Returns the container YAML and a list of ``(host, target)`` read-only
+    mounts; writable state directories are ``(host, target, "rw")``.
+    """
     raw = load_config_mapping(cfg_path)
     raw.pop("harness", None)
     mounts = {}
+    state_mounts = {}
     workdir = cfg.container.workdir.rstrip("/") or "/workspace"
     config_dir = Path(cfg.config_dir)
+    workspace_root = Path(workspace).resolve()
+
+    def remap_state(value):
+        host = Path(value).expanduser()
+        if not host.is_absolute():
+            host = config_dir / host
+        host = host.resolve()
+        # The guard creates the file; only its directory must exist.
+        host.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            return str(Path(workdir) / host.relative_to(workspace_root))
+        except ValueError:
+            parent = str(host.parent)
+            if parent not in state_mounts:
+                state_mounts[parent] = f"/opt/project-state/{len(state_mounts)}"
+            return f"{state_mounts[parent]}/{host.name}"
 
     def remap(value, key=""):
         if isinstance(value, dict):
@@ -151,6 +179,8 @@ def prepare_container_config(cfg, cfg_path, workspace, run_dir):
             return [remap(v, key) for v in value]
         if not isinstance(value, str) or not value:
             return value
+        if key in STATE_PATH_KEYS:
+            return remap_state(value)
         candidate = Path(value).expanduser()
         is_path = key.endswith(("_path", "_dir", "_file")) or key in {
             "path",
@@ -185,9 +215,9 @@ def prepare_container_config(cfg, cfg_path, workspace, run_dir):
         raw["adr"]["python_executable"] = ""
     if isinstance(raw.get("airguard"), dict) and raw["airguard"].get("enabled"):
         raw["airguard"]["source_root"] = ""
-    raw["execution"]["hermes"].update(
-        repo_path="/opt/hermes-agent", python_executable="/opt/hermes-venv/bin/python"
-    )
+    # These are image paths too; clear them so the remapper never mounts a
+    # host path that happens to exist at the same location.
+    raw["execution"]["hermes"].update(repo_path="", python_executable="")
     raw.setdefault("skills", {})["enabled"] = [
         {
             "name": skill.name,
@@ -211,7 +241,10 @@ def prepare_container_config(cfg, cfg_path, workspace, run_dir):
     path = run_dir / "hermes.container.yaml"
     path.write_text(yaml.safe_dump(raw, sort_keys=False))
     path.chmod(0o600)
-    return path, [(host, target) for host, target in mounts.items()]
+    return path, [
+        *((host, target) for host, target in mounts.items()),
+        *((host, target, "rw") for host, target in state_mounts.items()),
+    ]
 
 
 def run_hermes_in_container(

@@ -10,50 +10,69 @@ from typing import Any
 class Pro2GuardResult:
     probability: float | None
     state: str
-    matched_state: str
     threshold: float
     allowed: bool
     reason: str
     mode: str
     source: str
+    state_index: int | None = None
+    bound: int = -1
+    step: int = 0
+    model: str = ""
+    error: str = ""
+    skipped: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "probability": self.probability,
             "state": self.state,
-            "matched_state": self.matched_state,
+            "state_index": self.state_index,
             "threshold": self.threshold,
+            "bound": self.bound,
             "allowed": self.allowed,
             "reason": self.reason,
             "mode": self.mode,
             "source": self.source,
+            "step": self.step,
+            "model": self.model,
+            "error": self.error,
+            "skipped": self.skipped,
         }
 
 
 class JsonDTMC:
+    """Learned DTMC in upstream ``build_model`` ``model.json`` form."""
+
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         raw = json.loads(self.path.read_text(encoding="utf-8"))
         self.state_index = {str(k): int(v) for k, v in (raw.get("state_index") or {}).items()}
-        self.state_aliases = {str(k): str(v) for k, v in (raw.get("state_aliases") or {}).items()}
-        self.transitions = _load_transitions(raw.get("transition_probs") or raw.get("transitions") or {})
+        self.transitions = _load_transitions(raw.get("transition_probs") or {})
 
-    def probability_to_unsafe(self, state: str, unsafe_states: list[str], horizon: int = 20) -> tuple[float, str]:
-        """Unbounded reachability, matching upstream's PRISM ``F unsafe`` query.
+    def probability_to_unsafe(self, start: int, unsafe_ids: set[int], bound: int = -1) -> float:
+        """``P=? [ F unsafe ]``, or ``F<=bound`` when ``bound > 0``.
 
-        ``horizon`` remains accepted for old callers but does not truncate the
-        property: upstream ProbGuard does not impose a step horizon.
+        Unbounded reachability is the upstream default (``monitor_dtmc.py``
+        ``build_pctl``); PRISM computes the same hitting probability.
         """
-        matched_state = self._match_state(state)
-        unsafe_ids = {self._state_id(item) for item in unsafe_states or []}
-        unsafe_ids.discard(None)
-        start = self._state_id(matched_state)
-        if start is None:
-            raise ValueError(f"ProbGuard state is absent from the learned DTMC: {matched_state}")
+        unsafe_ids = set(unsafe_ids)
         if not unsafe_ids:
-            return 0.0, matched_state
+            return 0.0
         if start in unsafe_ids:
-            return 1.0, matched_state
+            return 1.0
+        if bound > 0:
+            values = {node: (1.0 if node in unsafe_ids else 0.0) for node in self.transitions}
+            for node in unsafe_ids:
+                values[node] = 1.0
+            for _ in range(bound):
+                values = {
+                    node: 1.0 if node in unsafe_ids else sum(
+                        probability * values.get(dst, 0.0)
+                        for dst, probability in (self.transitions.get(node) or {}).items()
+                    )
+                    for node in values
+                }
+            return min(1.0, max(0.0, values.get(start, 0.0)))
 
         # States with no positive-probability path to an unsafe state have
         # reachability zero. Removing them also makes the remaining linear
@@ -71,7 +90,7 @@ class JsonDTMC:
                     reachable.add(src)
                     queue.append(src)
         if start not in reachable:
-            return 0.0, matched_state
+            return 0.0
         unknown = sorted(reachable - unsafe_ids)
         positions = {node: index for index, node in enumerate(unknown)}
         matrix = [[0.0] * (len(unknown) + 1) for _ in unknown]
@@ -105,20 +124,7 @@ class JsonDTMC:
                 matrix[row][column] * solved[column]
                 for column in range(row + 1, size)
             )
-        return min(1.0, max(0.0, solved[positions[start]])), matched_state
-
-    def _match_state(self, state: str) -> str:
-        if state in self.state_index:
-            return state
-        return self.state_aliases.get(state, state)
-
-    def _state_id(self, state: str) -> int | None:
-        if state in self.state_index:
-            return self.state_index[state]
-        try:
-            return int(state)
-        except (TypeError, ValueError):
-            return None
+        return min(1.0, max(0.0, solved[positions[start]]))
 
 
 def _load_transitions(raw: dict[str, Any]) -> dict[int, dict[int, float]]:

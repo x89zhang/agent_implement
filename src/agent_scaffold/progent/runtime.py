@@ -18,6 +18,8 @@ class RuntimeResult:
     reason: str = ""
     policy: dict[str, Any] | None = None
     usage: dict[str, int] = field(default_factory=dict)
+    # Set when the upstream call raised (as opposed to a policy decision).
+    error: str = ""
 
 
 class ProgentRuntime:
@@ -128,12 +130,16 @@ class ProgentRuntime:
                 self.policy = candidate
             return RuntimeResult(True, policy=copy.deepcopy(self.policy), usage=dict(self.usage))
         except Exception as exc:
+            # With ignore_update_error only decide_whether_to_update can still
+            # raise here (secagent/tool.py:415-432); upstream would crash.
             self.policy = previous
+            message = f"Progent policy update failed: {type(exc).__name__}: {exc}"
             return RuntimeResult(
                 False,
-                f"Progent policy update failed: {type(exc).__name__}: {exc}",
+                message,
                 policy=copy.deepcopy(previous),
                 usage=dict(self.usage),
+                error=message,
             )
 
     def _module(self) -> Any:

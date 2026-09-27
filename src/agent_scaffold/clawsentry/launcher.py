@@ -14,6 +14,12 @@ import time
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from .upstream import CLAWSENTRY_PYTHON, VENV_ENTRY
+
+# Upstream `clawsentry gateway`, started through venv_entry.py for the one
+# GPT-5 request-parameter adaptation documented there.
+GATEWAY_COMMAND = [CLAWSENTRY_PYTHON, str(VENV_ENTRY), "gateway"]
+
 
 def _free_loopback_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
@@ -37,11 +43,40 @@ def _gateway_environment(source: dict[str, str], key_env: str) -> dict[str, str]
     env["CS_HTTP_PORT"] = str(port)
     env["AGENT_CONTAINERIZED"] = "1"
     env["AGENT_CLAWSENTRY_URL"] = f"http://127.0.0.1:{port}"
+    # Upstream's benchmark environment (cli/benchmark_command.py:62-74): with
+    # the operator bridge on, a pre_action DEFER waits up to 24 h for a human
+    # (detection_config.py:139-141). Without it the DEFER is returned at once
+    # and recorded; approval-type outcomes are not auto-resolved.
+    env["CS_DEFER_BRIDGE_ENABLED"] = "false"
     # Keep local gateway requests off any configured corporate HTTP proxy.
     for name in ("NO_PROXY", "no_proxy"):
         entries = [part.strip() for part in env.get(name, "").split(",") if part.strip()]
         env[name] = ",".join(dict.fromkeys([*entries, "127.0.0.1", "localhost"]))
     return env
+
+
+def _config_path(command: list[str]) -> str:
+    for index, part in enumerate(command):
+        if part == "--config" and index + 1 < len(command):
+            return command[index + 1]
+        if part.startswith("--config="):
+            return part.split("=", 1)[1]
+    return ""
+
+
+def _llm_environment(command: list[str], source: dict[str, str]) -> dict[str, str]:
+    """Gateway-only CS_LLM_* settings derived from the agent's run config."""
+    path = _config_path(command)
+    if not path:
+        return {}
+    from ..config import load_config
+    from .upstream import gateway_llm_environment
+
+    try:
+        cfg = load_config(path)
+    except Exception as exc:
+        raise RuntimeError(f"could not load run config for the gateway LLM: {exc}") from exc
+    return gateway_llm_environment(cfg, source)
 
 
 def _wait_ready(gateway: subprocess.Popen, url: str, token: str, stop: threading.Event, timeout: float = 30.0) -> None:
@@ -81,6 +116,8 @@ def run(command: list[str], *, key_env: str = "CS_AUTH_TOKEN") -> int:
     if not command:
         raise ValueError("Missing agent command")
     env = _gateway_environment(dict(os.environ), key_env)
+    # The provider key reaches only the gateway, not the agent process.
+    gateway_env = {**env, **_llm_environment(command, env)}
     stop = threading.Event()
     previous = {}
 
@@ -93,8 +130,7 @@ def run(command: list[str], *, key_env: str = "CS_AUTH_TOKEN") -> int:
     agent = None
     try:
         gateway = subprocess.Popen(
-            ["/opt/clawsentry-venv/bin/clawsentry", "gateway"],
-            env=env, start_new_session=True,
+            GATEWAY_COMMAND, env=gateway_env, start_new_session=True,
         )
         _wait_ready(gateway, env["AGENT_CLAWSENTRY_URL"], env["CS_AUTH_TOKEN"], stop)
         agent = subprocess.Popen(command, env=env, start_new_session=True)

@@ -3,6 +3,8 @@
 !src/agent_scaffold/rope/_upstream/scopes/
 !src/agent_scaffold/rope/_upstream/scopes/**/
 !src/agent_scaffold/rope/_upstream/scopes/**/*.json
+# Vendored AgentGuard runtime data files (upstream rule-generator prompt, plugin config).
+!src/agent_scaffold/agentguard/_vendor/config/plugins.json
 *.pyc
 .env
 .env.*
@@ -27,6 +29,7 @@ __pycache__/
 !requirements-safeagent.txt
 !requirements-adr.txt
 !requirements-agrail.txt
+!requirements-drift.txt
 !agents/hermes/asb-poisoning.txt
 *.md
 [Rr][Ee][Aa][Dd][Mm][Ee]*
@@ -34,6 +37,7 @@ __pycache__/
 !agents/*/systemprompt.md
 !agents/*/memory.md
 !skills/*/SKILL.md
+!src/agent_scaffold/agentguard/_vendor/shared/rules/llm_dsl_generator/DSLgeneration.md
 docs/
 paper/*
 legacy/*

@@ -230,6 +230,9 @@ fi
 printf '%s\n' "${case_ids[@]}" > "${campaign_dir}/case_ids.txt"
 printf '%s\n' "${runs_per_case}" > "${campaign_dir}/runs_per_case.txt"
 cp "${config}" "${campaign_dir}/source-agentharm.yaml"
+# One AGrail memory per campaign (upstream: a new memory file per dataset run);
+# a resumed campaign keeps its file. Path and hashes: campaign_manifest.json.
+agrail_memory="$(python3 "${repo_root}/scripts/hermes_campaign.py" memory "${campaign_dir}")"
 
 if [[ "${OPENAI_API_KEY:-}" == "dummy" || -z "${OPENAI_API_KEY:-}" ]]; then
   echo "WARNING: OPENAI_API_KEY is unset or dummy." >&2
@@ -243,14 +246,16 @@ echo "Output: ${campaign_dir}"
 
 for behavior_id in "${case_ids[@]}"; do
   PYTHONPATH="${repo_root}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-    "${python_bin}" - "${config}" "${case_config}" "${behavior_id}" <<'PY'
+    "${python_bin}" - "${config}" "${case_config}" "${behavior_id}" "${agrail_memory}" <<'PY'
 import pathlib
 import sys
 import yaml
 
-source, destination, behavior_id = sys.argv[1:]
+source, destination, behavior_id, agrail_memory = sys.argv[1:]
 raw = yaml.safe_load(pathlib.Path(source).read_text())
 raw.setdefault("agentharm", {})["behavior_id"] = behavior_id
+if (raw.get("agrail") or {}).get("enabled"):
+    raw["agrail"]["memory_path"] = agrail_memory
 pathlib.Path(destination).write_text(
     yaml.safe_dump(raw, sort_keys=False, allow_unicode=True),
     encoding="utf-8",

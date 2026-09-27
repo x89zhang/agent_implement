@@ -1,10 +1,11 @@
 Bundled AgentGuard runtime
 ==========================
 
-This directory contains the AgentGuard Python client, shared rule runtime, and
-local skill modules, vendored from the AgentGuard research implementation.
-Only runtime Python sources are included; servers, examples, tests, generated
-files, and caches are intentionally excluded.
+This directory contains the AgentGuard Python client, shared rule runtime
+(including the rule generator's DSLgeneration.md prompt), local skill modules,
+the server backend (src/server/backend) and the default plugin configuration
+(config/plugins.json), vendored from the AgentGuard research implementation.
+The web frontend, examples, tests, generated files, and caches are excluded.
 
 The bundled Python sources match the upstream AgentGuard checkout at
 commit d1bdf0926c14f0454762f596e897e97198c2ea72. Project-specific

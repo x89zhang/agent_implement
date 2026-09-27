@@ -223,9 +223,8 @@ def agent_node(cfg: AppConfig, llm: LLMAdapter) -> Callable[[dict[str, Any]], di
                 runtime_messages.append({
                     "role": "system",
                     "content": (
-                        "Safety middleware requested a final-response revision. "
-                        "Do not call tools unless the feedback explicitly concerns a "
-                        "proposed tool action.\n" + output_guard.feedback
+                        "Safety middleware requested a revision of the previous response.\n"
+                        + output_guard.feedback
                     ),
                 })
                 input_messages = [dict(m) for m in runtime_messages]

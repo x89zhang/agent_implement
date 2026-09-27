@@ -1,142 +1,156 @@
+"""ProbGuard runtime monitor (upstream ``controlled_agent_excector.py`` / ``monitor_dtmc.py``).
+
+After every executed tool step the agent state (all step observations so far)
+is abstracted into a predicate bitstring. If the state was observed during
+learning, ``P=? [ F unsafe ]`` (or ``F<=bound``) is computed on the learned
+DTMC and compared with ``threshold`` using ``>=`` (``monitor_dtmc.py:120``,
+``embodied/monitor.py:236``). Unobserved states are skipped and recorded, as
+upstream. ``warn`` adds upstream's fixed reflection message to the observation;
+``block`` stops the run (upstream ``eval_stop``); ``monitor`` only records.
+"""
+
 from __future__ import annotations
 
-import importlib
+import json
 from pathlib import Path
 from typing import Any
 
 from ..config import AppConfig
-from ..middleware import Middleware, ResultDecision, ToolDecision
-from .abstraction import ToolTraceAbstraction
+from ..middleware import Middleware, ModelDecision, ResultDecision, ToolDecision
+from .abstraction import PredicateAbstraction, step_observation
+from .generator import ABSTRACTION_FILE, MODEL_FILE, PRISM_FILE
 from .model import JsonDTMC, Pro2GuardResult
 from .prism import query_prism_probability
+
+# controlled_agent_excector.py:107-109, verbatim.
+REFLECTION_MESSAGE = (
+    "There is a non-negligible probability that, from the current state, the unsafe state "
+    "{unsafe_state} may eventually occur. You MUST NOT reach this unsafe state.\n"
+    "Carefully plan your actions to avoid reaching this unsafe state."
+)
+STOP_MESSAGE = "Run stopped by Pro2Guard."
 
 
 class Pro2GuardMiddleware(Middleware):
     def __init__(self, cfg: AppConfig) -> None:
         self.cfg = cfg
         self.pg = cfg.pro2guard
-        self.abstraction = _load_abstraction(
-            self.pg.abstraction,
-            _resolve_config_path(cfg, self.pg.abstraction_policy_path),
-        )
-        for unsafe_state in getattr(self.abstraction, "unsafe_states", []):
-            if unsafe_state not in self.pg.unsafe_states:
-                self.pg.unsafe_states.append(unsafe_state)
-        self._json_model: JsonDTMC | None = None
-        self._init_error = ""
-        model_path = _resolve_config_path(cfg, self.pg.model_path or self.pg.dtmc_path)
-        if model_path and Path(model_path).suffix.lower() == ".json":
-            if Path(model_path).exists():
-                self._json_model = JsonDTMC(model_path)
-            else:
-                self._init_error = f"model file not found: {model_path}"
-        self._dtmc_path = _resolve_config_path(cfg, self.pg.dtmc_path)
+        self.abstraction: PredicateAbstraction | None = None
+        self.model: JsonDTMC | None = None
+        self.unsafe_ids: set[int] = set()
+        self.model_dir = self.pg.resolved_model_dir
+        self._error = ""
+        if not self.model_dir:
+            self._error = self.pg.resolution_error or "no_model: no trained ProbGuard model resolved"
+            return
+        try:
+            root = Path(self.model_dir)
+            self.abstraction = PredicateAbstraction.from_dict(
+                json.loads((root / ABSTRACTION_FILE).read_text(encoding="utf-8"))
+            )
+            self.model = JsonDTMC(root / MODEL_FILE)
+            raw = json.loads((root / MODEL_FILE).read_text(encoding="utf-8"))
+            # abs.filter(unsafe_spec) restricted to the learned states.
+            self.unsafe_ids = {
+                self.model.state_index[state]
+                for state in self.abstraction.unsafe_states(self.model.state_index)
+            }
+            stored = set(raw.get("unsafe_state_indices") or [])
+            if stored and stored != self.unsafe_ids:
+                raise ValueError("stored unsafe states disagree with the abstraction")
+            if not self.unsafe_ids:
+                # Upstream skips a task whose spec identifies no learned state.
+                self._error = "no_unsafe_state: the learned DTMC contains no unsafe state"
+        except Exception as exc:  # noqa: BLE001 - recorded as a monitor error
+            self._error = f"invalid_model: {exc}"
 
-    def before_model(self, state: dict[str, Any]) -> list[str]:
-        warning = state.pop("_pro2guard_warning", "")
-        return [warning] if warning else []
+    # A run without tool calls would otherwise leave no Pro2Guard record.
+    def guard_model_input(self, state: dict[str, Any], messages: list[dict[str, Any]]) -> ModelDecision:
+        stop = state.get("_pro2guard_stop")
+        if stop:
+            return ModelDecision(False, stop, content=STOP_MESSAGE, terminate=True, decision_type="pro2guard_stop")
+        if self._error and not state.get("_pro2guard_error_recorded"):
+            state["_pro2guard_error_recorded"] = True
+            self._record(state, self._error_result(0))
+        return ModelDecision()
 
     def before_tool(self, state: dict[str, Any], name: str, payload: dict[str, Any]) -> ToolDecision:
-        encoded = self.abstraction.encode_tool_call(state, name, payload)
-        result = self._evaluate(encoded)
-        state["_last_pro2guard_decision"] = result.to_dict()
-        state.setdefault("pro2guard_events", []).append(result.to_dict())
-
-        if result.allowed:
-            return ToolDecision(True, "")
-        if self.pg.mode == "warn":
-            state["_pro2guard_warning"] = result.reason
-            return ToolDecision(True, "")
-        if self.pg.mode == "monitor":
-            return ToolDecision(True, "")
-        return ToolDecision(False, result.reason)
+        stop = state.get("_pro2guard_stop")
+        if stop:
+            return ToolDecision(False, stop, replacement_result=STOP_MESSAGE, terminate=True,
+                                decision_type="pro2guard_stop")
+        return ToolDecision(True, "")
 
     def after_tool(self, state: dict[str, Any], name: str, payload: dict[str, Any], result: str, failed: bool) -> ResultDecision:
-        encoded = self.abstraction.encode_tool_result(name, payload, result, failed)
-        state["_pro2guard_last_state"] = encoded
-        state["_pro2guard_last_outcome"] = "failed" if failed else "ok"
+        history = state.setdefault("_pro2guard_history", [])
+        history.append(step_observation(name, payload, result, failed))
+        evaluated = self._evaluate(list(history), len(history))
+        self._record(state, evaluated)
+        if evaluated.allowed or self.pg.mode == "monitor":
+            return ResultDecision(result=result)
+        if self.pg.mode == "warn":
+            return ResultDecision(result=_attach_message(result, self._message()))
+        # block: the observed step already happened; stop before the next one.
+        state["_pro2guard_stop"] = evaluated.reason
         return ResultDecision(result=result)
 
-    def _evaluate(self, encoded_state: str) -> Pro2GuardResult:
-        try:
-            probability, matched_state, source = self._probability(encoded_state)
-        except Exception as exc:
-            allowed = not self.pg.fail_closed
-            return Pro2GuardResult(
-                probability=None,
-                state=encoded_state,
-                matched_state=encoded_state,
-                threshold=self.pg.threshold,
-                allowed=allowed,
-                reason=f"Pro2Guard failed {'closed' if self.pg.fail_closed else 'open'}: {exc}",
-                mode=self.pg.mode,
-                source="error",
-            )
+    def _record(self, state: dict[str, Any], evaluated: Pro2GuardResult) -> None:
+        state["_last_pro2guard_decision"] = evaluated.to_dict()
+        state.setdefault("pro2guard_events", []).append(evaluated.to_dict())
 
-        allowed = probability <= self.pg.threshold
-        reason = (
-            f"Pro2Guard probability {probability:.4f} exceeds threshold {self.pg.threshold:.4f}"
-            if not allowed
-            else ""
-        )
+    def _message(self) -> str:
+        spec = self.abstraction.unsafe_spec_text() if self.abstraction else ""
+        return REFLECTION_MESSAGE.format(unsafe_state=spec)
+
+    def _error_result(self, step: int) -> Pro2GuardResult:
         return Pro2GuardResult(
-            probability=probability,
-            state=encoded_state,
-            matched_state=matched_state,
-            threshold=self.pg.threshold,
-            allowed=allowed,
-            reason=reason,
-            mode=self.pg.mode,
-            source=source,
+            probability=None, state="", threshold=self.pg.threshold,
+            allowed=not self.pg.fail_closed,
+            reason=f"Pro2Guard unavailable: {self._error}",
+            mode=self.pg.mode, source="error", bound=self.pg.bound, step=step,
+            model=str(self.model_dir or ""), error=self._error,
         )
 
-    def _probability(self, encoded_state: str) -> tuple[float, str, str]:
-        if self._init_error:
-            raise RuntimeError(self._init_error)
-        if self._json_model is not None:
-            probability, matched_state = self._json_model.probability_to_unsafe(
-                encoded_state,
-                self.pg.unsafe_states,
-                self.pg.horizon,
-            )
-            return probability, matched_state, str(self._json_model.path)
-
-        if not self._dtmc_path:
-            return 0.0, encoded_state, "no_model"
-
-        probability = query_prism_probability(
-            prism_bin=self.pg.prism_bin,
-            dtmc_path=self._dtmc_path,
-            current_state=encoded_state,
-            unsafe_states=self.pg.unsafe_states,
-            timeout_seconds=self.pg.timeout_seconds,
+    def _evaluate(self, history: list[dict[str, Any]], step: int) -> Pro2GuardResult:
+        if self._error:
+            return self._error_result(step)
+        assert self.abstraction is not None and self.model is not None
+        encoded = self.abstraction.encode(history)
+        base = dict(state=encoded, threshold=self.pg.threshold, mode=self.pg.mode,
+                    bound=self.pg.bound, step=step, model=str(self.model_dir))
+        if encoded not in self.model.state_index:
+            # monitor_dtmc.py:108-110: unobserved in training data, skipping.
+            return Pro2GuardResult(probability=None, allowed=True, reason="state unobserved in training data",
+                                   source="unseen", skipped=True, **base)
+        index = self.model.state_index[encoded]
+        try:
+            if self.pg.engine == "prism":
+                probability = query_prism_probability(
+                    prism_bin=self.pg.prism_bin, dtmc_path=str(Path(self.model_dir) / PRISM_FILE),
+                    current_state=index, unsafe_indices=sorted(self.unsafe_ids),
+                    bound=self.pg.bound, timeout_seconds=self.pg.timeout_seconds,
+                )
+            else:
+                probability = self.model.probability_to_unsafe(index, self.unsafe_ids, self.pg.bound)
+        except Exception as exc:  # noqa: BLE001 - recorded as a monitor error
+            return Pro2GuardResult(probability=None, allowed=not self.pg.fail_closed,
+                                   reason=f"Pro2Guard failed: {exc}", source="error",
+                                   state_index=index, error=str(exc), **base)
+        alarm = probability >= self.pg.threshold
+        reason = (
+            f"Pro2Guard P(F unsafe)={probability:.4f} >= threshold {self.pg.threshold:.4f}" if alarm else ""
         )
-        return probability, encoded_state, self._dtmc_path
+        return Pro2GuardResult(probability=probability, allowed=not alarm, reason=reason,
+                               source="dtmc", state_index=index, **base)
 
 
-def _resolve_config_path(cfg: AppConfig, value: str) -> str:
-    if not value:
-        return ""
-    path = Path(value)
-    if path.is_absolute():
-        return str(path)
-    config_relative = (Path(cfg.config_dir) / path).resolve()
-    if config_relative.exists():
-        return str(config_relative)
-    cwd_relative = (Path.cwd() / path).resolve()
-    if cwd_relative.exists():
-        return str(cwd_relative)
-    return str(config_relative)
-
-
-def _load_abstraction(import_path: str, policy_path: str = "") -> Any:
-    if not import_path:
-        if policy_path:
-            return ToolTraceAbstraction.from_policy_file(policy_path)
-        return ToolTraceAbstraction()
-    module_name, _, attr = import_path.partition(":")
-    if not module_name or not attr:
-        raise ValueError("Pro2Guard abstraction must use 'module:attribute' import syntax")
-    module = importlib.import_module(module_name)
-    obj = getattr(module, attr)
-    return obj() if isinstance(obj, type) else obj
+def _attach_message(result: Any, message: str) -> str:
+    """Upstream sets ``observation["message"]``; keep JSON results JSON."""
+    try:
+        value = json.loads(result)
+    except (TypeError, ValueError):
+        value = None
+    if isinstance(value, dict):
+        value["message"] = message
+        return json.dumps(value, ensure_ascii=False)
+    return f"{result}\n\nmessage: {message}"
