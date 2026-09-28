@@ -2090,7 +2090,7 @@ def load_config(path: str | Path) -> AppConfig:
         pro2guard = Pro2GuardConfig(
             enabled=bool(pro2guard_raw.get("enabled", False)),
             mode=str(pro2guard_raw.get("mode", "monitor")).lower(),
-            threshold=float(pro2guard_raw.get("threshold", 0.9)),
+            threshold=float(pro2guard_raw.get("threshold", 0.05)),
             model_dir=str(pro2guard_raw.get("model_dir", "") or ""),
             model_path=str(pro2guard_raw.get("model_path", "") or ""),
             granularity=str(pro2guard_raw.get("granularity", "task")).lower(),

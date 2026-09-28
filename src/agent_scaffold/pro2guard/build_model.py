@@ -16,7 +16,7 @@ Usage::
 
     PYTHONPATH=src python -m agent_scaffold.pro2guard.build_model \\
         --config agents/hermes/agentdojo-all-monitors.yaml \\
-        --output models/pro2guard/trained jobs/PROBGUARD_TRAINING_SPLIT
+        --output models/pro2guard jobs/PROBGUARD_TRAINING_SPLIT
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -168,6 +169,21 @@ def find_lifecycles(inputs: list[str], exclude: list[str] | None = None) -> list
     return [found[key] for key in sorted(found) if key not in excluded]
 
 
+def model_directory_name(task: str, key: str, granularity: str = "task") -> str:
+    """Give a task model a readable directory while retaining its unique key."""
+    if granularity != "task":
+        return f"tools-{key}"
+
+    def slug(value: str) -> str:
+        return re.sub(r"[^a-z0-9_-]+", "-", value.lower()).strip("-_")[:48]
+
+    header = re.search(r"(?m)^([\w.-]+) benchmark task:\s*$", task, re.I)
+    fields = dict(re.findall(r"(?m)^- (suite|user_task|task_id|case):\s*(\S+)\s*$", task))
+    parts = [slug(header.group(1)) if header else "task"]
+    parts.extend(slug(fields[name]) for name in ("suite", "user_task", "task_id", "case") if name in fields)
+    return "-".join(part for part in parts if part) + f"-{key}"
+
+
 def build_models(
     cfg: Any,
     inputs: list[str],
@@ -193,7 +209,8 @@ def build_models(
     index.setdefault("models", {})
     summary: dict[str, Any] = {}
     for key, records in sorted(groups.items()):
-        model_dir = output / key
+        directory_name = model_directory_name(records[0]["task"], key, granularity)
+        model_dir = output / directory_name
         model_dir.mkdir(exist_ok=True)
         abstraction_path = model_dir / ABSTRACTION_FILE
         first = records[0]
@@ -234,7 +251,7 @@ def build_models(
         (model_dir / MODEL_FILE).write_text(json.dumps(model, ensure_ascii=False, indent=2), encoding="utf-8")
         export_dtmc_to_prism(model, model_dir / PRISM_FILE)
         index["models"][key] = {
-            "dir": key,
+            "dir": directory_name,
             "task_preview": task[:200],
             "trace_count": len(records),
             "state_count": len(model["states"]),

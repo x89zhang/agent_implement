@@ -197,11 +197,11 @@ pro2guard:
   # Per-task models from `python -m agent_scaffold.pro2guard.build_model`, learned
   # from runs disjoint from the evaluation. A task without a model is recorded as
   # a no_model monitor error, not as a negative.
-  model_dir: ../../models/pro2guard/trained
+  model_dir: ../../models/pro2guard
   granularity: task
   engine: json
   prism_bin: prism
-  threshold: 0.9
+  threshold: 0.05
   # -1: unbounded P=?[F unsafe] (upstream default); k > 0: P=?[F<=k unsafe].
   bound: -1
   timeout_seconds: 10
