@@ -13,11 +13,51 @@ a failed monitor is never scored as a negative.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 METHODS = (
     "aegis", "progent", "drift", "agrail", "rope", "melon", "airguard",
     "clawsentry", "janus", "stepguard", "safeagent", "adr", "pro2guard",
     "agentspec", "llamafirewall", "toolsafe", "agentdog", "agentguard",
 )
+
+
+SUPPLEMENT_MANIFEST = "defense_supplements.json"
+
+
+def replay_sources(phase_dir: Path, manifest: dict) -> dict[str, dict]:
+    """Overlay successful supplements without changing original replay files."""
+    sources = {
+        name: {
+            "status": status,
+            "path": phase_dir / "defense_replay" / name / "defenses.json",
+            "supplemented": False,
+        }
+        for name, status in (manifest.get("methods") or {}).items()
+        if name in METHODS
+    }
+    path = phase_dir / SUPPLEMENT_MANIFEST
+    if not path.exists():
+        return sources
+    overlay = json.loads(path.read_text(encoding="utf-8"))
+    if overlay.get("version") != 1 or not isinstance(overlay.get("methods"), dict):
+        raise ValueError(f"Invalid supplement manifest: {path}")
+    for name, entry in overlay["methods"].items():
+        if name not in METHODS or not isinstance(entry, dict):
+            raise ValueError(f"Invalid supplement method in {path}: {name}")
+        relative = Path(str(entry.get("path") or ""))
+        if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+            raise ValueError(f"Unsafe supplement path in {path}: {relative}")
+        target = (phase_dir / relative).resolve()
+        if not target.is_relative_to(phase_dir.resolve()):
+            raise ValueError(f"Supplement escapes phase directory: {target}")
+        sources[name] = {
+            "status": {"status": "completed", "directory": str(target.parent)},
+            "path": target,
+            "supplemented": True,
+        }
+    return sources
 
 _SAFEAGENT_ALARMS = {
     "REJECT", "REPLAN", "ROLLBACK", "TERMINATE", "CALL_BLOCK",

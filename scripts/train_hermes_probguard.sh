@@ -4,14 +4,58 @@ set -euo pipefail
 # Capture disjoint clean and injected Hermes trajectories, then train the
 # per-task ProbGuard model consumed by the Hermes all-monitors configs.
 
+usage() {
+  echo "usage: $0 [runs-per-condition>=2] [case-id] [--suite SUITE]" >&2
+  echo "example: $0 20 user_task_0_injection_1 --suite travel" >&2
+}
+
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-  echo "usage: $0 [runs-per-condition] (default: 20)"
+  usage
   exit 0
 fi
-
-runs="${1:-20}"
-if (( $# > 1 )) || ! [[ "$runs" =~ ^[0-9]+$ ]] || (( 10#$runs < 2 )); then
-  echo "usage: $0 [runs-per-condition>=2]" >&2
+runs=20
+case_override=""
+suite_override=""
+if (( $# > 0 )) && [[ "$1" != --* ]]; then
+  runs="$1"
+  shift
+fi
+if (( $# > 0 )) && [[ "$1" != --* ]]; then
+  case_override="$1"
+  shift
+fi
+while (( $# > 0 )); do
+  case "$1" in
+    --suite)
+      if (( $# < 2 )) || [[ "$2" == --* ]]; then
+        echo "missing value for --suite" >&2
+        usage
+        exit 2
+      fi
+      suite_override="$2"
+      shift 2
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      usage
+      exit 2
+      ;;
+  esac
+done
+if ! [[ "$runs" =~ ^[0-9]+$ ]] || (( 10#$runs < 2 )); then
+  usage
+  exit 2
+fi
+if [[ -n "$case_override" ]] && ! [[ "$case_override" =~ ^user_task_[0-9]+(_injection_[0-9]+)?$ ]]; then
+  echo "invalid AgentDojo case id: $case_override" >&2
+  exit 2
+fi
+if [[ -n "$suite_override" ]] && ! [[ "$suite_override" =~ ^[A-Za-z][A-Za-z0-9_-]*$ ]]; then
+  echo "invalid AgentDojo suite: $suite_override" >&2
+  exit 2
+fi
+if [[ -n "$suite_override" && -z "$case_override" ]]; then
+  echo "specify a case id when changing the suite" >&2
   exit 2
 fi
 
@@ -37,7 +81,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-PYTHONPATH=src "$python_bin" - "$base_config" "$clean_config" "$attack_config" <<'PY'
+PYTHONPATH=src "$python_bin" - "$base_config" "$clean_config" "$attack_config" "$case_override" "$suite_override" <<'PY'
 import copy
 import sys
 from pathlib import Path
@@ -54,6 +98,10 @@ if base.get("execution", {}).get("backend") != "hermes":
     raise SystemExit("Training capture requires the Hermes backend")
 if not base.get("agentdojo", {}).get("enabled"):
     raise SystemExit("Training capture requires AgentDojo")
+if sys.argv[4]:
+    base["agentdojo"]["case"] = sys.argv[4]
+if sys.argv[5]:
+    base["agentdojo"]["suite"] = sys.argv[5]
 
 for path, injected in ((sys.argv[2], False), (sys.argv[3], True)):
     config = copy.deepcopy(base)
@@ -102,7 +150,8 @@ print(f"Training task key: {next(iter(keys))}")
 PY
 
 echo "Training ProbGuard model"
-PYTHONPATH=src "$python_bin" -m agent_scaffold.pro2guard.build_model \
+mkdir -p "$model_dir"
+PYTHONPATH=src flock -x "$model_dir/.train.lock" "$python_bin" -m agent_scaffold.pro2guard.build_model \
   --config "$attack_config" --output "$model_dir" \
   "$clean_dir" "$attack_dir"
 

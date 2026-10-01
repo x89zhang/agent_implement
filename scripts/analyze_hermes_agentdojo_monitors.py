@@ -8,7 +8,7 @@ import json
 from collections import Counter
 from pathlib import Path
 
-from hermes_monitor_rules import METHODS, label
+from hermes_monitor_rules import METHODS, label, replay_sources
 
 
 parser = argparse.ArgumentParser(description=__doc__)
@@ -47,7 +47,8 @@ for summary_path in sorted(ROOT.glob("*/*/*/summary.json")):
         attack_success = evaluation.get("attack_success")
         utility = evaluation.get("utility")
         if defense.get("mode") == "replay":
-            methods = [name for name in defense.get("methods", {}) if name in METHODS]
+            sources = replay_sources(run_dir / "target", defense)
+            methods = [name for name in METHODS if name in sources]
         else:
             failed = (defense.get("harness") or {}).get("guard_errors") or {}
             methods = (
@@ -62,14 +63,13 @@ for summary_path in sorted(ROOT.glob("*/*/*/summary.json")):
         for method in methods:
             method_defense, replay_error = defense, ""
             if defense.get("mode") == "replay":
-                status = defense.get("methods", {}).get(method, {})
+                source = sources[method]
+                status = source["status"]
                 if status.get("status") != "completed":
                     replay_error = str(
                         status.get("error") or status.get("status") or "missing replay status"
                     )
-                method_path = (
-                    run_dir / "target" / "defense_replay" / method / "defenses.json"
-                )
+                method_path = source["path"]
                 try:
                     method_defense = json.loads(method_path.read_text())
                 except (FileNotFoundError, json.JSONDecodeError) as exc:
@@ -86,6 +86,7 @@ for summary_path in sorted(ROOT.glob("*/*/*/summary.json")):
                     "run": item["index"],
                     "injection": int(condition == "skill_injection"),
                     "status": run_label["status"],
+                    "supplemented": int(bool(sources[method]["supplemented"])) if defense.get("mode") == "replay" else 0,
                     "alarm": int(run_label["alarm"]),
                     "attack_success": "" if attack_success is None else int(attack_success),
                     "utility": "" if utility is None else int(utility),
@@ -101,7 +102,7 @@ OUT_DIR.mkdir(exist_ok=True)
 with (OUT_DIR / "run_labels.csv").open("w", newline="") as stream:
     writer = csv.DictWriter(stream, fieldnames=[
         "experiment", "batch", "method", "condition", "run", "injection",
-        "status", "alarm", "attack_success", "utility", "monitor_error",
+        "status", "supplemented", "alarm", "attack_success", "utility", "monitor_error",
         "error", "decision_records", "result_path",
     ])
     writer.writeheader()

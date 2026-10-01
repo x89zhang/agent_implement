@@ -1,13 +1,66 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-runs="${1:-20}"
+usage() {
+  echo "usage: $0 [runs-per-condition>=2] [case-id] [--suite SUITE]" >&2
+  echo "example: $0 20 user_task_0_injection_1 --suite travel" >&2
+}
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  usage
+  exit 0
+fi
+runs=20
+case_override=""
+suite_override=""
+if (( $# > 0 )) && [[ "$1" != --* ]]; then
+  runs="$1"
+  shift
+fi
+if (( $# > 0 )) && [[ "$1" != --* ]]; then
+  case_override="$1"
+  shift
+fi
+while (( $# > 0 )); do
+  case "$1" in
+    --suite)
+      if (( $# < 2 )) || [[ "$2" == --* ]]; then
+        echo "missing value for --suite" >&2
+        usage
+        exit 2
+      fi
+      suite_override="$2"
+      shift 2
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      usage
+      exit 2
+      ;;
+  esac
+done
 if ! [[ "${runs}" =~ ^[0-9]+$ ]] || (( runs < 2 )); then
-  echo "usage: $0 [runs-per-condition>=2]" >&2
+  usage
+  exit 2
+fi
+if [[ -n "${case_override}" ]] && ! [[ "${case_override}" =~ ^user_task_[0-9]+(_injection_[0-9]+)?$ ]]; then
+  echo "invalid AgentDojo case id: ${case_override}" >&2
+  usage
+  exit 2
+fi
+if [[ -n "${suite_override}" ]] && ! [[ "${suite_override}" =~ ^[A-Za-z][A-Za-z0-9_-]*$ ]]; then
+  echo "invalid AgentDojo suite: ${suite_override}" >&2
+  usage
+  exit 2
+fi
+if [[ -n "${suite_override}" && -z "${case_override}" ]]; then
+  echo "specify a case id when changing the suite" >&2
+  usage
   exit 2
 fi
 
-case_id="$(PYTHONPATH=src python - <<'PYCONFIG'
+selection="$(PYTHONPATH=src python - "${case_override}" "${suite_override}" <<'PYCONFIG'
+import sys
 from agent_scaffold.backends.guards import GUARDS
 from agent_scaffold.config import load_config
 
@@ -31,10 +84,15 @@ for name in on_guards - {'agentdog'}:
         raise SystemExit(f'{name} must be in passive monitor mode')
 if on.agentdog.mode != 'diagnose' or off.agentdog.mode != 'diagnose':
     raise SystemExit('AgentDoG must be in passive diagnose mode')
-print(on.agentdojo.case)
+print(f"{sys.argv[2] or on.agentdojo.suite}\t{sys.argv[1] or on.agentdojo.case}")
 PYCONFIG
 )"
-root="jobs/agentdojo_${case_id}/Hermes/gpt"
+IFS=$'\t' read -r suite_id case_id <<< "${selection}"
+if [[ "${suite_id}" == "slack" ]]; then
+  root="jobs/agentdojo_${case_id}/Hermes/gpt"
+else
+  root="jobs/agentdojo_${suite_id}_${case_id}/Hermes/gpt"
+fi
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 batch="${stamp}_hermes-agentdojo_batch"
 
@@ -52,6 +110,22 @@ python3 scripts/hermes_campaign.py configure --keep-guards \
   agents/hermes/agentdojo-all-monitors.yaml "${on_config}" "${on_dir}"
 python3 scripts/hermes_campaign.py configure --keep-guards \
   agents/hermes/agentdojo-all-monitors-no-injection.yaml "${off_config}" "${off_dir}"
+
+if [[ -n "${case_override}" ]]; then
+  python3 - "${suite_id}" "${case_id}" "${on_config}" "${off_config}" <<'PYCASE'
+import pathlib
+import sys
+import yaml
+
+suite_id, case_id = sys.argv[1:3]
+for filename in sys.argv[3:]:
+    path = pathlib.Path(filename)
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    raw["agentdojo"]["suite"] = suite_id
+    raw["agentdojo"]["case"] = case_id
+    path.write_text(yaml.safe_dump(raw, sort_keys=False, allow_unicode=True), encoding="utf-8")
+PYCASE
+fi
 
 PYTHONPATH=src python src/agent_scaffold/main.py \
   --config "${on_config}" \

@@ -4,14 +4,46 @@ set -euo pipefail
 # Train one ProbGuard task model for the ASB case selected in agents/hermes/asb.yaml.
 # Each official_asb run produces an attacked target and a clean control.
 
+usage() {
+  echo "usage: $0 [runs>=2] [--agent-name NAME] [--task-index N] [--attacker-tool TOOL] [--attack-type TYPE]" >&2
+}
+
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-  echo "usage: $0 [runs] (default: 20; each run yields target + clean control)"
+  usage
   exit 0
 fi
-
-runs="${1:-20}"
-if (( $# > 1 )) || ! [[ "$runs" =~ ^[0-9]+$ ]] || (( 10#$runs < 2 )); then
-  echo "usage: $0 [runs>=2]" >&2
+runs=20
+agent_name_override=""
+task_index_override=""
+attacker_tool_override=""
+attack_type_override=""
+if (( $# > 0 )) && [[ "$1" != --* ]]; then
+  runs="$1"
+  shift
+fi
+while (( $# > 0 )); do
+  option="$1"
+  shift
+  if (( $# == 0 )) || [[ "$1" == --* ]]; then
+    echo "missing value for ${option}" >&2
+    usage
+    exit 2
+  fi
+  case "${option}" in
+    --agent-name) agent_name_override="$1" ;;
+    --task-index) task_index_override="$1" ;;
+    --attacker-tool) attacker_tool_override="$1" ;;
+    --attack-type) attack_type_override="$1" ;;
+    *) echo "unknown option: ${option}" >&2; usage; exit 2 ;;
+  esac
+  shift
+done
+if ! [[ "$runs" =~ ^[0-9]+$ ]] || (( 10#$runs < 2 )); then
+  usage
+  exit 2
+fi
+if [[ -n "$task_index_override" ]] && ! [[ "$task_index_override" =~ ^[0-9]+$ ]]; then
+  echo "--task-index must be a non-negative integer" >&2
   exit 2
 fi
 
@@ -30,7 +62,7 @@ batch_dir="$(mktemp -d "jobs/probguard_asb_train_${stamp}.XXXXXX")"
 train_config="$(mktemp agents/hermes/.probguard-asb.XXXXXX.yaml)"
 trap 'rm -f "$train_config"' EXIT
 
-PYTHONPATH=src "$python_bin" - "$base_config" "$train_config" <<'PY'
+PYTHONPATH=src "$python_bin" - "$base_config" "$train_config" "$agent_name_override" "$task_index_override" "$attacker_tool_override" "$attack_type_override" <<'PY'
 import sys
 from pathlib import Path
 
@@ -38,6 +70,10 @@ import yaml
 from agent_scaffold.backends.guards import GUARDS
 
 config = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
+asb = config.setdefault("agent_security_bench", {})
+for key, value in zip(("agent_name", "task_index", "attacker_tool", "attack_type"), sys.argv[3:]):
+    if value:
+        asb[key] = int(value) if key == "task_index" else value
 enabled = [name for name in GUARDS if (config.get(name) or {}).get("enabled")]
 if enabled:
     raise SystemExit(f"Training requires all guards disabled in ASB config: {enabled}")
@@ -105,7 +141,8 @@ echo "Training ProbGuard model from ${#traces[@]} ASB lifecycles"
 PYTHONPATH=src "$python_bin" -m agent_scaffold.pro2guard.build_model \
   --config "$train_config" --output "$staging" "${traces[@]}"
 
-PYTHONPATH=src "$python_bin" - "$base_config" "$staging" "$model_root" "$runs" <<'PY'
+mkdir -p "$model_root"
+PYTHONPATH=src flock -x "$model_root/.train.lock" "$python_bin" - "$train_config" "$staging" "$model_root" "$runs" <<'PY'
 import json
 import os
 import re

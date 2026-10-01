@@ -8,7 +8,7 @@ import json
 import sys
 from pathlib import Path
 
-from hermes_monitor_rules import METHODS, label
+from hermes_monitor_rules import METHODS, label, replay_sources
 
 def rate(numerator: int, denominator: int) -> float | None:
     return numerator / denominator if denominator else None
@@ -38,13 +38,14 @@ def main() -> None:
             skipped.append({"run": run, "method": "", "error": "Wrong benchmark in evaluation.json"})
             continue
         evaluated.append(evaluation)
-        statuses = manifest.get("methods") or {}
-        for method in [name for name in METHODS if name in statuses]:
-            status = statuses[method]
+        sources = replay_sources(target, manifest)
+        for method in [name for name in METHODS if name in sources]:
+            source = sources[method]
+            status = source["status"]
             replay_error = ""
             if status.get("status") != "completed":
                 replay_error = str(status.get("error") or status.get("status") or "failed")
-            path = target / "defense_replay" / method / "defenses.json"
+            path = source["path"]
             try:
                 defense = json.loads(path.read_text(encoding="utf-8"))
             except (FileNotFoundError, json.JSONDecodeError) as exc:
@@ -62,6 +63,7 @@ def main() -> None:
                 "monitor_error": run_label["monitor_error"],
                 "error": run_label["error"],
                 "replay_status": status.get("status", "missing"),
+                "supplemented": source["supplemented"],
                 "decision_records": run_label["decision_records"],
                 "evaluation_path": str((target / "evaluation.json").relative_to(root)),
             })
@@ -70,7 +72,7 @@ def main() -> None:
     out.mkdir(exist_ok=True)
     columns = (
         "run", "method", "leakage", "utility", "status", "alarm", "monitor_error",
-        "error", "replay_status", "decision_records", "evaluation_path",
+        "error", "replay_status", "supplemented", "decision_records", "evaluation_path",
     )
     with (out / "run_labels.csv").open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=columns)

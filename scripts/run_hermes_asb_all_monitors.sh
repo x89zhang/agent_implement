@@ -1,9 +1,51 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-runs="${1:-20}"
+usage() {
+  echo "usage: $0 [runs>=2] [output-directory] [--agent-name NAME] [--task-index N] [--attacker-tool TOOL] [--attack-type TYPE]" >&2
+}
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  usage
+  exit 0
+fi
+runs=20
+batch_dir_override=""
+agent_name_override=""
+task_index_override=""
+attacker_tool_override=""
+attack_type_override=""
+if (( $# > 0 )) && [[ "$1" != --* ]]; then
+  runs="$1"
+  shift
+fi
+if (( $# > 0 )) && [[ "$1" != --* ]]; then
+  batch_dir_override="$1"
+  shift
+fi
+while (( $# > 0 )); do
+  option="$1"
+  shift
+  if (( $# == 0 )) || [[ "$1" == --* ]]; then
+    echo "missing value for ${option}" >&2
+    usage
+    exit 2
+  fi
+  case "${option}" in
+    --agent-name) agent_name_override="$1" ;;
+    --task-index) task_index_override="$1" ;;
+    --attacker-tool) attacker_tool_override="$1" ;;
+    --attack-type) attack_type_override="$1" ;;
+    *) echo "unknown option: ${option}" >&2; usage; exit 2 ;;
+  esac
+  shift
+done
 if ! [[ "${runs}" =~ ^[0-9]+$ ]] || (( runs < 2 )); then
-  echo "usage: $0 [runs>=2] [output-directory]" >&2
+  usage
+  exit 2
+fi
+if [[ -n "${task_index_override}" ]] && ! [[ "${task_index_override}" =~ ^[0-9]+$ ]]; then
+  echo "--task-index must be a non-negative integer" >&2
   exit 2
 fi
 
@@ -26,10 +68,13 @@ for flag in "${dry_run}" "${skip_service_checks}"; do
   fi
 done
 
-case_slug="$(python3 - "${source_config}" <<'PYCASE'
+case_slug="$(python3 - "${source_config}" "${agent_name_override}" "${task_index_override}" "${attacker_tool_override}" "${attack_type_override}" <<'PYCASE'
 import pathlib, re, sys, yaml
 raw = yaml.safe_load(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 asb = raw.get("agent_security_bench") or {}
+for key, value in zip(("agent_name", "task_index", "attacker_tool", "attack_type"), sys.argv[2:]):
+    if value:
+        asb[key] = int(value) if key == "task_index" else value
 parts = [
     str(asb.get("agent_name") or "agent"),
     f"task-{asb.get('task_index', 0)}",
@@ -39,20 +84,24 @@ parts = [
 print("-".join(re.sub(r"[^A-Za-z0-9_.-]+", "-", part).strip("-").lower() for part in parts))
 PYCASE
 )"
-batch_dir="${2:-${repo_root}/jobs/asb_all_monitors/${case_slug}/${stamp}_hermes-asb-all-monitors}"
+batch_dir="${batch_dir_override:-${repo_root}/jobs/asb_all_monitors/${case_slug}/${stamp}_hermes-asb-all-monitors}"
 mkdir -p "${batch_dir}"
 batch_dir="$(cd "${batch_dir}" && pwd)"
 generated_config="$(mktemp "$(dirname "${source_config}")/.asb-all-monitors.XXXXXX.yaml")"
 cleanup() { rm -f "${generated_config}"; }
 trap cleanup EXIT
 
-python3 - "${source_config}" "${generated_config}" "${toolsafe_url}" "${agentdog_url}" "${batch_dir}" "${repo_root}/scripts" <<'PYCONFIG'
+python3 - "${source_config}" "${generated_config}" "${toolsafe_url}" "${agentdog_url}" "${batch_dir}" "${repo_root}/scripts" "${agent_name_override}" "${task_index_override}" "${attacker_tool_override}" "${attack_type_override}" <<'PYCONFIG'
 import pathlib, sys, yaml
-source, destination, toolsafe_url, agentdog_url, batch_dir, scripts_dir = sys.argv[1:]
+source, destination, toolsafe_url, agentdog_url, batch_dir, scripts_dir = sys.argv[1:7]
 sys.path.insert(0, scripts_dir)
 from hermes_campaign import configure
 raw = yaml.safe_load(pathlib.Path(source).read_text(encoding="utf-8"))
 asb = raw.get("agent_security_bench") or {}
+for key, value in zip(("agent_name", "task_index", "attacker_tool", "attack_type"), sys.argv[7:]):
+    if value:
+        asb[key] = int(value) if key == "task_index" else value
+raw["agent_security_bench"] = asb
 if not asb.get("enabled"):
     raise SystemExit("agent_security_bench.enabled must be true")
 if asb.get("implementation") != "official_bridge":
