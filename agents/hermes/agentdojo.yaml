@@ -82,10 +82,10 @@ monitoring:
 agentdojo:
   enabled: true
   benchmark_version: v1.2.2
-  suite: slack
+  suite: workspace
   # Change both tasks through a single combined case id.
   # Benign-only example: user_task_3; attack example: user_task_3_injection_3.
-  case: user_task_15_injection_5
+  case: user_task_1_injection_0
   # false disables both attack carriers while retaining the selected case.
   injection_enabled: true
   # Tool-output attack and native-skill attack can be toggled independently.

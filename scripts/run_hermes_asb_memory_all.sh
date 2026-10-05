@@ -499,7 +499,8 @@ memory.pop("poisoning_input_file", None)
 if keep_defenses != "1":
     # The baseline disables every guard, not only a subset.
     for name in (*METHODS, "agentsight"):
-        raw.setdefault(name, {})["enabled"] = False
+        # Discard inactive options that may contain removed legacy fields.
+        raw[name] = {"enabled": False}
 if (raw.get("agrail") or {}).get("enabled"):
     raw["agrail"]["memory_path"] = agrail_memory
 pathlib.Path(destination).write_text(
