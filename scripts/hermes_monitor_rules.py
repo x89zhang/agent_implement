@@ -67,14 +67,23 @@ _SAFEAGENT_ALARMS = {
 
 def decisions(method: str, defense: dict) -> list[dict]:
     key = f"_last_{method}_decision"
-    return [
-        decision
-        for event in defense.get("trace", [])
+    found = []
+    for event in defense.get("trace", []):
         # Parallel calls record one snapshot each; the final dict alone would
-        # keep only the last call's decision.
-        for snapshot in [event.get("decisions", {}), *event.get("decisions_per_call", [])]
-        if isinstance((decision := snapshot.get(key)), dict)
-    ]
+        # keep only the last call's decision. Each snapshot copies every
+        # `_last_*` key, so a guard that did not decide on a later call repeats
+        # its previous decision, and the final dict repeats the last call's
+        # decision unless after_model replaced it.
+        event_items = []
+        for snapshot in event.get("decisions_per_call", []):
+            decision = snapshot.get(key)
+            if isinstance(decision, dict) and (not event_items or decision != event_items[-1]):
+                event_items.append(decision)
+        final = event.get("decisions", {}).get(key)
+        if isinstance(final, dict) and (not event_items or final != event_items[-1]):
+            event_items.append(final)
+        found.extend(event_items)
+    return found
 
 
 def is_error(item: dict) -> bool:

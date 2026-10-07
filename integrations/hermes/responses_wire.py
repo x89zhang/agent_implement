@@ -10,39 +10,67 @@ import json
 from types import SimpleNamespace
 
 
+def _content_text(content):
+    if isinstance(content, str):
+        return content
+    return "".join(
+        part.get("text", "") for part in content or [] if isinstance(part, dict)
+    )
+
+
 def guard_messages(request):
+    """Chat-format view of a Responses request, one assistant message per turn.
+
+    A turn's output items (reasoning, message, function calls) become a single
+    assistant message carrying its text and all its tool calls, as a Chat
+    Completions history has it. Reasoning summaries are dropped: they are not
+    part of what the agent said, and ``model_output`` records never contain them.
+    """
     messages = []
     if request.get("instructions"):
         messages.append({"role": "system", "content": request["instructions"]})
     items = request.get("input", [])
     if isinstance(items, str):
         return messages + [{"role": "user", "content": items}]
+    turn = None
+
+    def open_turn():
+        nonlocal turn
+        if turn is None:
+            turn = {"role": "assistant", "content": ""}
+            messages.append(turn)
+        return turn
+
     for item in items:
         kind = item.get("type", "message")
+        role = item.get("role", "user")
+        if kind == "reasoning":
+            continue
+        if kind == "message" and role == "assistant":
+            text = _content_text(item.get("content", ""))
+            current = open_turn()
+            current["content"] = "\n".join(p for p in (current["content"], text) if p)
+            continue
+        if kind == "function_call":
+            open_turn().setdefault("tool_calls", []).append(
+                {
+                    "id": item["call_id"],
+                    "type": "function",
+                    "function": {
+                        "name": item["name"],
+                        "arguments": item["arguments"],
+                    },
+                }
+            )
+            continue
+        turn = None
         if kind == "message":
             content = copy.deepcopy(item.get("content", ""))
             if isinstance(content, list):
                 for part in content:
                     if part.get("type") in {"input_text", "output_text"}:
                         part["type"] = "text"
-            messages.append({"role": item.get("role", "user"), "content": content})
-        elif kind == "function_call":
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [
-                        {
-                            "id": item["call_id"],
-                            "type": "function",
-                            "function": {
-                                "name": item["name"],
-                                "arguments": item["arguments"],
-                            },
-                        }
-                    ],
-                }
-            )
+            messages.append({"role": role, "content": content})
         elif kind == "function_call_output":
             messages.append(
                 {
@@ -51,11 +79,6 @@ def guard_messages(request):
                     "content": item["output"],
                 }
             )
-        elif kind == "reasoning":
-            summary = item.get("summary") or []
-            text = "\n".join(p.get("text", "") for p in summary)
-            if text:
-                messages.append({"role": "assistant", "content": text})
     return messages
 
 

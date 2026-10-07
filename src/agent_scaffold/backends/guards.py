@@ -9,7 +9,7 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
-from ..agentdojo_adapter import redact_config_snapshot
+from ..agentdojo_adapter import benchmark_user_prompt, redact_config_snapshot
 from ..config import ToolConfig
 from ..middleware import build_middleware_manager, output_revision_limit
 
@@ -163,8 +163,14 @@ class GuardController:
         generation_task = payload.get("generation_task", self.task)
         # Generators must see the clean task; runtime checks judge the prompt
         # the agent actually received. They differ only in memory-poison phases.
+        # Monitors get the user's prompt as upstream does, without the harness
+        # wrapper; compilers keep the full text, which keys their caches and
+        # trained models.
+        compile_task = generation_task
+        user_task = benchmark_user_prompt(self.task)
+        generation_task = benchmark_user_prompt(generation_task)
         self.state["_generation_task"] = generation_task
-        self.state["_runtime_user_request"] = self.task
+        self.state["_runtime_user_request"] = user_task
         self.state["_progent_tools"] = copy.deepcopy(payload["tools"])
         self.state["_progent_user_request"] = generation_task
         self.state["_drift_tools"] = copy.deepcopy(payload["tools"])
@@ -185,14 +191,14 @@ class GuardController:
         self.state["_safeagent_user_request"] = generation_task
         self.state["_safeagent_tools"] = copy.deepcopy(payload["tools"])
         self.state["_adr_user_request"] = generation_task
-        self.state["_toolsafe_user_request"] = self.task
+        self.state["_toolsafe_user_request"] = user_task
         self.state["_toolsafe_tools"] = copy.deepcopy(payload["tools"])
-        self.state["_agentspec_user_request"] = self.task
+        self.state["_agentspec_user_request"] = user_task
         # Pro2Guard keys its per-task model on the model-visible schemas.
         self.cfg.pro2guard.tool_inventory = copy.deepcopy(payload["tools"])
         def generator(compiler):
             return lambda: compiler(
-                self.cfg, generation_task, self.directory, user_input=""
+                self.cfg, compile_task, self.directory, user_input=""
             )
 
         compilers = [
@@ -200,7 +206,7 @@ class GuardController:
                 "airguard",
                 "airguard_authority_generate",
                 lambda: compile_airguard_authority(
-                    self.cfg, generation_task, self.directory
+                    self.cfg, compile_task, self.directory
                 ),
             ),
             *(
@@ -216,7 +222,7 @@ class GuardController:
                 compile_agentguard_scenario.__name__,
                 # The catalog needs inputSchema names for tool.<param> rules.
                 lambda: compile_agentguard_scenario(
-                    self.cfg, generation_task, self.directory, user_input="",
+                    self.cfg, compile_task, self.directory, user_input="",
                     tools=copy.deepcopy(payload["tools"]),
                 ),
             ),

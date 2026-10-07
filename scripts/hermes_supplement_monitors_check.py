@@ -8,11 +8,12 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from hermes_monitor_rules import replay_sources  # noqa: E402
-from supplement_hermes_monitors import _activate, _phases, _replay_config, _resolve_batches  # noqa: E402
+from supplement_hermes_monitors import _activate, _phases, _replay, _replay_config, _resolve_batches  # noqa: E402
 
 
 def write_json(path: Path, value: dict) -> None:
@@ -21,6 +22,26 @@ def write_json(path: Path, value: dict) -> None:
 
 
 class SupplementTests(unittest.TestCase):
+    def test_docker_options_precede_image_for_every_launch_branch(self) -> None:
+        for method, auto_start in (("clawsentry", True), ("clawsentry", False), ("toolsafe", True)):
+            with self.subTest(method=method, auto_start=auto_start), tempfile.TemporaryDirectory(dir=ROOT) as temp:
+                run = Path(temp) / "run_001"
+                attempt = Path(temp) / "attempt"
+                attempt.mkdir()
+                image = "replay-test:local"
+                config = {"clawsentry": {"auto_start": auto_start}}
+                with patch("supplement_hermes_monitors.subprocess.run") as execute:
+                    execute.return_value = subprocess.CompletedProcess([], 0, "ok", "")
+                    code, error = _replay(run, run / "target", method, attempt, image, 30, config, run / "hermes.container.yaml")
+                command = execute.call_args.args[0]
+                index = command.index(image)
+                self.assertEqual(command[index + 1], "python")
+                self.assertNotIn("-e", command[index + 1:])
+                self.assertEqual("agent_scaffold.clawsentry.launcher" in command, method == "clawsentry" and auto_start)
+                if method == "clawsentry" and auto_start:
+                    self.assertIn("AGENT_CLAWSENTRY_KEY_ENV=CS_AUTH_TOKEN", command[:index])
+                self.assertEqual((code, error), (0, ""))
+
     def test_legacy_config_migrates_in_attempt_only(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

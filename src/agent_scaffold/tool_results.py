@@ -3,6 +3,25 @@
 from __future__ import annotations
 
 import json
+import re
+
+# Per-run identifiers in tool descriptions (e.g. Hermes' per-run home
+# directory) are normalized so generated guard inputs and their cache keys
+# are stable across runs of the same task.
+_RUN_SPECIFIC = (
+    (re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"),
+     "<id>"),
+    (re.compile(r"(?<![0-9A-Za-z])[0-9a-fA-F]{16,}(?![0-9A-Za-z])"), "<id>"),
+    (re.compile(r"\b\d{8}T\d{6}Z\b"), "<timestamp>"),
+    (re.compile(r"\brun_\d+\b"), "run_<n>"),
+    (re.compile(r"\btmp[A-Za-z0-9_]{6,}\b"), "tmp<id>"),
+)
+
+
+def normalize_run_specific(text: str) -> str:
+    for pattern, replacement in _RUN_SPECIFIC:
+        text = pattern.sub(replacement, text)
+    return text
 
 
 def unwrap_hermes_result(result: str) -> str:

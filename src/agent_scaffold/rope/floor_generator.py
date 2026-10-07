@@ -17,6 +17,7 @@ from typing import Any, Callable
 from ._upstream.fewshot import _POOL
 from ._upstream.markers import str_to_rule
 from ._upstream.scopes_io import load_floor, floor_to_dict
+from ..tool_results import normalize_run_specific
 
 # Floor-default markers used by the audited upstream tables (markers.py). FREE
 # is accepted as "unguarded" and left out of the floor.
@@ -67,8 +68,10 @@ def _normalize_tool(tool: dict[str, Any]) -> dict[str, Any]:
             arguments, required, complete = [], None, False
     else:
         arguments, required, complete = [], None, False
+    # Run-specific ids (Hermes' per-run home path) would make every run's
+    # floor prompt, and so its router cache key, unique.
     return {"name": str(tool.get("name") or ""),
-            "description": str(tool.get("description") or ""),
+            "description": normalize_run_specific(str(tool.get("description") or "")),
             "arguments": arguments, "required_arguments": required,
             "schema_complete": complete}
 

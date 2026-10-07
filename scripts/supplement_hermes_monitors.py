@@ -215,6 +215,9 @@ def _replay(run: Path, phase: Path, method: str, attempt: Path, image: str, time
     ]
     for env_name in _selected_env(config):
         command.extend(["-e", env_name])
+    managed_clawsentry = method == "clawsentry" and (config.get("clawsentry") or {}).get("auto_start", True)
+    if managed_clawsentry:
+        command.extend(["-e", "AGENT_CLAWSENTRY_KEY_ENV=CS_AUTH_TOKEN"])
     command.append(image)
     worker = [
         "python", "scripts/supplement_hermes_monitors.py", "--worker",
@@ -222,8 +225,7 @@ def _replay(run: Path, phase: Path, method: str, attempt: Path, image: str, time
         "--phase", _workspace_path(phase), "--method", method,
         "--attempt", _workspace_path(attempt),
     ]
-    if method == "clawsentry" and (config.get("clawsentry") or {}).get("auto_start", True):
-        command.extend(["-e", "AGENT_CLAWSENTRY_KEY_ENV=CS_AUTH_TOKEN"])
+    if managed_clawsentry:
         command.extend(["python", "-m", "agent_scaffold.clawsentry.launcher", "--", *worker])
     else:
         command.extend(worker)

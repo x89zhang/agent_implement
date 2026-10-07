@@ -4,11 +4,12 @@ This file runs under ``/opt/clawsentry-venv/bin/python`` and imports only
 upstream ClawSentry, never ``agent_scaffold``.
 
 ``gateway``: start the unmodified upstream gateway (``clawsentry gateway``)
-after one model adaptation. Upstream's OpenAI provider calls Chat
+after two runtime adaptations. Upstream's OpenAI provider calls Chat
 Completions with ``max_tokens`` and ``temperature``
 (``gateway/llm/provider.py:303-320``), which GPT-5 and o-series models reject;
 for those models only, ``max_tokens`` becomes ``max_completion_tokens`` and
-``temperature`` is dropped. Prompts and parsing are untouched.
+``temperature`` is dropped. Each provider call gets its own SDK client
+(see ``_per_call_client``). Prompts and parsing are untouched.
 
 ``fallback``: read a canonical event (JSON) on stdin and print upstream's
 local fallback decision for an unreachable gateway, computed exactly as the
@@ -17,6 +18,9 @@ upstream adapter does (``adapters/a3s_adapter.py:432-437``).
 
 from __future__ import annotations
 
+import contextvars
+import copy
+import inspect
 import json
 import os
 import re
@@ -42,28 +46,70 @@ def _adapt_request(kwargs: dict) -> dict:
     return adapted
 
 
+_CALL_CLIENT = contextvars.ContextVar("agent_scaffold_clawsentry_client", default=None)
+
+
+def _per_call_client(provider_cls, adapt=lambda client: client) -> None:
+    """Give every ``complete`` call its own SDK client, closed in its own loop.
+
+    Upstream runs each L2 analysis in a fresh event loop on a two-thread pool
+    (``policy/engine.py:508, 1230-1244``) but caches one async client per
+    provider (``gateway/llm/provider.py:149-158, 246-255``). The cached httpx
+    pool stays bound to the first loop, so later calls fail with "Event loop
+    is closed" and fall back to L1. The client is built exactly as upstream
+    builds it, on a copy of the provider so the shared cache is never touched
+    across threads, and closed as upstream's ``aclose`` does before its loop
+    exits.
+    """
+    build = provider_cls._get_client
+    complete = provider_cls.complete
+    if getattr(complete, "_agent_scaffold_adapted", False):
+        return
+
+    def fresh(self):
+        shadow = copy.copy(self)
+        shadow._client = None
+        return adapt(build(shadow))
+
+    def _get_client(self):
+        return _CALL_CLIENT.get() or fresh(self)
+
+    async def _complete(self, *args, **kwargs):
+        client = fresh(self)
+        token = _CALL_CLIENT.set(client)
+        try:
+            return await complete(self, *args, **kwargs)
+        finally:
+            _CALL_CLIENT.reset(token)
+            close = getattr(client, "close", None) or getattr(client, "aclose", None)
+            if callable(close):
+                result = close()
+                if inspect.isawaitable(result):
+                    await result
+
+    _complete._agent_scaffold_adapted = True
+    provider_cls._get_client = _get_client
+    provider_cls.complete = _complete
+
+
+def _adapt_completions(client):
+    completions = client.chat.completions
+    if not getattr(completions, "_agent_scaffold_adapted", False):
+        create = completions.create
+
+        async def adapted_create(**kwargs):
+            return await create(**_adapt_request(kwargs))
+
+        completions.create = adapted_create
+        completions._agent_scaffold_adapted = True
+    return client
+
+
 def _patch_openai_provider() -> None:
     from clawsentry.gateway.llm import provider
 
-    original = provider.OpenAIProvider._get_client
-    if getattr(original, "_agent_scaffold_adapted", False):
-        return
-
-    def _get_client(self):
-        client = original(self)
-        completions = client.chat.completions
-        if not getattr(completions, "_agent_scaffold_adapted", False):
-            create = completions.create
-
-            async def adapted_create(**kwargs):
-                return await create(**_adapt_request(kwargs))
-
-            completions.create = adapted_create
-            completions._agent_scaffold_adapted = True
-        return client
-
-    _get_client._agent_scaffold_adapted = True
-    provider.OpenAIProvider._get_client = _get_client
+    _per_call_client(provider.OpenAIProvider, _adapt_completions)
+    _per_call_client(provider.AnthropicProvider)
 
 
 def _fallback() -> int:
@@ -85,9 +131,26 @@ def _fallback() -> int:
     return 0
 
 
+def _check_llm_dependencies() -> None:
+    """Fail at startup instead of letting every L2 call fall back to L1.
+
+    Upstream builds its SDK clients on ``httpx.AsyncClient``
+    (``gateway/llm/provider.py:34-39``). Without it each analysis raises
+    ``ModuleNotFoundError`` and the gateway silently serves L1-only verdicts.
+    """
+    provider = os.environ.get("CS_LLM_PROVIDER", "").strip().lower()
+    if not provider:
+        return
+    import importlib
+
+    for module in ("httpx", "anthropic" if provider == "anthropic" else "openai"):
+        importlib.import_module(module)
+
+
 def main(argv: list[str]) -> int:
     command = argv[0] if argv else ""
     if command == "gateway":
+        _check_llm_dependencies()
         _patch_openai_provider()
         from clawsentry.cli.main import main as clawsentry_main
 

@@ -1,1 +1,4 @@
 clawsentry[llm]==0.8.7
+# Upstream's LLM provider imports httpx directly (gateway/llm/provider.py:37),
+# but declares it only under [dev]; openai>=3 depends on httpx2 instead.
+httpx>=0.24

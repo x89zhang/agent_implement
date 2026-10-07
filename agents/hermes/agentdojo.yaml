@@ -165,6 +165,9 @@ drift:
   max_revisions: 15  # DRIFTToolsExecutionLoop max_iters (inline block only)
   mask_limitation: 1
   profile: default  # DRIFTLLM.py for every benchmark; asb = ASB_DRIFT variant
+  # Upstream agent_run always appends AgentDojo's environment setup to the
+  # planner prompt (DRIFT client.py:56-57).
+  environment_guidelines: true
   # Rule generation inherits the top-level llm and OPENAI_API_KEY.
 
 adr:
@@ -259,8 +262,9 @@ rope:
   # audited (non-default): upstream's audited table for rope.suite.
   floor_generation: llm
   router: live
-  # Upstream main result is unclamped (run_eval.py clamp=False).
-  clamp: false
+  # Upstream runs unclamped only with its cached router (run_eval.py:10,76);
+  # a live router can loosen a floor argument, which clamp.py reverts.
+  clamp: true
   # Memoizes router/floor LLM replies (upstream common/llm_cache.py) so clean
   # and attacked runs of the same task get the same scope.
   router_cache_path: ../../runtime/rope-router-cache.json
@@ -300,7 +304,8 @@ pro2guard:
   granularity: task
   engine: json
   prism_bin: prism
-  threshold: 0.05
+  # Upstream stop threshold (monitor_dtmc.py:73, embodied/monitor.py:236).
+  threshold: 0.9
   # -1: unbounded P=?[F unsafe] (upstream default); k > 0: P=?[F<=k unsafe].
   bound: -1
   timeout_seconds: 10

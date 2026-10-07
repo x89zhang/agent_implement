@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import time
 import uuid
 from pathlib import Path
@@ -19,6 +18,7 @@ from ..config import AppConfig, LLMConfig
 from ..llm import LLMAdapter
 from ..middleware import _UNCHANGED, Middleware, ModelDecision, ResultDecision, ToolDecision
 from ..progent.tools import tool_definitions_from_config
+from ..tool_results import normalize_run_specific
 from .detectors import DETECTORS, run_detector
 from .upstream_executor_prompt import defender
 from .upstream_prompts import (
@@ -43,17 +43,6 @@ Answer with the specification text only, in at most 150 words.
 {tools}
 <\\Tool Inventory>
 """
-
-# Per-run identifiers in tool descriptions (e.g. Hermes' per-run home
-# directory) are normalized so the specification and its cache key are stable.
-_RUN_SPECIFIC = (
-    (re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"),
-     "<id>"),
-    (re.compile(r"(?<![0-9A-Za-z])[0-9a-fA-F]{16,}(?![0-9A-Za-z])"), "<id>"),
-    (re.compile(r"\b\d{8}T\d{6}Z\b"), "<timestamp>"),
-    (re.compile(r"\brun_\d+\b"), "run_<n>"),
-    (re.compile(r"\btmp[A-Za-z0-9_]{6,}\b"), "tmp<id>"),
-)
 
 # Raw guard-model replies kept in each event, per reply.
 _MAX_RECORDED_REPLY = 12000
@@ -273,8 +262,8 @@ class AGrailMiddleware(Middleware):
         if self.settings.agent_specification:
             return self.settings.agent_specification
         tools = sorted(
-            ((_normalize_run_specific(str(tool.get("name") or "")),
-              _normalize_run_specific(str(tool.get("description") or "")))
+            ((normalize_run_specific(str(tool.get("name") or "")),
+              normalize_run_specific(str(tool.get("description") or "")))
              for tool in self._tools(state)),
         )
         model = self.settings.model or self.cfg.llm.model
@@ -523,12 +512,6 @@ def _call_key(name: str, arguments: Any) -> str:
         except ValueError:
             pass
     return json.dumps([name, arguments], sort_keys=True, ensure_ascii=False, default=str)
-
-
-def _normalize_run_specific(text: str) -> str:
-    for pattern, replacement in _RUN_SPECIFIC:
-        text = pattern.sub(replacement, text)
-    return text
 
 
 def _response_text(content: Any) -> str:

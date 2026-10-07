@@ -297,10 +297,13 @@ class DriftMiddleware(Middleware):
         }
         if llm_errors:
             detail["llm_error"] = llm_errors[-1]
+        # Isolation sanitizes the result and the run continues
+        # (DRIFTLLM.py:615-627); it never refuses an action, so a masked
+        # result is recorded as such and not as a denial.
         event = self._record(
             state,
             "after_tool",
-            allowed=not (masked or error),
+            allowed=not error,
             enforced=enforced,
             reason=error or ("masked conflicting instructions" if masked else ""),
             source="error" if error else "injection_isolation",
@@ -443,6 +446,11 @@ class DriftMiddleware(Middleware):
         except Exception as exc:
             error = f"DRIFT constraint generation failed: {type(exc).__name__}: {exc}"
         trajectory, checklist = parse_constraints(completion)
+        if not error and not trajectory:
+            # Upstream continues with an empty plan, which auto-accepts every
+            # read and leaves DRIFT effectively off; a planner that answers as
+            # the agent (or refuses) is a monitor failure, not a clean verdict.
+            error = "DRIFT constraint generation returned no function trajectory"
         state["_drift_trajectory"] = trajectory
         state["_drift_initial_trajectory"] = list(trajectory)
         state["_drift_checklist"] = checklist
