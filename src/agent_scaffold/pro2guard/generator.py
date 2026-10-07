@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import AppConfig, LLMConfig
-from .abstraction import PredicateAbstraction, abstraction_from_conditions
+from .abstraction import PredicateAbstraction, abstraction_from_conditions, is_behavior_step
 
 ABSTRACTION_FILE = "abstraction.json"
 MODEL_FILE = "model.json"
@@ -153,6 +153,9 @@ def generate_abstraction(
         from ..llm import LLMAdapter
 
         llm = LLMAdapter(generator_llm_config(cfg))
+    # Skill tools are harness plumbing whose steps the abstraction ignores; a
+    # condition on them would only detect the skill delivery channel.
+    tools = [tool for tool in tools if is_behavior_step(str(tool.get("name", "")))]
     prompt = generation_prompt(
         task, tools, max_conditions=settings.max_conditions, max_atoms=settings.max_atoms,
     )

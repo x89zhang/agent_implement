@@ -22,6 +22,18 @@ FINISH = "finish"
 _ENUMERATION_LIMIT = 16
 
 
+# Hermes' native skill tools are how task skills reach the agent in both the
+# clean and the injected condition. They are harness plumbing, not agent
+# behaviour: the spec generator never sees them and their steps never enter
+# the abstracted state, so ProbGuard judges what the agent does after reading
+# a skill rather than the read itself.
+HARNESS_SKILL_TOOLS = frozenset({"skill_view", "skills_list", "skill_manage"})
+
+
+def is_behavior_step(name: str) -> bool:
+    return str(name or "") not in HARNESS_SKILL_TOOLS
+
+
 def step_observation(name: str, payload: Any, result: Any, failed: bool) -> dict[str, Any]:
     """One executed tool step: the call, its arguments and its observed result."""
     text = result if isinstance(result, str) else json.dumps(result, default=str)

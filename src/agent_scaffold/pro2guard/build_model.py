@@ -29,7 +29,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from .abstraction import FINISH, PredicateAbstraction, step_observation
+from .abstraction import FINISH, PredicateAbstraction, is_behavior_step, step_observation
 from .generator import (
     ABSTRACTION_FILE,
     INDEX_FILE,
@@ -135,7 +135,7 @@ def read_lifecycle(path: str | Path) -> dict[str, Any]:
             # Generators and model keys use the clean task, as at runtime.
             task = str(event.get("generation_task") or event.get("task") or "")
             tools = list(event.get("tools") or [])
-        elif op == "after_tool":
+        elif op == "after_tool" and is_behavior_step(str(event.get("name", ""))):
             steps.append(step_observation(
                 str(event.get("name", "")), event.get("arguments", {}),
                 event.get("result", ""), bool(event.get("failed", False)),

@@ -17,7 +17,7 @@ from typing import Any
 
 from ..config import AppConfig
 from ..middleware import Middleware, ModelDecision, ResultDecision, ToolDecision
-from .abstraction import PredicateAbstraction, step_observation
+from .abstraction import PredicateAbstraction, is_behavior_step, step_observation
 from .generator import ABSTRACTION_FILE, MODEL_FILE, PRISM_FILE
 from .model import JsonDTMC, Pro2GuardResult
 from .prism import query_prism_probability
@@ -82,6 +82,8 @@ class Pro2GuardMiddleware(Middleware):
         return ToolDecision(True, "")
 
     def after_tool(self, state: dict[str, Any], name: str, payload: dict[str, Any], result: str, failed: bool) -> ResultDecision:
+        if not is_behavior_step(name):
+            return ResultDecision(result=result)
         history = state.setdefault("_pro2guard_history", [])
         history.append(step_observation(name, payload, result, failed))
         evaluated = self._evaluate(list(history), len(history))

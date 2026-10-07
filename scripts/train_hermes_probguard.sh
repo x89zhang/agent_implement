@@ -103,12 +103,19 @@ if sys.argv[4]:
 if sys.argv[5]:
     base["agentdojo"]["suite"] = sys.argv[5]
 
+# Clean runs read a benign skill staged under the attack skill's name and
+# description, so both conditions get the same skill tools and skill_view
+# directive and differ only in the skill text.
+BENIGN_SKILL = "agentdojo_benign_payload"
 for path, injected in ((sys.argv[2], False), (sys.argv[3], True)):
     config = copy.deepcopy(base)
     config["execution"]["hermes"]["defense_mode"] = "replay"
     config["agentdojo"]["injection_enabled"] = injected
     config["agentdojo"]["standard_injection_enabled"] = False
     config["agentdojo"]["skill_injection_enabled"] = injected
+    skills = config.setdefault("skills", {})
+    enabled = [item for item in skills.get("enabled") or [] if item != BENIGN_SKILL]
+    skills["enabled"] = enabled if injected else enabled + [BENIGN_SKILL]
     Path(path).write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
 PY
 
@@ -147,6 +154,16 @@ for directory in map(Path, sys.argv[1:3]):
 if len(keys) != 1:
     raise SystemExit(f"Training batches contain different tasks: {sorted(keys)}")
 print(f"Training task key: {next(iter(keys))}")
+# Both conditions stage a skill; report how often the agent actually read it.
+for label, directory in (("clean", sys.argv[1]), ("injected", sys.argv[2])):
+    exposures = list(Path(directory).rglob("skills.exposure.json"))
+    read = sum(
+        any(skill.get("read_attempted") for skill in json.loads(path.read_text(encoding="utf-8")))
+        for path in exposures
+    )
+    print(f"Skill read in {read}/{len(exposures)} {label} runs")
+    if not read:
+        print(f"WARNING: no {label} run read its skill; the conditions are not comparable")
 PY
 
 echo "Training ProbGuard model"
