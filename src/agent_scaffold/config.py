@@ -171,6 +171,10 @@ class DriftConfig:
     profile: str = "default"
     # Append upstream's AgentDojo persona (ENVIRONMENT_GUIDELINES) to plan generation.
     environment_guidelines: bool = False
+    # Planner role clarification + one retry for models that answer the plan
+    # prompt as the executing agent. auto: on unless the planner model is the
+    # one upstream evaluated (gpt-4o-mini-2024-07-18); on / off force it.
+    planner_role_clarification: str = "auto"
     provider: str = ""
     model: str = ""
     temperature: float | None = None
@@ -1619,6 +1623,9 @@ def load_config(path: str | Path) -> AppConfig:
             mask_limitation=int(drift_raw.get("mask_limitation", 1)),
             profile=str(drift_raw.get("profile", "default")).lower(),
             environment_guidelines=bool(drift_raw.get("environment_guidelines", False)),
+            planner_role_clarification=str(
+                drift_raw.get("planner_role_clarification", "auto")
+            ).lower(),
             provider=str(drift_llm.get("provider", "") or "").lower(),
             model=str(drift_llm.get("model", "") or ""),
             temperature=(float(drift_llm["temperature"]) if "temperature" in drift_llm else None),
@@ -1631,6 +1638,8 @@ def load_config(path: str | Path) -> AppConfig:
             raise ValueError("drift.mode must be one of: block, warn, monitor")
         if drift.max_revisions < 0 or drift.mask_limitation < 0:
             raise ValueError("drift.max_revisions and drift.mask_limitation must be nonnegative")
+        if drift.planner_role_clarification not in {"auto", "on", "off"}:
+            raise ValueError("drift.planner_role_clarification must be one of: auto, on, off")
         if drift.profile not in {"default", "asb"}:
             raise ValueError(
                 "drift.profile must be one of: default, asb (benchmark-dependent auto was removed)"

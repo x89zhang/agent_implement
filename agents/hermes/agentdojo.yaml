@@ -232,7 +232,9 @@ clawsentry:
   fail_closed: true
   base_url: http://127.0.0.1:8080
   api_key_env: CS_AUTH_TOKEN
-  timeout_seconds: 5
+  # gpt-5.6-luna L2 calls often exceed upstream's ~4.5 s adapter deadline
+  # (a3s_adapter.py:182); a longer deadline is a recorded deviation.
+  timeout_seconds: 30
   decision_tier: L1
   observe_tool_result: true
   # Wait (bounded) for the gateway's background post-action finding.

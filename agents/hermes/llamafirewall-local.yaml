@@ -1,0 +1,21 @@
+# LlamaFirewall AlignmentCheck on a self-hosted judge, for supplement replays:
+#
+#   scripts/serve_llamafirewall_judge.sh            # after TS-Guard/AgentDoG are stopped
+#   ./scripts/supplement_hermes_monitors.sh <all_monitors dir> \
+#     --methods llamafirewall --all-runs \
+#     --method-config agents/hermes/llamafirewall-local.yaml
+#
+# Upstream's AlignmentCheck runs Llama-4-Maverick on Together AI; a local
+# judge is a protocol deviation. Keep model below equal to the served name.
+
+llamafirewall:
+  enabled: false
+  mode: monitor
+  use_case: ''
+  scanners: {}
+  factory: agent_scaffold.llamafirewall.local:alignment_check
+  factory_kwargs:
+    base_url: http://127.0.0.1:8003/v1
+    model: alignment-judge
+    temperature: 0.0
+  fail_closed: false

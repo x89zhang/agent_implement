@@ -39,12 +39,17 @@ from .prompts import (
     ENVIRONMENT_GUIDELINES,
     EXECUTION_GUIDELINES_PROMPT,
     INJECTION_DETECTION_PROMPT,
+    PLANNER_RETRY_NOTE,
+    PLANNER_ROLE_CLARIFICATION,
     PRIVILEGE_PROMPT,
 )
 
 
 # client.py:139-141: llm_run's answer when the model call fails.
 _FAILED_GENERATION = "FAILED GENERATION."
+# The model of upstream's published runs (runs/gpt-4o-mini-2024-07-18, the
+# utils.py --model default).
+UPSTREAM_PLANNER_MODEL = "gpt-4o-mini-2024-07-18"
 
 
 class DriftMiddleware(Middleware):
@@ -441,8 +446,17 @@ class DriftMiddleware(Middleware):
         # then for every benchmark alike.
         if self.settings.environment_guidelines:
             system += f"\n\n<environment_setup>\n\n{ENVIRONMENT_GUIDELINES}\n\n</environment_setup>"
+        clarify = self._clarify_planner_role()
+        user = self._generation_task(state)
+        if clarify:
+            user = f"{user}\n\n{PLANNER_ROLE_CLARIFICATION}"
+        attempts: list[str] = []
         try:
-            completion = self._complete(state, system, self._generation_task(state))
+            completion = self._complete(state, system, user)
+            attempts.append(completion)
+            if clarify and not parse_constraints(completion)[0]:
+                completion = self._complete(state, system, f"{user}\n\n{PLANNER_RETRY_NOTE}")
+                attempts.append(completion)
         except Exception as exc:
             error = f"DRIFT constraint generation failed: {type(exc).__name__}: {exc}"
         trajectory, checklist = parse_constraints(completion)
@@ -466,6 +480,9 @@ class DriftMiddleware(Middleware):
                 "trajectory": trajectory,
                 "parameter_checklist": checklist,
                 "raw_completion": completion,
+                "planner_model": self._planner_model(),
+                "planner_role_clarification": clarify,
+                "attempts": attempts,
                 "error": error,
                 "upstream_revision": UPSTREAM_REVISION,
             },
@@ -474,6 +491,16 @@ class DriftMiddleware(Middleware):
         state.setdefault("trace", []).append(event)
         self._artifact(state, "drift_constraints.json", event)
         return error
+
+    def _planner_model(self) -> str:
+        return str(self.settings.model or self.cfg.llm.model or "")
+
+    def _clarify_planner_role(self) -> bool:
+        setting = self.settings.planner_role_clarification
+        if setting == "auto":
+            # Upstream's own runs use this model unmodified.
+            return self._planner_model() != UPSTREAM_PLANNER_MODEL
+        return setting == "on"
 
     def _output_calls(
         self, state: dict[str, Any], name: str, arguments: Any

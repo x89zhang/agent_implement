@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 from uuid import uuid4
@@ -15,6 +16,9 @@ from .upstream import fallback_decision
 # Post-action tiers upstream turns into an indirect-injection contamination
 # alert (supervision_gateway.py:677-711).
 _FINDING_TIERS = {"escalate", "emergency"}
+# The decision record is stored around the SyncDecision response; poll briefly.
+_L2_RECORD_WAIT_SECONDS = 2.0
+_MAX_L2_TRACE_CHARS = 4000
 
 
 class ClawSentryMiddleware(Middleware):
@@ -136,6 +140,8 @@ class ClawSentryMiddleware(Middleware):
             (event["verdict"] in {"block", "defer"} or (event["verdict"] is None and self.settings.fail_closed))
         )
         event["latency_ms"] = round((time.monotonic() - started) * 1000)
+        if phase == "pre_action" and decision is not None and not event["error"]:
+            event["l2"] = self._l2_outcome(session_id, event_id)
         event["mode"] = self.settings.mode
         state["_last_clawsentry_decision"] = event
         state.setdefault("clawsentry_events", []).append(event)
@@ -146,6 +152,48 @@ class ClawSentryMiddleware(Middleware):
             "event_count": len(state["clawsentry_events"]), "last_decision": event,
         }
         return event
+
+    def _l2_outcome(self, session_id: str, event_id: str) -> dict[str, Any]:
+        """The gateway's stored L2 outcome for one decision.
+
+        SyncDecision returns only ``actual_tier``, which stays "L2" even when
+        the analyzer timed out or failed and fell back to L1. The stored risk
+        snapshot's ``l2_l3_summary`` says what happened (completed /
+        degraded_to_l1 / fallback_to_l1, with the analyzer's reasons). A lookup
+        failure is noted here and never marks the verdict as a monitor error.
+        """
+        deadline = time.monotonic() + _L2_RECORD_WAIT_SECONDS
+        error = ""
+        while True:
+            try:
+                record = next(
+                    (item for item in reversed(self.client.session_records(session_id))
+                     if (item.get("event") or {}).get("event_id") == event_id),
+                    None,
+                )
+                error = ""
+            except Exception as exc:
+                record, error = None, f"{type(exc).__name__}: {exc}"
+            if record is not None or time.monotonic() >= deadline:
+                break
+            time.sleep(0.05)
+        if record is None:
+            return {"lookup": f"error: {error}" if error else "not_found"}
+        snapshot = record.get("risk_snapshot") or {}
+        summary = snapshot.get("l2_l3_summary") or {}
+        trace = record.get("l3_trace")
+        rendered = json.dumps(trace, ensure_ascii=False, default=str) if trace else ""
+        return {
+            "lookup": "recorded",
+            "status": summary.get("status"),
+            "actual_tier": summary.get("actual_tier"),
+            "analyzer_id": summary.get("analyzer_id"),
+            "reasons": summary.get("reasons") or [],
+            "final_risk_level": snapshot.get("risk_level"),
+            "classified_by": snapshot.get("classified_by"),
+            "summary": summary,
+            "trace": rendered[:_MAX_L2_TRACE_CHARS] if rendered else None,
+        }
 
     def _record_post_action_finding(self, state: dict[str, Any], event: dict[str, Any]) -> None:
         """Attach the gateway's background post-action finding to ``event``.

@@ -156,6 +156,21 @@ class ClawSentryClient:
         }
         return decision
 
+    def session_records(self, session_id: str) -> list[dict[str, Any]]:
+        """Stored decision records of a session (GET /report/session/{id}).
+
+        Each record carries the gateway's risk snapshot, whose
+        ``l2_l3_summary`` holds the L2 outcome that SyncDecision omits.
+        """
+        request = Request(
+            f"{self._url()}/report/session/{quote(session_id, safe='')}?limit=1000",
+            headers=self._headers(), method="GET",
+        )
+        with urlopen(request, timeout=self.settings.timeout_seconds) as response:
+            answer = json.load(response)
+        records = answer.get("records") if isinstance(answer, dict) else None
+        return [item for item in records or [] if isinstance(item, dict)]
+
     def post_action_scores(self, session_id: str) -> list[dict[str, Any]]:
         """Background post-action findings (GET /report/session/{id}/post-action)."""
         request = Request(

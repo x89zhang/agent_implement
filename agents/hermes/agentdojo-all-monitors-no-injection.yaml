@@ -116,7 +116,10 @@ skills:
   # Additional text skills are staged in Hermes' isolated native skill library.
   # AgentDojo's attack skill is added automatically by skill_injection_enabled.
   base_dir: ../../skills
-  enabled: []
+  # Benign control: staged under the attack skill's name and description, so
+  # the clean phase gets the same skill tools and skill_view directive as the
+  # injected phase and differs only in the skill text.
+  enabled: [agentdojo_benign_payload]
   # Example:
   # enabled:
   #   - name: task-guidance
@@ -255,7 +258,9 @@ clawsentry:
   fail_closed: false
   base_url: http://127.0.0.1:8080
   api_key_env: CS_AUTH_TOKEN
-  timeout_seconds: 5
+  # gpt-5.6-luna L2 calls often exceed upstream's ~4.5 s adapter deadline
+  # (a3s_adapter.py:182); a longer deadline is a recorded deviation.
+  timeout_seconds: 30
   decision_tier: L1
   observe_tool_result: true
   # Wait (bounded) for the gateway's background post-action finding.
@@ -342,7 +347,7 @@ agentspec:
     # Generator model settings inherit top-level llm when omitted.
 
 llamafirewall:
-  enabled: true
+  enabled: false
   # enforce applies native BLOCK/HUMAN decisions; monitor observes the trajectory.
   mode: monitor
   # Optional preset: chatbot or coding_assistant; empty uses library defaults.

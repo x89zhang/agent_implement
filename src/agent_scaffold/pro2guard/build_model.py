@@ -30,6 +30,8 @@ from pathlib import Path
 from typing import Any
 
 from .abstraction import FINISH, PredicateAbstraction, is_behavior_step, step_observation
+from .calibration import calibrate_threshold, run_max_probability
+from .model import JsonDTMC
 from .generator import (
     ABSTRACTION_FILE,
     INDEX_FILE,
@@ -194,14 +196,31 @@ def build_models(
     exclude: list[str] | None = None,
     regenerate: bool = False,
     llm: Any | None = None,
+    calibration: list[str] | None = None,
+    target_fpr: float = 0.05,
+    bound: int = -1,
 ) -> dict[str, Any]:
-    """Group lifecycles by task key and write one model directory per group."""
+    """Group lifecycles by task key and write one model directory per group.
+
+    ``calibration`` names held-out clean runs (never learned from); each
+    model then stores the threshold meeting ``target_fpr`` on them.
+    """
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for path in find_lifecycles(inputs, exclude):
+    training_paths = find_lifecycles(inputs, exclude)
+    for path in training_paths:
         record = read_lifecycle(path)
         groups[task_key(record["task"], record["tools"], granularity)].append(record)
+    held_out: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    if calibration:
+        calibration_paths = find_lifecycles(calibration)
+        overlap = set(calibration_paths) & set(training_paths)
+        if overlap:
+            raise ValueError(f"Calibration runs must be held out of training: {sorted(map(str, overlap))[:3]}")
+        for path in calibration_paths:
+            record = read_lifecycle(path)
+            held_out[task_key(record["task"], record["tools"], granularity)].append(record)
     if not groups:
         raise ValueError("No guard_lifecycle.jsonl files matched the supplied inputs")
     index_path = output / INDEX_FILE
@@ -250,6 +269,18 @@ def build_models(
         })
         (model_dir / MODEL_FILE).write_text(json.dumps(model, ensure_ascii=False, indent=2), encoding="utf-8")
         export_dtmc_to_prism(model, model_dir / PRISM_FILE)
+        if held_out.get(key):
+            dtmc = JsonDTMC(model_dir / MODEL_FILE)
+            maxima = [
+                run_max_probability(abstraction, dtmc, set(unsafe), record["steps"], bound)
+                for record in held_out[key]
+            ]
+            model["calibration"] = {
+                **calibrate_threshold(maxima, target_fpr),
+                "bound": bound,
+                "sources": sorted(record["path"] for record in held_out[key]),
+            }
+            (model_dir / MODEL_FILE).write_text(json.dumps(model, ensure_ascii=False, indent=2), encoding="utf-8")
         index["models"][key] = {
             "dir": directory_name,
             "task_preview": task[:200],
@@ -257,6 +288,9 @@ def build_models(
             "state_count": len(model["states"]),
             "unsafe_state_count": len(unsafe),
         }
+        if "calibration" in model:
+            index["models"][key]["calibrated_threshold"] = model["calibration"]["threshold"]
+            index["models"][key]["calibration_runs"] = model["calibration"]["runs"]
         summary[key] = index["models"][key]
     index_path.write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
     return summary
@@ -273,6 +307,10 @@ def main() -> None:
     parser.add_argument("--exclude", action="append", default=[],
                         help="Glob of runs to leave out, e.g. the evaluation split.")
     parser.add_argument("--regenerate", action="store_true", help="Regenerate existing abstractions.")
+    parser.add_argument("--calibration", action="append", default=[],
+                        help="Held-out clean runs (dirs/globs) for threshold calibration; never learned from.")
+    parser.add_argument("--target-fpr", type=float, default=0.05,
+                        help="Highest share of calibration runs allowed to alarm (default 0.05).")
     args = parser.parse_args()
 
     from ..config import load_config
@@ -282,10 +320,15 @@ def main() -> None:
         cfg, args.traces, args.output, alpha=args.alpha,
         granularity=args.granularity or cfg.pro2guard.granularity,
         exclude=args.exclude, regenerate=args.regenerate,
+        calibration=args.calibration, target_fpr=args.target_fpr, bound=cfg.pro2guard.bound,
     )
     for key, entry in summary.items():
+        calibrated = (
+            f", calibrated threshold {entry['calibrated_threshold']:.6g} on {entry['calibration_runs']} held-out runs"
+            if "calibrated_threshold" in entry else ""
+        )
         print(f"{key}: {entry['trace_count']} traces, {entry['state_count']} states, "
-              f"{entry['unsafe_state_count']} unsafe states")
+              f"{entry['unsafe_state_count']} unsafe states{calibrated}")
 
 
 if __name__ == "__main__":

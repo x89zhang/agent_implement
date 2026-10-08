@@ -16,6 +16,11 @@ from ..tool_results import unwrap_hermes_result
 # (custom_check_scanner.py: api.together.xyz, TOGETHER_API_KEY).
 _TOGETHER_SCANNERS = {"agent_alignment", "pii_detection"}
 _TOGETHER_KEY_ENV = "TOGETHER_API_KEY"
+# CustomCheckScanner swallows every LLM failure and AlignmentCheck substitutes
+# a "compromised" verdict with status SUCCESS (alignmentcheck_scanner.py
+# _get_default_error_response). An unreachable or failing judge would then
+# look like a detection; such scans are recorded as monitor errors instead.
+_ALIGNMENT_ERROR_REASON = "Observation: Error occurred during evaluation\n"
 
 
 def guard_react_actions(turn: Any, manager: Any, state: dict[str, Any]) -> Any:
@@ -267,6 +272,9 @@ class LlamaFirewallMiddleware(Middleware):
                 "status": self._enum_value(native.status),
                 "mode": self.options.mode,
             }
+            if event["reason"].startswith(_ALIGNMENT_ERROR_REASON):
+                event["status"] = "error"
+                event["error"] = "AlignmentCheck judge call failed; see the scanner log"
         except Exception as exc:
             event = {
                 "phase": phase,

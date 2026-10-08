@@ -158,11 +158,53 @@ _REMOVED_PRO2GUARD_FIELDS = (
 )
 
 
-def _replay_config(config_path: Path, attempt: Path, config: dict) -> tuple[Path, list[str]]:
+_PATH_KEYS = {"path", "policy", "plugin_config", "model_path", "dtmc_path"}
+# Values the batch runner sets per batch (backends/container.py
+# STATE_PATH_KEYS) or per image; an override keeps the saved ones.
+_SAVED_KEYS = ("memory_path", "router_cache_path", "source_root", "detection_root", "python_executable")
+
+
+def _method_sections(path: Path, methods: list[str]) -> dict[str, dict]:
+    """Selected methods' sections from a YAML, with paths mapped as in the container.
+
+    Relative path values resolve against the YAML's directory, then the
+    repository root, as backends/container.py does when it writes
+    hermes.container.yaml.
+    """
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    base = path.resolve().parent
+
+    def remap(value, key=""):
+        if isinstance(value, dict):
+            return {k: remap(v, str(k)) for k, v in value.items()}
+        if isinstance(value, list):
+            return [remap(v, key) for v in value]
+        if not (isinstance(value, str) and value and (key in _PATH_KEYS or key.endswith(("_path", "_dir", "_file")))):
+            return value
+        candidate = Path(value).expanduser()
+        if not candidate.is_absolute():
+            candidate = base / value if (base / value).exists() else REPO / value
+        if not candidate.exists():
+            return value
+        try:
+            return _workspace_path(candidate)
+        except ValueError:
+            raise ValueError(f"{path}: {key}={value!r} is outside the workspace and is not mounted in replays")
+
+    sections = {}
+    for method in methods:
+        section = raw.get(method)
+        if not isinstance(section, dict):
+            raise ValueError(f"{path} has no {method}: section")
+        sections[method] = remap(section)
+    return sections
+
+
+def _replay_config(config_path: Path, attempt: Path, config: dict, force: bool = False) -> tuple[Path, list[str]]:
     """Load old saved configs without changing the benchmark's original YAML."""
     pro2guard = config.get("pro2guard") or {}
     removed = [name for name in _REMOVED_PRO2GUARD_FIELDS if name in pro2guard]
-    if not removed:
+    if not removed and not force:
         return config_path, []
     updated = dict(config)
     updated["pro2guard"] = {key: value for key, value in pro2guard.items() if key not in removed}
@@ -297,6 +339,11 @@ def main() -> int:
     parser.add_argument("--image", default="", help="exact prebuilt Docker image; default newest matching base image")
     parser.add_argument("--timeout", type=int, default=1800, help="seconds per method and phase (default: 1800)")
     parser.add_argument("--dry-run", action="store_true", help="print planned replays without Docker or writes")
+    parser.add_argument(
+        "--method-config", type=Path, default=None,
+        help="YAML whose sections replace each selected method's saved config "
+             "(e.g. the current agents/hermes config); other settings stay as saved",
+    )
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--config", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--phase", type=Path, help=argparse.SUPPRESS)
@@ -311,6 +358,7 @@ def main() -> int:
         parser.error("path and --methods are required")
     if args.timeout < 1 or any(index < 1 for index in args.run or []):
         parser.error("--timeout and --run must be positive")
+    overrides = _method_sections(args.method_config, list(dict.fromkeys(args.methods))) if args.method_config else {}
     batches = _resolve_batches(args.path, args.batch)
     attempt_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid.uuid4().hex[:8]
     selected_runs = set(args.run or [])
@@ -351,10 +399,16 @@ def main() -> int:
     for batch, kind, run, phase, method in planned:
         config_path = run / "hermes.container.yaml"
         config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        if method in overrides:
+            saved = config.get(method) if isinstance(config.get(method), dict) else {}
+            section = {**overrides[method], **{k: saved[k] for k in _SAVED_KEYS if k in saved}}
+            config = {**config, method: section}
         image = _image(config, args.image)
         attempt = phase / "defense_supplements" / attempt_id / method
         attempt.mkdir(parents=True, exist_ok=False)
-        replay_config, removed_fields = _replay_config(config_path, attempt, config)
+        replay_config, removed_fields = _replay_config(
+            config_path, attempt, config, force=method in overrides
+        )
         print(f"replaying {batch.name}/{run.name}/{phase.name}/{method} using {image}", flush=True)
         try:
             code, diagnostic = _replay(run, phase, method, attempt, image, args.timeout, config, replay_config)
@@ -382,6 +436,10 @@ def main() -> int:
             "config_sha256": hashlib.sha256(config_path.read_bytes()).hexdigest(),
             "replay_config_sha256": hashlib.sha256(replay_config.read_bytes()).hexdigest(),
             "removed_legacy_fields": [f"pro2guard.{name}" for name in removed_fields],
+            "method_config": (
+                {"path": str(args.method_config), "section": config[method]}
+                if method in overrides else None
+            ),
             "lifecycle_sha256": hashlib.sha256((phase / "guard_lifecycle.jsonl").read_bytes()).hexdigest(),
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
