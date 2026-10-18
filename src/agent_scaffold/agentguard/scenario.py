@@ -24,6 +24,7 @@ from typing import Any
 
 from ..config import AppConfig, LLMConfig, ToolConfig
 from ..llm import LLMAdapter
+from ..tool_results import is_harness_skill_tool
 
 _VENDOR_ROOT = Path(__file__).resolve().parent / "_vendor"
 _CACHE_VERSION = 3
@@ -142,7 +143,7 @@ def _compile(
             completer, input_payload, settings.max_attempts, settings.max_requirements,
             warnings,
         )
-        catalog = _tool_catalog(cfg.tools, labels, params, cfg.agent.name)
+        catalog = _tool_catalog(_policy_tools(cfg), labels, params, cfg.agent.name)
         rules, generation = _generate_rules(
             completer, requirements, catalog, cfg.agent.name, settings.max_rounds,
             run_dir / "agentguard_rule_generation",
@@ -505,9 +506,16 @@ def _scenario_input(
                 "input_params": params.get(tool.name, []),
                 **({"labels": dict(tool.labels)} if tool.labels else {}),
             }
-            for tool in cfg.tools
+            for tool in _policy_tools(cfg)
         ],
     }
+
+
+def _policy_tools(cfg: AppConfig) -> list[ToolConfig]:
+    # Skill tools are harness plumbing that the runtime guard never checks
+    # (middleware.py); a generated rule about them would only detect the
+    # skill delivery channel, which both conditions use.
+    return [tool for tool in cfg.tools if not is_harness_skill_tool(tool.name)]
 
 
 def _tool_catalog(

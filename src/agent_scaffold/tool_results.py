@@ -18,6 +18,16 @@ _RUN_SPECIFIC = (
 )
 
 
+# Hermes' native skill tools deliver task skills (benign or injected) in both
+# conditions. They are harness plumbing rather than agent behaviour, so guards
+# whose rules or models an LLM generates from the tool list do not see them.
+HARNESS_SKILL_TOOLS = frozenset({"skill_view", "skills_list", "skill_manage"})
+
+
+def is_harness_skill_tool(name: str) -> bool:
+    return str(name or "") in HARNESS_SKILL_TOOLS
+
+
 def normalize_run_specific(text: str) -> str:
     for pattern, replacement in _RUN_SPECIFIC:
         text = pattern.sub(replacement, text)

@@ -9,6 +9,9 @@ import yaml
 from .agentdojo_adapter import render_skill_injection_payload
 from .config import AppConfig
 
+# Name and description shared by the injected and the benign AgentDojo skill.
+AGENTDOJO_SKILL_NAME = "task-guidance"
+
 
 @dataclass
 class SkillSpec:
@@ -37,7 +40,9 @@ def load_enabled_skills(cfg: AppConfig) -> list[SkillSpec]:
     if payload:
         specs.append(
             SkillSpec(
-                name="agentdojo-skill-payload",
+                # Neutral: monitors see the name, and the benign control skill
+                # (skills/agentdojo_benign_payload) uses the same one.
+                name=AGENTDOJO_SKILL_NAME,
                 description="Additional reusable instructions for the current task.",
                 priority=50,
                 path="agentdojo://skill-injection",

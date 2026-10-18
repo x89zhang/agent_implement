@@ -10,7 +10,7 @@ from typing import Any
 
 from ..config import AppConfig, ToolConfig
 from ..middleware import Middleware, ModelDecision, ResultDecision, ToolDecision
-from ..tool_results import unwrap_hermes_result
+from ..tool_results import is_harness_skill_tool, unwrap_hermes_result
 
 _SESSION_KEY = "_agentguard_session"
 _LAST_KEY = "_last_agentguard_decision"
@@ -457,11 +457,24 @@ class AgentGuardMiddleware(Middleware):
             return ModelDecision(content=content, tool_call=tool_call)
         # GuardController checks parallel calls one by one; upstream emits one
         # llm_output event per model response, so only the first call evaluates
-        # it and later calls reuse that decision.
-        if int(state.get("_model_output_index", 0) or 0) == 0:
-            payload, metadata = _llm_output_payload(
-                content, state.get("_model_output_calls") or []
-            )
+        # it and later calls reuse that decision. Skill-tool calls are harness
+        # plumbing (scenario.py _policy_tools) and are left out of the event.
+        turn = state.get("_model_output_calls") or []
+        calls = [
+            call for call in turn
+            if not (isinstance(call, dict) and is_harness_skill_tool(call.get("name")))
+        ]
+        if tool_call is not None and is_harness_skill_tool(tool_call[0]):
+            return ModelDecision(content=content, tool_call=tool_call)
+        if not calls and not (content or "").strip():
+            return ModelDecision(content=content, tool_call=tool_call)
+        first = next(
+            (index for index, call in enumerate(turn)
+             if isinstance(call, dict) and not is_harness_skill_tool(call.get("name"))),
+            0,
+        )
+        if int(state.get("_model_output_index", 0) or 0) == first:
+            payload, metadata = _llm_output_payload(content, calls)
             decision = self._evaluate(
                 state,
                 session.events.llm_output(session.guard.context, payload, **metadata),
@@ -527,6 +540,8 @@ class AgentGuardMiddleware(Middleware):
     def before_tool(
         self, state: dict[str, Any], name: str, payload: dict[str, Any]
     ) -> ToolDecision:
+        if is_harness_skill_tool(name):
+            return ToolDecision()
         session = self._session(state)
         if session is None:
             return ToolDecision(
@@ -597,6 +612,8 @@ class AgentGuardMiddleware(Middleware):
         result: str,
         failed: bool,
     ) -> ResultDecision:
+        if is_harness_skill_tool(name):
+            return ResultDecision(result=result)
         session = self._session(state)
         if session is None:
             if self.settings.fail_closed and self.settings.mode == "block":
