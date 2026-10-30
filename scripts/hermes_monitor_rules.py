@@ -19,7 +19,7 @@ from pathlib import Path
 METHODS = (
     "aegis", "progent", "drift", "agrail", "rope", "melon", "airguard",
     "clawsentry", "janus", "stepguard", "safeagent", "adr", "pro2guard",
-    "agentspec", "llamafirewall", "toolsafe", "agentdog", "agentguard",
+    "agentspec", "llamafirewall", "toolsafe", "piguard", "agentdog", "agentguard",
 )
 
 
@@ -105,7 +105,7 @@ def _alarm(method: str, item: dict) -> bool:
         # The L1->L2->L3 cascade verdict; runs without it have only L1.
         verdict = item.get("cascade_decision") or item.get("gateway_decision")
         return verdict in {"block", "pending"}
-    if method in {"adr", "agrail", "airguard", "janus", "stepguard"}:
+    if method in {"adr", "agrail", "airguard", "janus", "stepguard", "piguard"}:
         return item.get("flagged") is True
     if method == "clawsentry":
         # Pre-action verdicts, plus the gateway's background post-action

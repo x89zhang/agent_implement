@@ -78,6 +78,21 @@ RUN if [ "$INSTALL_CLAWSENTRY" = "true" ]; then \
       && /opt/clawsentry-venv/bin/pip install --no-cache-dir -r /tmp/requirements-clawsentry.txt; \
     fi
 
+# PIGuard (ACL 2025): the authors' released checkpoint, loaded with their
+# model-card code. Isolated venv with upstream's pinned inference versions,
+# CPU-only torch; the checkpoint is fetched at a pinned revision so runs are
+# offline and reproducible.
+ARG INSTALL_PIGUARD=false
+ARG PIGUARD_REVISION=dd78b24e330193a22d2293ac66922dd4f982f563
+COPY requirements-piguard.txt /tmp/requirements-piguard.txt
+RUN if [ "$INSTALL_PIGUARD" = "true" ]; then \
+      python -m venv /opt/piguard-venv \
+      && /opt/piguard-venv/bin/pip install --no-cache-dir torch==2.4.0 --index-url https://download.pytorch.org/whl/cpu \
+      && /opt/piguard-venv/bin/pip install --no-cache-dir -r /tmp/requirements-piguard.txt \
+      && /opt/piguard-venv/bin/python -c "from huggingface_hub import snapshot_download; snapshot_download('leolee99/PIGuard', revision='$PIGUARD_REVISION', local_dir='/opt/piguard/model')" \
+      && echo "$PIGUARD_REVISION" > /opt/piguard/REVISION; \
+    fi
+
 # ADR Detection is a research artifact; install only its detector runtime in
 # an isolated environment, never its full benchmark dependency set.
 ARG INSTALL_ADR=false

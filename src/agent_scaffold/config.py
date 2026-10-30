@@ -175,6 +175,11 @@ class DriftConfig:
     # prompt as the executing agent. auto: on unless the planner model is the
     # one upstream evaluated (gpt-4o-mini-2024-07-18); on / off force it.
     planner_role_clarification: str = "auto"
+    # Upstream implementation error (not the method): node_check compares a
+    # multi-call output with the checklist from len(achieved) - 1, so parallel
+    # calls are checked against later nodes and refused. true checks each call
+    # against its own node; false reproduces upstream's code exactly.
+    parallel_checklist_fix: bool = True
     provider: str = ""
     model: str = ""
     temperature: float | None = None
@@ -571,6 +576,27 @@ class ToolSafeConfig:
 
 
 @dataclass
+class PIGuardConfig:
+    """PIGuard (ACL 2025) prompt-injection classifier over runtime content.
+
+    The released checkpoint runs in an isolated interpreter (Dockerfile
+    INSTALL_PIGUARD); its verdict is the model's top label, as upstream.
+    """
+
+    enabled: bool = False
+    # monitor records verdicts; block withholds flagged tool outputs.
+    mode: str = "monitor"
+    scan_user_input: bool = True
+    scan_tool_outputs: bool = True
+    python_executable: str = "/opt/piguard-venv/bin/python"
+    model_path: str = "/opt/piguard/model"
+    # Upstream inference_examples.py: truncation=True, max_length=512.
+    max_length: int = 512
+    timeout_seconds: float = 120.0
+    fail_closed: bool = False
+
+
+@dataclass
 class AgentDoGConfig:
     enabled: bool = False
     mode: str = "diagnose"
@@ -792,6 +818,7 @@ class AppConfig:
     agentspec: AgentSpecConfig = field(default_factory=AgentSpecConfig)
     llamafirewall: LlamaFirewallConfig = field(default_factory=LlamaFirewallConfig)
     toolsafe: ToolSafeConfig = field(default_factory=ToolSafeConfig)
+    piguard: PIGuardConfig = field(default_factory=PIGuardConfig)
     agentdog: AgentDoGConfig = field(default_factory=AgentDoGConfig)
     agentguard: AgentGuardConfig = field(default_factory=AgentGuardConfig)
     agentsight: AgentSightConfig = field(default_factory=AgentSightConfig)
@@ -1626,6 +1653,7 @@ def load_config(path: str | Path) -> AppConfig:
             planner_role_clarification=str(
                 drift_raw.get("planner_role_clarification", "auto")
             ).lower(),
+            parallel_checklist_fix=bool(drift_raw.get("parallel_checklist_fix", True)),
             provider=str(drift_llm.get("provider", "") or "").lower(),
             model=str(drift_llm.get("model", "") or ""),
             temperature=(float(drift_llm["temperature"]) if "temperature" in drift_llm else None),
@@ -2294,6 +2322,29 @@ def load_config(path: str | Path) -> AppConfig:
     else:
         toolsafe = ToolSafeConfig()
 
+    piguard_raw = raw.get("piguard", {}) or {}
+    if isinstance(piguard_raw, bool):
+        piguard = PIGuardConfig(enabled=piguard_raw)
+    elif isinstance(piguard_raw, dict):
+        defaults = PIGuardConfig()
+        piguard = PIGuardConfig(
+            enabled=bool(piguard_raw.get("enabled", False)),
+            mode=str(piguard_raw.get("mode", defaults.mode)).lower(),
+            scan_user_input=bool(piguard_raw.get("scan_user_input", True)),
+            scan_tool_outputs=bool(piguard_raw.get("scan_tool_outputs", True)),
+            python_executable=str(piguard_raw.get("python_executable") or defaults.python_executable),
+            model_path=str(piguard_raw.get("model_path") or defaults.model_path),
+            max_length=int(piguard_raw.get("max_length", defaults.max_length)),
+            timeout_seconds=float(piguard_raw.get("timeout_seconds", defaults.timeout_seconds)),
+            fail_closed=bool(piguard_raw.get("fail_closed", False)),
+        )
+        if piguard.mode not in {"monitor", "block"}:
+            raise ValueError("piguard.mode must be one of: monitor, block")
+        if piguard.max_length < 1 or piguard.timeout_seconds <= 0:
+            raise ValueError("piguard.max_length and piguard.timeout_seconds must be positive")
+    else:
+        piguard = PIGuardConfig()
+
     agentdog_raw = raw.get("agentdog", {}) or {}
     if isinstance(agentdog_raw, bool):
         agentdog = AgentDoGConfig(enabled=agentdog_raw)
@@ -2618,6 +2669,7 @@ def load_config(path: str | Path) -> AppConfig:
         agentspec=agentspec,
         llamafirewall=llamafirewall,
         toolsafe=toolsafe,
+        piguard=piguard,
         agentdog=agentdog,
         agentguard=agentguard,
         agentsight=agentsight,

@@ -1,0 +1,5 @@
+# Mixed Banking pairs from the 2026-10-27 monitor-off screen (5 injected runs
+# each), for scripts/complete_hermes_screen_pairs.sh.
+banking user_task_0_injection_3 jobs/screen/agentdojo_banking_user_task_0_injection_3/20261027T211508Z_hermes-agentdojo_batch
+banking user_task_13_injection_7 jobs/screen/agentdojo_banking_user_task_13_injection_7/20261027T213107Z_hermes-agentdojo_batch
+banking user_task_15_injection_4 jobs/screen/agentdojo_banking_user_task_15_injection_4/20261027T210836Z_hermes-agentdojo_batch

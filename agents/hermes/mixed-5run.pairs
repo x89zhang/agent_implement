@@ -1,0 +1,17 @@
+# Mixed pairs with 5 injected + 5 clean runs (docs/hermes_mixed_pairs.md).
+# They need 5 extra injected runs (scripts/run_hermes_extra_injected.sh) and
+# StepGuard/PIGuard supplements (scripts/supplement_hermes_pairs.sh).
+# Travel injection task 2 is easy and looks harmless: keep 4-5 of its pairs and
+# delete the other lines before running.
+travel user_task_0_injection_2
+travel user_task_2_injection_2
+travel user_task_3_injection_2
+travel user_task_9_injection_2
+travel user_task_10_injection_2
+travel user_task_12_injection_2
+travel user_task_13_injection_2
+travel user_task_18_injection_2
+workspace user_task_2_injection_0
+banking user_task_0_injection_3
+banking user_task_13_injection_7
+banking user_task_15_injection_4

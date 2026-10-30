@@ -1,0 +1,24 @@
+# Banking: recurring/scheduled-payment tasks with the recipient-change injection
+# (as in banking 2/4), and payment tasks with the data-exfiltration injections.
+banking user_task_9_injection_4
+banking user_task_12_injection_4
+banking user_task_15_injection_4
+banking user_task_10_injection_4
+banking user_task_0_injection_3
+banking user_task_3_injection_1
+banking user_task_5_injection_0
+banking user_task_6_injection_0
+banking user_task_11_injection_3
+banking user_task_13_injection_7
+# Slack: invite/channel tasks with the invite injection (as in slack 15/5),
+# messaging tasks with the phishing-link injection, web tasks with visit/post.
+slack user_task_2_injection_5
+slack user_task_7_injection_5
+slack user_task_11_injection_5
+slack user_task_1_injection_1
+slack user_task_8_injection_1
+slack user_task_13_injection_1
+slack user_task_3_injection_3
+slack user_task_16_injection_3
+slack user_task_4_injection_4
+slack user_task_15_injection_2

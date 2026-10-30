@@ -96,6 +96,18 @@ def match_in_memory_bool(text):
 _FENCE = re.compile(r"```([A-Za-z0-9_+.-]*)")
 
 
+def _json_shaped(value):
+    # A literal can be a set or tuple (e.g. {"a", "b"}), which JSON cannot
+    # store; read them as the JSON array they stand for.
+    if isinstance(value, dict):
+        return {key: _json_shaped(item) for key, item in value.items()}
+    if isinstance(value, (set, frozenset)):
+        return [_json_shaped(item) for item in sorted(value, key=repr)]
+    if isinstance(value, (list, tuple)):
+        return [_json_shaped(item) for item in value]
+    return value
+
+
 def _loads(block):
     try:
         return json.loads(block)
@@ -103,7 +115,7 @@ def _loads(block):
         # The upstream prompts show single-quoted examples; accept that
         # literal form of the same data (never evaluates code).
         try:
-            return ast.literal_eval(block.strip())
+            return _json_shaped(ast.literal_eval(block.strip()))
         except (SyntaxError, ValueError):
             pass
         raise

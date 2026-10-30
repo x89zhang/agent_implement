@@ -84,19 +84,29 @@ def insert_checklist_step(checklist: str, position: int, name: str) -> str:
 
 
 def node_check(
-    checklist: str, achieved_count: int, calls: list[tuple[str, dict[str, Any]]]
+    checklist: str,
+    achieved_count: int,
+    calls: list[tuple[str, dict[str, Any]]],
+    batch_aligned: bool = False,
 ) -> tuple[bool, str]:
     """Check task-known parameter values (DRIFTLLM.py:288-337).
 
     ``achieved_count`` already includes the calls under validation, as
-    upstream's achieved trajectory does when this check runs.
+    upstream's achieved trajectory does when this check runs. Upstream starts
+    the checklist window at ``achieved_count - 1`` (DRIFTLLM.py:298), which is
+    the first call's own node only for a single-call output; with N parallel
+    calls every call is compared with a later node. ``batch_aligned`` starts
+    the window at the first call's node (``achieved_count - len(calls)``), as
+    the paper's per-node parameter check (§3.2) describes; for a single call
+    both are identical.
     """
     try:
         items = json.loads(checklist)
     except Exception:
         return True, ""
     try:
-        items = items[achieved_count - 1 :]
+        start = achieved_count - len(calls) if batch_aligned else achieved_count - 1
+        items = items[start:]
         for index, (name, arguments) in enumerate(calls):
             if len(items) <= index:
                 return True, ""

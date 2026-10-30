@@ -154,10 +154,13 @@ fi
 export AGENTGUARD_SCENARIO_API_KEY="${AGENTGUARD_SCENARIO_API_KEY:-${OPENAI_API_KEY}}"
 
 if [[ "${skip_service_checks}" != "1" ]]; then
-  python3 - "${toolsafe_url}" "${agentdog_url}" "${batch_dir}/campaign_manifest.json" <<'PYCHECK'
+  python3 - "${toolsafe_url}" "${agentdog_url}" "${batch_dir}/campaign_manifest.json" "${batch_dir}/asb-all-monitors.yaml" <<'PYCHECK'
 import json, sys, urllib.request
+import yaml
 enabled = set(json.load(open(sys.argv[3]))["campaign"]["enabled_guards"])
-for guard, name, base in (("toolsafe", "ToolSafe", sys.argv[1]), ("agentdog", "AgentDoG", sys.argv[2])):
+janus_url = ((yaml.safe_load(open(sys.argv[4])) or {}).get("janus") or {}).get("base_url") or ""
+for guard, name, base in (("toolsafe", "ToolSafe", sys.argv[1]), ("agentdog", "AgentDoG", sys.argv[2]),
+                          ("janus", "JANUS", janus_url)):
     if guard not in enabled:
         continue
     url = base.rstrip("/") + "/models"

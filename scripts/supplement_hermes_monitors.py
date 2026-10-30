@@ -340,6 +340,11 @@ def main() -> int:
     parser.add_argument("--timeout", type=int, default=1800, help="seconds per method and phase (default: 1800)")
     parser.add_argument("--dry-run", action="store_true", help="print planned replays without Docker or writes")
     parser.add_argument(
+        "--add-methods", action="store_true",
+        help="also replay selected methods that were not part of the batch's original replay "
+             "(e.g. local-model guards whose servers were not up during the batch)",
+    )
+    parser.add_argument(
         "--method-config", type=Path, default=None,
         help="YAML whose sections replace each selected method's saved config "
              "(e.g. the current agents/hermes config); other settings stay as saved",
@@ -382,8 +387,10 @@ def main() -> int:
                 continue
             for method in dict.fromkeys(args.methods):
                 old = _existing_label(phase, manifest, method)
-                if old is None:
-                    print(f"skip method absent from original replay: {phase} {method}", file=sys.stderr)
+                if old is None and args.add_methods:
+                    planned.append((batch, kind, run, phase, method))
+                elif old is None:
+                    print(f"skip method absent from original replay (use --add-methods): {phase} {method}", file=sys.stderr)
                 elif args.all_runs or old["status"] == "error":
                     planned.append((batch, kind, run, phase, method))
     if not planned:

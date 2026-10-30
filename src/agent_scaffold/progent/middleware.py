@@ -9,6 +9,7 @@ from typing import Any
 from ..config import AppConfig, LLMConfig
 from ..llm import LLMAdapter
 from ..middleware import Middleware, ResultDecision, ToolDecision
+from ..tool_results import is_harness_skill_tool
 from . import always_allow
 from .runtime import ProgentRuntime, RuntimeResult
 from .tools import normalize_tool_definitions, tool_definitions_from_config
@@ -39,6 +40,13 @@ class ProgentMiddleware(Middleware):
     def before_tool(
         self, state: dict[str, Any], name: str, payload: dict[str, Any]
     ) -> ToolDecision:
+        # Skill tools deliver task skills in both conditions (harness plumbing,
+        # see tool_results.HARNESS_SKILL_TOOLS); they are outside the generated
+        # policy, so the call is not checked. The skill text still reaches the
+        # policy update through after_tool, as injected tool output does
+        # upstream.
+        if is_harness_skill_tool(name):
+            return ToolDecision()
         error = self._ensure_policy(state)
         if error:
             allowed = not self.settings.fail_closed
@@ -92,7 +100,9 @@ class ProgentMiddleware(Middleware):
         result: str,
         failed: bool,
     ) -> ResultDecision:
-        denied = _pop_pending_denied(state, name, payload)
+        # Skill calls were never checked, so they have no pending flag; looking
+        # one up could take another outstanding call's flag.
+        denied = False if is_harness_skill_tool(name) else _pop_pending_denied(state, name, payload)
         if not self.settings.update_after_tool or self.asb:
             return ResultDecision(result=result)
         # Upstream updates once per tool batch after every call ran, with failed
@@ -299,7 +309,9 @@ class ProgentMiddleware(Middleware):
 
     def _tool_definitions(self, state: dict[str, Any]) -> list[dict[str, Any]]:
         tools = state.get("_progent_tools")
-        return copy.deepcopy(tools) if isinstance(tools, list) else tool_definitions_from_config(self.cfg)
+        tools = copy.deepcopy(tools) if isinstance(tools, list) else tool_definitions_from_config(self.cfg)
+        # The policy generator and always-allow step never see skill tools.
+        return [tool for tool in tools if not is_harness_skill_tool(str(tool.get("name", "")))]
 
     def _query(self, state: dict[str, Any], *, generation: bool = False) -> str:
         """USER_QUERY: the prompt the agent received (upstream passes the task

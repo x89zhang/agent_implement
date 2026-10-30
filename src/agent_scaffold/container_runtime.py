@@ -159,6 +159,8 @@ def _effective_build_args(cfg: Any) -> dict[str, str]:
         build_args["INSTALL_AEGIS"] = "true"
     if _clawsentry_managed(cfg):
         build_args["INSTALL_CLAWSENTRY"] = "true"
+    if getattr(getattr(cfg, "piguard", None), "enabled", False):
+        build_args["INSTALL_PIGUARD"] = "true"
     return build_args
 
 

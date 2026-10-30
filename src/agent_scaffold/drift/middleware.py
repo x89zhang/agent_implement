@@ -482,6 +482,7 @@ class DriftMiddleware(Middleware):
                 "raw_completion": completion,
                 "planner_model": self._planner_model(),
                 "planner_role_clarification": clarify,
+                "parallel_checklist_fix": self.settings.parallel_checklist_fix,
                 "attempts": attempts,
                 "error": error,
                 "upstream_revision": UPSTREAM_REVISION,
@@ -601,7 +602,8 @@ class DriftMiddleware(Middleware):
         )
         checklist = str(state.get("_drift_checklist", "None"))
         passed, reason = node_check(
-            checklist, len(temp), [(name, args) for name, args, _ in todo]
+            checklist, len(temp), [(name, args) for name, args, _ in todo],
+            batch_aligned=self.settings.parallel_checklist_fix,
         )
         if not passed:
             json_calls = [

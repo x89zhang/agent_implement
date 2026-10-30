@@ -57,6 +57,10 @@ container:
   remove: true
   build_args:
     INSTALL_AGENTDOJO: "true"
+    # PIGuard runs later via supplement replays, which reuse this image.
+    INSTALL_PIGUARD: "true"
+    # ADR is off for now; its runtime is still built so it can be replayed later.
+    INSTALL_ADR: "true"
     # Enabled guard dependencies are selected automatically.
   # Configured *_env credential/endpoint variables are also forwarded by name.
   env:
@@ -64,6 +68,8 @@ container:
     - AEGIS_AGENT_SECRET
     - AEGIS_AGENT_TOKEN
     - OPENAI_API_KEY
+    - CLAUDE_CODE_OAUTH_TOKEN
+    - ANTHROPIC_API_KEY
     - AGENTGUARD_API_KEY
     - AGENTGUARD_SERVER_URL
     - AGENTGUARD_SCENARIO_API_KEY
@@ -157,7 +163,7 @@ aegis:
   max_retries: 5
 
 progent:
-  enabled: false
+  enabled: true
   mode: monitor
   generate_policy: true
   update_after_tool: true
@@ -181,6 +187,8 @@ drift:
 
 adr:
   # Default reasoning model needs Claude credentials; keep off in this batch.
+  # Temporarily off: its reasoning stage needs a Claude credential
+  # (ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN). Still in the study scope.
   enabled: false
   mode: monitor
   fail_closed: false
@@ -210,7 +218,7 @@ agrail:
 
 janus:
   # Requires an additional local model endpoint; keep off with two GPUs.
-  enabled: false
+  enabled: true
   mode: monitor
   strict: false
   fail_closed: false
@@ -221,10 +229,10 @@ janus:
 stepguard:
   # Requires an additional local model endpoint; keep off with two GPUs.
   enabled: false
-  mode: block
-  fail_closed: true
+  mode: monitor
+  fail_closed: false
   # Set to an OpenAI-compatible endpoint reachable from the container.
-  base_url: ""
+  base_url: http://127.0.0.1:8003/v1
   model: ninty-seven/StepGuard
   api_key_env: STEPGUARD_API_KEY
   timeout_seconds: 120
@@ -234,10 +242,11 @@ stepguard:
 
 safeagent:
   # Requires an additional MCP service endpoint; keep off in this batch.
+  # Excluded from the study (cost of its OpenRouter gpt-oss endpoint).
   enabled: false
-  mode: block
-  fail_closed: true
-  mcp_url: http://127.0.0.1:8000/mcp
+  mode: monitor
+  fail_closed: false
+  mcp_url: http://127.0.0.1:8010/mcp
   api_key_env: SAFEAGENT_MCP_API_KEY
   # Upstream runtime.yaml waits for the call budget (wait_until_available).
   timeout_seconds: 300
@@ -306,7 +315,7 @@ melon:
     fail_closed: false
 
 pro2guard:
-  enabled: true
+  enabled: false
   # monitor records; warn adds upstream's reflection message; block stops the run.
   mode: monitor
   # Per-task models from `python -m agent_scaffold.pro2guard.build_model`, learned
@@ -330,7 +339,7 @@ pro2guard:
     max_atoms: 4
 
 agentspec:
-  enabled: true
+  enabled: false
   # enforce applies rule actions; monitor allows original calls and logs decisions.
   mode: monitor
   rules: []
@@ -373,6 +382,8 @@ toolsafe:
   fail_closed: false
 
 agentsight:
+  # Excluded: not applicable to this platform (no released detection stage;
+  # AgentDojo tools produce no system effects to correlate).
   enabled: false
   # Host-side observer; requires the existing AgentSight binary/permissions.
   binary: runtime/bin/agentsight
@@ -389,7 +400,7 @@ agentsight:
   shutdown_timeout_seconds: 10
 
 agentguard:
-  enabled: true
+  enabled: false
   # monitor, warn, block
   mode: monitor
   # Each run's policy is generated from the benign task and tool catalog
@@ -430,8 +441,20 @@ agentguard:
   remote_retries: 2
   fail_closed: true
 
+piguard:
+  # PIGuard (ACL 2025): authors' checkpoint leolee99/PIGuard at a pinned
+  # revision, run on CPU in /opt/piguard-venv (built with INSTALL_PIGUARD).
+  # Scans the user request and every tool output; verdict = top label.
+  enabled: false
+  mode: monitor
+  scan_user_input: true
+  scan_tool_outputs: true
+  max_length: 512
+  timeout_seconds: 120
+  fail_closed: false
+
 agentdog:
-  enabled: true
+  enabled: false
   # diagnose logs only; gate replaces unsafe output; revise requests regeneration.
   mode: diagnose
   # pre_reply checks final answers; add pre_action to also check tool actions.

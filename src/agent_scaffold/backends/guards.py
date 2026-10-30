@@ -30,6 +30,7 @@ GUARDS = (
     "agentspec",
     "llamafirewall",
     "toolsafe",
+    "piguard",
     "agentdog",
     "agentguard",
 )

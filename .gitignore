@@ -52,6 +52,8 @@ conftest.py
 *.spec.ts
 logs_other_proj/
 runtime/venvs/
+# Upstream SafeAgent Core checkout made by scripts/start_safeagent_core.sh.
+/runtime/safeagent_core/
 
 # Locally trained ProbGuard DTMCs and generated abstraction policies are not shipped.
 /models/pro2guard/

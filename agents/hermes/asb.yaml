@@ -19,6 +19,11 @@ container:
   workdir: /workspace
   network: host
   remove: true
+  build_args:
+    # Runtimes for guards added later by supplement replays (as in the
+    # AgentDojo configs): PIGuard (CPU) and ADR (temporarily off).
+    INSTALL_PIGUARD: "true"
+    INSTALL_ADR: "true"
   env:
     - AEGIS_API_KEY
     - AEGIS_AGENT_SECRET
@@ -128,7 +133,7 @@ adr:
 rope:
   enabled: false
   mode: block
-  fail_closed: true
+  fail_closed: false
   floor_generation: llm
   router: live
   # Upstream runs unclamped only with its cached router (run_eval.py:10,76);
@@ -155,10 +160,10 @@ janus:
 
 stepguard:
   enabled: false
-  mode: block
-  fail_closed: true
+  mode: monitor
+  fail_closed: false
   # Set to an OpenAI-compatible endpoint reachable from the container.
-  base_url: ""
+  base_url: http://127.0.0.1:8003/v1
   model: ninty-seven/StepGuard
   api_key_env: STEPGUARD_API_KEY
   timeout_seconds: 120
@@ -187,7 +192,7 @@ clawsentry:
   enabled: false
   auto_start: true
   mode: block
-  fail_closed: true
+  fail_closed: false
   base_url: http://127.0.0.1:8080
   api_key_env: CS_AUTH_TOKEN
   # gpt-5.6-luna L2 calls often exceed upstream's ~4.5 s adapter deadline
@@ -204,7 +209,7 @@ clawsentry:
 airguard:
   enabled: false
   mode: block
-  fail_closed: true
+  fail_closed: false
   # Generates upstream's compile_task_authority system_policy allow set, the
   # deployer/user-supplied input; upstream's fallback is [read, write, respond].
   generator:
@@ -215,7 +220,7 @@ melon:
   enabled: false
   # block stops the run on detection (upstream); warn/monitor only record it.
   mode: block
-  fail_closed: true
+  fail_closed: false
   # Cosine cut-off between the real call and masked-run calls (upstream: 0.8).
   threshold: 0.8
   # upstream: the paper's rules (send_email -> recipients, send_money -> recipient,

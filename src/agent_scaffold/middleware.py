@@ -354,6 +354,10 @@ def build_middleware_manager(cfg: AppConfig) -> MiddlewareManager:
         from .toolsafe import ToolSafeMiddleware
 
         middlewares.append(ToolSafeMiddleware(cfg))
+    if cfg.piguard.enabled:
+        from .piguard import PIGuardMiddleware
+
+        middlewares.append(PIGuardMiddleware(cfg))
     if cfg.agentdog.enabled:
         from .agentdog import AgentDoGMiddleware
 

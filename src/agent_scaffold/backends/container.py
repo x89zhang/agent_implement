@@ -54,6 +54,7 @@ def ensure_hermes_image(cfg, workspace):
         ("aegis", "INSTALL_AEGIS"),
         ("airguard", "INSTALL_AIRGUARD"),
         ("adr", "INSTALL_ADR"),
+        ("piguard", "INSTALL_PIGUARD"),
     ):
         if getattr(cfg, section).enabled:
             args[argument] = "true"

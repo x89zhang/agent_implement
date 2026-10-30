@@ -74,16 +74,29 @@ on_guards = {name for name in GUARDS if getattr(on, name).enabled}
 off_guards = {name for name in GUARDS if getattr(off, name).enabled}
 if on_guards != off_guards:
     raise SystemExit(f'Monitor sets differ: on={sorted(on_guards)}, off={sorted(off_guards)}')
-if not {'toolsafe', 'agentdog'} <= on_guards:
-    raise SystemExit('ToolSafe and AgentDoG must remain enabled')
-for name in ('janus', 'stepguard', 'safeagent'):
-    if name in on_guards:
-        raise SystemExit(f'{name} requires an additional local model or service endpoint')
+# Local-model guards whose servers must be up during the batch; the others
+# (StepGuard, PIGuard) are added afterwards by supplement replays.
+if not {'toolsafe', 'janus'} <= on_guards:
+    raise SystemExit('ToolSafe and JANUS must be enabled for the batch')
 for name in on_guards - {'agentdog'}:
     if getattr(on, name).mode != 'monitor' or getattr(off, name).mode != 'monitor':
         raise SystemExit(f'{name} must be in passive monitor mode')
-if on.agentdog.mode != 'diagnose' or off.agentdog.mode != 'diagnose':
+if 'agentdog' in on_guards and (on.agentdog.mode != 'diagnose' or off.agentdog.mode != 'diagnose'):
     raise SystemExit('AgentDoG must be in passive diagnose mode')
+# Endpoints that must answer before any run starts.
+import urllib.request
+endpoints = {
+    'toolsafe': on.toolsafe.base_url.rstrip('/') + '/models',
+    'janus': on.janus.base_url.rstrip('/') + '/models',
+}
+for name, url in endpoints.items():
+    try:
+        urllib.request.urlopen(url, timeout=5).close()
+    except Exception as exc:
+        raise SystemExit(f'{name} endpoint is unavailable at {url}: {exc}')
+import os
+if 'adr' in on_guards and not (os.environ.get('ANTHROPIC_API_KEY') or os.environ.get('CLAUDE_CODE_OAUTH_TOKEN')):
+    raise SystemExit('ADR needs ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN for its Claude reasoning step')
 print(f"{sys.argv[2] or on.agentdojo.suite}\t{sys.argv[1] or on.agentdojo.case}")
 PYCONFIG
 )"

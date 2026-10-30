@@ -1,0 +1,23 @@
+# Sections for the StepGuard/PIGuard supplement replays, passed with
+#   --methods stepguard piguard --add-methods --method-config agents/hermes/supplement-stepguard-piguard.yaml
+# StepGuard points at the vLLM server as it is currently served
+# (--served-model-name StepGuard --port 8000); edit base_url/model if that changes.
+# Everything else matches agents/hermes/agentdojo-all-monitors.yaml.
+stepguard:
+  enabled: false
+  mode: monitor
+  fail_closed: false
+  base_url: http://127.0.0.1:8000/v1
+  model: StepGuard
+  api_key_env: STEPGUARD_API_KEY
+  timeout_seconds: 120
+  max_replans: 3
+  audit_final: false
+piguard:
+  enabled: false
+  mode: monitor
+  scan_user_input: true
+  scan_tool_outputs: true
+  max_length: 512
+  timeout_seconds: 120
+  fail_closed: false
