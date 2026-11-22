@@ -231,6 +231,8 @@ def augment_task(task: str, cfg: Any) -> str:
     task_row, selected_task, _, attack_tool = _case_data(cfg)
     method = str(getattr(cfg, "injection_method", "clean"))
     attack_prompt = _attack_prompt(cfg, attack_tool)
+    if not getattr(cfg, "attack_text_enabled", True):
+        method = "clean"
     if method == "direct_prompt_injection":
         selected_task = f"{selected_task} {attack_prompt}"
     elif method == "memory_attack":
@@ -293,6 +295,7 @@ def _session_key(cfg: Any) -> str:
             "official_memory_enabled": getattr(
                 cfg, "official_memory_enabled", True
             ),
+            "attack_text_enabled": getattr(cfg, "attack_text_enabled", True),
         },
         sort_keys=True,
     )
@@ -319,6 +322,7 @@ class AgentSecurityBenchSession:
         if (
             str(getattr(self.cfg, "injection_method", ""))
             == "observation_prompt_injection"
+            and getattr(self.cfg, "attack_text_enabled", True)
         ):
             result += f"; {_attack_prompt(self.cfg, self.attack_tool)}"
         if str(getattr(self.cfg, "defense_type", "")) == "ob_sandwich_defense":

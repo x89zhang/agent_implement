@@ -1,0 +1,20 @@
+# AgentDojo pairs for the paper tables (scripts/hermes_paper_tables.py); see
+# docs/hermes_mixed_pairs.md. The first five have 20+20 runs, the rest 10
+# injected + 5 clean.
+banking user_task_2_injection_4
+slack user_task_15_injection_5
+travel user_task_5_injection_1
+travel user_task_16_injection_4
+workspace user_task_1_injection_0
+travel user_task_0_injection_2
+travel user_task_2_injection_2
+travel user_task_3_injection_2
+travel user_task_9_injection_2
+travel user_task_10_injection_2
+travel user_task_12_injection_2
+travel user_task_13_injection_2
+travel user_task_18_injection_2
+workspace user_task_2_injection_0
+banking user_task_0_injection_3
+banking user_task_13_injection_7
+banking user_task_15_injection_4

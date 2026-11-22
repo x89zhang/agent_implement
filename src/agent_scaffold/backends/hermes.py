@@ -119,6 +119,20 @@ def preflight(cfg):
             )
         if not asb.memory_db_dir:
             raise ValueError("official_asb requires agent_security_bench.memory_db_dir")
+    if cfg.agent_security_bench.enabled and cfg.agent_security_bench.clean_control:
+        if cfg.execution.memory.mode != "off":
+            raise ValueError(
+                "agent_security_bench.clean_control is for prompt injection; "
+                "memory experiments use memory_experiment.run_clean_control"
+            )
+        if cfg.agent_security_bench.injection_method not in {
+            "direct_prompt_injection",
+            "observation_prompt_injection",
+        }:
+            raise ValueError(
+                "agent_security_bench.clean_control requires direct_prompt_injection "
+                "or observation_prompt_injection"
+            )
     if cfg.llm.provider not in {"openai", "openrouter"}:
         raise ValueError(
             "Hermes backend currently supports OpenAI-compatible endpoints (provider openai or openrouter)"
@@ -554,6 +568,14 @@ def _run_hermes(
             control_cfg.agent_security_bench = replace(
                 control_cfg.agent_security_bench, official_memory_enabled=False
             )
+        control = run_phase(control_cfg, interpreter, run_dir / "control", clean)
+        lifecycle["control_evaluation"] = control["evaluation"]
+    elif cfg.agent_security_bench.enabled and cfg.agent_security_bench.clean_control:
+        # Same task and tools, attacker tool included, without the attack text.
+        control_cfg = copy.deepcopy(target_cfg)
+        control_cfg.agent_security_bench = replace(
+            control_cfg.agent_security_bench, attack_text_enabled=False
+        )
         control = run_phase(control_cfg, interpreter, run_dir / "control", clean)
         lifecycle["control_evaluation"] = control["evaluation"]
     dump(run_dir / "memory.lifecycle.json", lifecycle)

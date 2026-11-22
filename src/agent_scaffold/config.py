@@ -725,6 +725,11 @@ class AgentSecurityBenchConfig:
     attack_type: str = "naive"
     defense_type: str = ""
     trigger: str = "with perspicacious discernment"
+    # Hermes: after the attacked phase, run a control phase with the same task
+    # and tools (attacker tool included) but without the attack text.
+    clean_control: bool = False
+    # False keeps the attacker tool but omits the prompt-injection text.
+    attack_text_enabled: bool = True
 
 
 @dataclass
@@ -1257,6 +1262,10 @@ def load_config(path: str | Path) -> AppConfig:
                 agent_security_bench_raw.get(
                     "trigger", "with perspicacious discernment"
                 )
+            ),
+            clean_control=bool(agent_security_bench_raw.get("clean_control", False)),
+            attack_text_enabled=bool(
+                agent_security_bench_raw.get("attack_text_enabled", True)
             ),
         )
     else:

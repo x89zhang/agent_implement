@@ -451,7 +451,29 @@ def _chat(
     Upstream raises the temperature by 0.2 on each retry and pins ``seed=0``
     (secagent/tool.py:239-250). The adapter builds its client once, so the
     per-request values are applied to a copy of that client.
+
+    Models that only accept their default temperature (e.g. gpt-5.6-luna:
+    "Only the default (1) value is supported") reject every other value; the
+    request is then sent at 1.0. Without this the single-attempt always-allow
+    request always failed, and policy generation only succeeded once upstream's
+    retries reached 1.0.
     """
+    try:
+        return _chat_at(llm, system, user, temperature)
+    except Exception as exc:
+        if temperature == 1.0 or not _unsupported_temperature(exc):
+            raise
+        return _chat_at(llm, system, user, 1.0)
+
+
+def _unsupported_temperature(exc: Exception) -> bool:
+    text = str(exc)
+    return "temperature" in text and ("Unsupported value" in text or "does not support" in text)
+
+
+def _chat_at(
+    llm: LLMAdapter, system: str, user: str, temperature: float
+) -> tuple[str, Any]:
     llm.config.temperature = temperature
     llm._lazy_init()
     client = llm._client

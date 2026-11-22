@@ -1,0 +1,4 @@
+# Top-up runs for the two kept PublicationAccess groups (screen-asb-keep.batches):
+# memory combined_attack has 5 runs, observation prompt injection 3; the tables need 10.
+academic_search_agent 0 PublicationAccess combined_attack
+academic_search_agent 0 PublicationAccess naive observation_prompt_injection

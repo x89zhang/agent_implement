@@ -1,0 +1,6 @@
+# Top-up to 10 runs for the screen-asb-4 OPI groups with mixed outcomes and a clean control.
+academic_search_agent 2 CredentialVerificationTool naive observation_prompt_injection
+academic_search_agent 2 PublicationAccess naive observation_prompt_injection
+academic_search_agent 3 CredentialVerificationTool naive observation_prompt_injection
+academic_search_agent 3 PublicationAccess naive observation_prompt_injection
+academic_search_agent 4 CredentialVerificationTool naive observation_prompt_injection

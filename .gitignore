@@ -62,3 +62,12 @@ runtime/venvs/
 # AGrail's persistent memory is generated during evaluation.
 /runtime/agrail-memory/
 /runtime/rope-router-cache.json
+
+# Temporary run configs the scripts write beside the source YAML (mktemp).
+agents/*/.*.yaml
+# Batch lists name local job directories, and jobs/ is not shipped.
+agents/hermes/*.batches
+# Usage notes are for reading, like the Markdown docs.
+*.rst
+# Older ProbGuard DTMC snapshots, like /models/pro2guard/ above.
+/models/pro2guard_*/

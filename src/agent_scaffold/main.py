@@ -960,7 +960,8 @@ def main() -> None:
 
     if args.runs < 1:
         raise ValueError("--runs must be >= 1")
-    if args.runs > 1:
+    # A batch directory makes even a single run a batch (run_001, summary.json).
+    if args.runs > 1 or args.runs_dir:
         _run_repeated(
             cfg_path=args.config,
             runs=args.runs,

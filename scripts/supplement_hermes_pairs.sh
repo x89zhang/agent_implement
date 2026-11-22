@@ -3,8 +3,9 @@
 # the given AgentDojo pairs. Runs that already have valid labels are skipped,
 # so rerunning only retries errors. StepGuard must be served as configured in
 # agents/hermes/supplement-stepguard-piguard.yaml.
-# With methods after the pairs file, it instead retries those methods' replay
-# errors with their batch config (e.g. janus toolsafe, with both serving).
+# With methods after the pairs file, it adds only those methods where missing
+# and retries their replay errors (e.g. janus toolsafe, with both serving).
+# Methods with a section in that YAML use it; others keep their batch config.
 set -euo pipefail
 
 # The all-monitors image (see docs/hermes_mixed_pairs.md); the newest image is
@@ -29,7 +30,17 @@ pairs_file="$1"
 shift
 if (( $# > 0 )); then
   methods=("$@")
-  options=()
+  options=(--add-methods)
+  if python3 - "${method_config}" "${methods[@]}" <<'PYSECTIONS'
+import sys
+import yaml
+
+raw = yaml.safe_load(open(sys.argv[1], encoding="utf-8")) or {}
+sys.exit(0 if all(isinstance(raw.get(name), dict) for name in sys.argv[2:]) else 1)
+PYSECTIONS
+  then
+    options+=(--method-config "${method_config}")
+  fi
 else
   methods=(stepguard piguard)
   options=(--add-methods --method-config "${method_config}")
@@ -77,6 +88,11 @@ for name in methods:
     if served[name]['model'] not in models:
         raise SystemExit(f"{name}: {url} serves {models}, not {served[name]['model']}")
 PYCHECK
+# REPLAY_ALL=1 recomputes the methods' valid labels too (e.g. after a monitor fix);
+# by default only missing methods and replay errors are replayed.
+if [[ "${REPLAY_ALL:-0}" == 1 ]]; then
+  options+=(--all-runs)
+fi
 docker image inspect "${image}" > /dev/null
 
 results=()

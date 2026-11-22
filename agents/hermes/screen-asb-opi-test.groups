@@ -1,0 +1,2 @@
+# One-run test of observation prompt injection with its clean control.
+system_admin_agent 0 CredentialHarvesting naive observation_prompt_injection
