@@ -733,6 +733,32 @@ class AgentSecurityBenchConfig:
 
 
 @dataclass
+class MCPSafetyBenchConfig:
+    """MCP-SafetyBench (github.com/xjzzzzzzzz/MCPSafety) tool-poisoning tasks.
+
+    The upstream MCP servers of the task's domain run unchanged; the attack is
+    applied as upstream does, to the tool list the agent sees (rewritten tool
+    descriptions, or an added tool), and graded by the task's own evaluators.
+    """
+
+    enabled: bool = False
+    source_dir: str = "/opt/mcp-safety-bench"
+    revision: str = "7872437b6369aac1150e3a19e350a981dc554f81"
+    # Interpreter with the upstream requirements; runs the servers and evaluators.
+    official_python: str = "/opt/mcp-safety-bench-venv/bin/python"
+    # <domain>/<task file stem>, e.g. financial_analysis/yfinance_task_0001.
+    task: str = "financial_analysis/yfinance_task_0001"
+    # False runs the same task on the unmodified servers (the clean baseline).
+    poisoning_enabled: bool = True
+    # Hermes: after the poisoned phase, run a control phase without poisoning.
+    clean_control: bool = False
+    # Run the servers as an unprivileged user with attack hosts unreachable.
+    sandbox: bool = True
+    tool_timeout_seconds: float = 120.0
+    evaluation_timeout_seconds: float = 300.0
+
+
+@dataclass
 class AgentHarmConfig:
     enabled: bool = False
     dataset: str = "harmful"
@@ -832,6 +858,9 @@ class AppConfig:
         default_factory=AgentSecurityBenchConfig
     )
     agentharm: AgentHarmConfig = field(default_factory=AgentHarmConfig)
+    mcp_safety_bench: MCPSafetyBenchConfig = field(
+        default_factory=MCPSafetyBenchConfig
+    )
     privacylens_live: PrivacyLensLiveConfig = field(
         default_factory=PrivacyLensLiveConfig
     )
@@ -840,6 +869,31 @@ class AppConfig:
     research: dict[str, Any] = field(default_factory=dict)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     config_dir: str = "."
+
+
+def _mcp_safety_bench_from_raw(raw: Any) -> MCPSafetyBenchConfig:
+    if not isinstance(raw, dict):
+        raise ValueError("mcp_safety_bench must be a mapping")
+    default = MCPSafetyBenchConfig()
+    unknown = set(raw) - set(default.__dataclass_fields__)
+    if unknown:
+        raise ValueError(f"Unknown mcp_safety_bench keys: {', '.join(sorted(unknown))}")
+    values = {**default.__dict__, **raw}
+    task = str(values["task"]).strip().removesuffix(".json")
+    if task.count("/") != 1 or ".." in task:
+        raise ValueError("mcp_safety_bench.task must be <domain>/<task file stem>")
+    return MCPSafetyBenchConfig(
+        enabled=bool(values["enabled"]),
+        source_dir=str(values["source_dir"]),
+        revision=str(values["revision"]),
+        official_python=str(values["official_python"]),
+        task=task,
+        poisoning_enabled=bool(values["poisoning_enabled"]),
+        clean_control=bool(values["clean_control"]),
+        sandbox=bool(values["sandbox"]),
+        tool_timeout_seconds=float(values["tool_timeout_seconds"]),
+        evaluation_timeout_seconds=float(values["evaluation_timeout_seconds"]),
+    )
 
 
 def _container_enabled_from_raw(raw: dict[str, Any]) -> bool:
@@ -1358,6 +1412,7 @@ def load_config(path: str | Path) -> AppConfig:
     else:
         privacylens_live = PrivacyLensLiveConfig()
 
+    mcp_safety_bench = _mcp_safety_bench_from_raw(raw.get("mcp_safety_bench", {}) or {})
     enabled_benchmarks = [
         name
         for name, enabled in (
@@ -1365,6 +1420,7 @@ def load_config(path: str | Path) -> AppConfig:
             ("agent_security_bench", agent_security_bench.enabled),
             ("agentharm", agentharm.enabled),
             ("privacylens_live", privacylens_live.enabled),
+            ("mcp_safety_bench", mcp_safety_bench.enabled),
         )
         if enabled
     ]
@@ -1381,6 +1437,7 @@ def load_config(path: str | Path) -> AppConfig:
             "agent_security_bench": "agent_security_bench_adapter",
             "agentharm": "agentharm_adapter",
             "privacylens_live": "privacylens_live_adapter",
+            "mcp_safety_bench": "mcp_safety_bench_adapter",
         }[benchmark_name]
         module_name = (
             f"{__package__}.{adapter_module}"
@@ -1393,6 +1450,7 @@ def load_config(path: str | Path) -> AppConfig:
             "agent_security_bench": agent_security_bench,
             "agentharm": agentharm,
             "privacylens_live": privacylens_live,
+            "mcp_safety_bench": mcp_safety_bench,
         }[benchmark_name]
         tools = [
             ToolConfig(name=name, import_path=import_path, description=description)
@@ -2685,6 +2743,7 @@ def load_config(path: str | Path) -> AppConfig:
         agentdojo=agentdojo,
         agent_security_bench=agent_security_bench,
         agentharm=agentharm,
+        mcp_safety_bench=mcp_safety_bench,
         privacylens_live=privacylens_live,
         container=container,
         trip=trip,

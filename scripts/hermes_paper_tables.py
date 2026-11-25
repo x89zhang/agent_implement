@@ -8,7 +8,8 @@ runs from every batch, successful against failed attacks.
 Each AgentDojo pair or ASB group contributes its first N runs per class (by
 batch name, then run index), so groups with 20-run batches do not outweigh the
 others; --all-runs uses every run. In ASB (--asb) each run's poisoned target
-phase is the injected run and its unpoisoned control phase the clean one.
+phase is the injected run and its unpoisoned control phase the clean one;
+MCP-SafetyBench (--mcp-safety-bench) batches have the same two phases.
 Runs where a monitor errored are left out of that monitor's counts and
 reported. Labels come from each pair's or batch's analysis/run_labels.csv,
 which this script regenerates.
@@ -263,13 +264,17 @@ def main() -> int:
         "--asb-injection-only", type=Path, action="append", default=[],
         help="file of ASB batch directories whose groups enter only the injection table",
     )
+    parser.add_argument(
+        "--mcp-safety-bench", type=Path, action="append", default=[],
+        help="file of MCP-SafetyBench batch directories (target/control phases, like ASB)",
+    )
     parser.add_argument("--injection-runs", type=int, default=5, help="injected and clean runs per group (table 1)")
     parser.add_argument("--attack-runs", type=int, default=10, help="injected runs per group (table 2)")
     parser.add_argument("--all-runs", action="store_true", help="use every run of every group")
     parser.add_argument("--compact", action="store_true", help="TP/FN/FP/TN/F1/FPR tables with paper names")
     args = parser.parse_args()
-    if not args.pairs and not args.asb and not args.asb_injection_only:
-        parser.error("give AgentDojo pairs files and/or --asb")
+    if not args.pairs and not args.asb and not args.asb_injection_only and not args.mcp_safety_bench:
+        parser.error("give AgentDojo pairs files, --asb and/or --mcp-safety-bench")
 
     injection_limit = None if args.all_runs else args.injection_runs
     attack_limit = None if args.all_runs else args.attack_runs
@@ -280,23 +285,39 @@ def main() -> int:
             agentdojo.add(f"{suite} {case}", runs, injection_limit, attack_limit)
         agentdojo.print("AgentDojo", "clean", args.compact)
     if args.asb or args.asb_injection_only:
-        asb = Tables()
-        # Batches of the same group (agent, task, attacker tool, attack type)
-        # are pooled into one group, like an AgentDojo pair's batches.
-        groups: dict[str, list[dict]] = defaultdict(list)
-        injection_only: set[str] = set()
-        for path, only in [(p, False) for p in args.asb] + [(p, True) for p in args.asb_injection_only]:
-            for line in path.read_text(encoding="utf-8").splitlines():
-                if not line.strip() or line.lstrip().startswith("#"):
-                    continue
-                batch = (REPO / line.strip()).resolve()
-                groups[batch.parent.name] += asb_runs(batch, asb_labels(batch))
-                if only:
-                    injection_only.add(batch.parent.name)
-        for name, runs in groups.items():
-            asb.add(name, runs, injection_limit, attack_limit, attack_table=name not in injection_only)
-        asb.print("ASB", "control", args.compact)
+        phase_tables(
+            "ASB", [(p, False) for p in args.asb] + [(p, True) for p in args.asb_injection_only],
+            injection_limit, attack_limit, args.compact,
+        )
+    if args.mcp_safety_bench:
+        phase_tables(
+            "MCP-SafetyBench", [(p, False) for p in args.mcp_safety_bench],
+            injection_limit, attack_limit, args.compact,
+        )
     return 0
+
+
+def phase_tables(
+    benchmark: str, files: list[tuple[Path, bool]],
+    injection_limit: int | None, attack_limit: int | None, compact: bool,
+) -> None:
+    """Tables for benchmarks whose runs have a poisoned target and a clean control phase."""
+    tables = Tables()
+    # Batches of the same group (ASB: agent, task, attacker tool, attack type;
+    # MCP-SafetyBench: task) are pooled into one group, like an AgentDojo pair's batches.
+    groups: dict[str, list[dict]] = defaultdict(list)
+    injection_only: set[str] = set()
+    for path, only in files:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            batch = (REPO / line.strip()).resolve()
+            groups[batch.parent.name] += asb_runs(batch, asb_labels(batch))
+            if only:
+                injection_only.add(batch.parent.name)
+    for name, runs in groups.items():
+        tables.add(name, runs, injection_limit, attack_limit, attack_table=name not in injection_only)
+    tables.print(benchmark, "control", compact)
 
 if __name__ == "__main__":
     raise SystemExit(main())

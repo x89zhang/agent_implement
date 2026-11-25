@@ -82,12 +82,14 @@ def _benchmark(batch: Path) -> str:
         return "asb"
     if (config.get("privacylens_live") or {}).get("enabled"):
         return "privacylens_live"
+    if (config.get("mcp_safety_bench") or {}).get("enabled"):
+        return "mcp_safety_bench"
     raise ValueError(f"Unsupported Hermes benchmark in {batch / 'summary.json'}")
 
 
 def _phases(batch: Path, benchmark: str) -> list[tuple[Path, Path]]:
     summary = _json(batch / "summary.json")
-    names = ("target", "control") if benchmark == "asb" else ("target",)
+    names = ("target", "control") if benchmark in ("asb", "mcp_safety_bench") else ("target",)
     pairs = []
     for item in sorted(summary.get("items") or [], key=lambda x: x["index"]):
         run = batch / f"run_{item['index']:03d}"
@@ -310,7 +312,8 @@ def _analyze(batch: Path, benchmark: str, attempt_id: str) -> None:
         root = batch.parent.parent.parent
         script = REPO / "scripts/analyze_hermes_agentdojo_monitors.py"
         command = [sys.executable, str(script), "--root", str(root), "--batch", batch.name]
-    elif benchmark == "asb":
+    elif benchmark in ("asb", "mcp_safety_bench"):
+        # Same target/control phase layout; the ASB analysis reads both.
         script = REPO / "scripts/analyze_hermes_asb_monitors.py"
         command = [sys.executable, str(script), str(batch)]
         root = batch

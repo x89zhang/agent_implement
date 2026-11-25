@@ -46,6 +46,7 @@ def ensure_hermes_image(cfg, workspace):
         ("agent_security_bench", "INSTALL_AGENT_SECURITY_BENCH"),
         ("agentharm", "INSTALL_AGENTHARM"),
         ("privacylens_live", "INSTALL_PRIVACYLENS_LIVE"),
+        ("mcp_safety_bench", "INSTALL_MCP_SAFETY_BENCH"),
         ("llamafirewall", "INSTALL_LLAMA_FIREWALL"),
         ("agentspec", "INSTALL_AGENTSPEC"),
         ("progent", "INSTALL_PROGENT"),
@@ -72,6 +73,7 @@ def ensure_hermes_image(cfg, workspace):
         workspace / "scripts/install_airguard_source.py",
         workspace / "scripts/install_privacylens_live_source.py",
         workspace / "scripts/install_privacylens_evaluator_source.py",
+        workspace / "scripts/install_mcp_safety_bench_source.py",
         *sorted(workspace.glob("requirements*.txt")),
     ]:
         digest.update(file.name.encode() + file.read_bytes())

@@ -30,6 +30,7 @@ __pycache__/
 !requirements-adr.txt
 !requirements-agrail.txt
 !requirements-drift.txt
+!requirements-mcp-safety-bench.txt
 !agents/hermes/asb-poisoning.txt
 *.md
 [Rr][Ee][Aa][Dd][Mm][Ee]*

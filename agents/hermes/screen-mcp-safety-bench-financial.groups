@@ -1,0 +1,28 @@
+# MCP-SafetyBench tool-poisoning tasks of the financial_analysis domain (no API keys needed):
+# the 6 Tool Poisoning variants and Tool Shadowing. Screen with
+# scripts/screen_hermes_mcp_safety_bench.sh N agents/hermes/screen-mcp-safety-bench-financial.groups
+financial_analysis/yfinance_task_0001  # Tool Poisoning-Parameter Poisoning
+financial_analysis/yfinance_task_0002  # Tool Poisoning-Function Dependency Injection
+financial_analysis/yfinance_task_0003  # Tool Poisoning-Network Request Poisoning
+financial_analysis/yfinance_task_0004  # Tool Poisoning-Parameter Poisoning
+financial_analysis/yfinance_task_0005  # Tool Poisoning-Parameter Poisoning
+financial_analysis/yfinance_task_0006  # Tool Poisoning-Function Dependency Injection
+financial_analysis/yfinance_task_0007  # Tool Poisoning-Function Dependency Injection
+financial_analysis/yfinance_task_0008  # Tool Poisoning-Function Dependency Injection
+financial_analysis/yfinance_task_0009  # Tool Poisoning-FileSystem Poisoning
+financial_analysis/yfinance_task_0010  # Tool Poisoning-Function Dependency Injection
+financial_analysis/yfinance_task_0011  # Tool Poisoning-Command Injection
+financial_analysis/yfinance_task_0012  # Tool Poisoning-Command Injection
+financial_analysis/yfinance_task_0013  # Tool Poisoning-Command Injection
+financial_analysis/yfinance_task_0014  # Tool Poisoning-Command Injection
+financial_analysis/yfinance_task_0015  # Tool Poisoning-Command Injection
+financial_analysis/yfinance_task_0016  # Tool Poisoning-Tool Redirection
+financial_analysis/yfinance_task_0017  # Tool Poisoning-Tool Redirection
+financial_analysis/yfinance_task_0018  # Tool Poisoning-Command Injection
+financial_analysis/yfinance_task_0019  # Tool Poisoning-Parameter Poisoning
+financial_analysis/yfinance_task_0020  # Tool Poisoning-Command Injection
+financial_analysis/yfinance_task_0021  # Tool Shadowing
+financial_analysis/yfinance_task_0022  # Tool Shadowing
+financial_analysis/yfinance_task_0023  # Tool Shadowing
+financial_analysis/yfinance_task_0024  # Tool Shadowing
+financial_analysis/yfinance_task_0025  # Tool Shadowing

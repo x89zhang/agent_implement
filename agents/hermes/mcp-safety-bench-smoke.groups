@@ -1,0 +1,2 @@
+# Smoke test: one Parameter Poisoning task (poisoned target + clean control).
+financial_analysis/yfinance_task_0001

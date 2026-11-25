@@ -29,6 +29,7 @@ ADAPTERS = {
         "privacylens_live_adapter",
         "PrivacyLensLiveSession",
     ),
+    "mcp_safety_bench": ("mcp_safety_bench_adapter", "MCPSafetyBenchSession"),
 }
 
 
@@ -43,7 +44,11 @@ def create_benchmark(cfg):
     module.build_tool_configs(config)
     session = getattr(module, class_name)(config)
     tools = []
-    if hasattr(module, "build_mcp_tools"):
+    if hasattr(session, "mcp_tools"):
+        # Tool definitions served by the session's own MCP servers.
+        tools = [dict(tool) for tool in session.mcp_tools]
+        definitions = []
+    elif hasattr(module, "build_mcp_tools"):
         tools = module.build_mcp_tools(config)
         definitions = []
     elif name == "agentdojo":
@@ -269,6 +274,8 @@ def _service_process(cfg, connection, journal, policy_cache_dir):
                     elif command["op"] == "close":
                         if guard is not None:
                             guard.close()
+                        if hasattr(session, "close"):
+                            session.close()
                         break
                     else:
                         raise ValueError("Unknown controller operation")

@@ -143,6 +143,34 @@ RUN if [ "$INSTALL_PRIVACYLENS_LIVE" = "true" ]; then \
       && python -m venv /opt/privacylens-live-venv; \
     fi
 
+# MCP-SafetyBench: the pinned source, its servers' and evaluators' Python
+# requirements in a dedicated venv, and the filesystem server (upstream runs it
+# with `npx -y`; installed here at the release of the upstream revision's date).
+# gcc builds upstream's mathutils pin, which has no wheel for this Python.
+# The fetch server's readabilipy runs `npm install` on first use; the servers
+# run as nobody and cannot write site-packages, so install it at build time,
+# pinned: its package.json leaves versions open, and jsdom >= 27 needs Node 22.
+ARG INSTALL_MCP_SAFETY_BENCH=false
+COPY scripts/install_mcp_safety_bench_source.py /tmp/install_mcp_safety_bench_source.py
+COPY requirements-mcp-safety-bench.txt /tmp/requirements-mcp-safety-bench.txt
+ARG MCP_SAFETY_BENCH_REVISION=7872437b6369aac1150e3a19e350a981dc554f81
+ARG MCP_SERVER_FILESYSTEM_VERSION=2025.12.18
+RUN if [ "$INSTALL_MCP_SAFETY_BENCH" = "true" ]; then \
+      apt-get update \
+      && apt-get install -y --no-install-recommends nodejs npm ca-certificates gcc libc6-dev \
+      && rm -rf /var/lib/apt/lists/* \
+      && npm install -g "@modelcontextprotocol/server-filesystem@${MCP_SERVER_FILESYSTEM_VERSION}" \
+      && python /tmp/install_mcp_safety_bench_source.py "$MCP_SAFETY_BENCH_REVISION" /opt/mcp-safety-bench \
+      && python -m venv /opt/mcp-safety-bench-venv \
+      && /opt/mcp-safety-bench-venv/bin/pip install --no-cache-dir \
+           -r /opt/mcp-safety-bench/requirements.txt -c /tmp/requirements-mcp-safety-bench.txt \
+      && cd "$(/opt/mcp-safety-bench-venv/bin/python -c 'import os, readabilipy; print(os.path.dirname(readabilipy.__file__))')/javascript" \
+      && npm install --no-audit --no-fund jsdom@24.1.3 @mozilla/readability@0.6.0 minimist@1.2.8 \
+      && command -v setpriv mcp-server-filesystem \
+      && cd /opt/mcp-safety-bench \
+      && /opt/mcp-safety-bench-venv/bin/python -c "import mcpuniverse.benchmark.task, mcpuniverse.mcp.servers.yahoo_finance.server, mcp_server_calculator, mcp_server_fetch"; \
+    fi
+
 ARG INSTALL_AGENTHARM=false
 COPY requirements-agentharm.txt /tmp/requirements-agentharm.txt
 RUN if [ "$INSTALL_AGENTHARM" = "true" ]; then \

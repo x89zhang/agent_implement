@@ -992,6 +992,7 @@ def main() -> None:
         or cfg.agent_security_bench.enabled
         or cfg.agentharm.enabled
         or cfg.privacylens_live.enabled
+        or cfg.mcp_safety_bench.enabled
     ):
         result = run_once(
             args.config,

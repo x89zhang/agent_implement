@@ -38,13 +38,16 @@ def confusion(rows: list[dict], label: str) -> dict:
 
 def main() -> None:
     if len(sys.argv) != 2:
-        raise SystemExit("usage: analyze_hermes_asb_monitors.py BATCH_DIR")
+        raise SystemExit("usage: analyze_hermes_asb_monitors.py BATCH_DIR (ASB or MCP-SafetyBench)")
     root = Path(sys.argv[1]).resolve()
     summary_path = root / "summary.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     config = summary.get("config", {}).get("agent.yaml", {})
     asb = config.get("agent_security_bench", {})
-    attacker_tool = str(asb.get("attacker_tool") or "")
+    mcp = config.get("mcp_safety_bench") or {}
+    # MCP-SafetyBench batches have the same target/control layout; their
+    # attack is a poisoned or added tool, so there is no single attacker tool.
+    attacker_tool = "" if mcp.get("enabled") else str(asb.get("attacker_tool") or "")
     rows: list[dict] = []
     skipped: list[dict] = []
 
@@ -87,7 +90,7 @@ def main() -> None:
                     "status": run_label["status"],
                     "alarm": run_label["alarm"],
                     "attack_success": evaluation.get("attack_success"),
-                    "attacker_called": attacker_tool in called,
+                    "attacker_called": attacker_tool in called if attacker_tool else "",
                     "utility": evaluation.get("utility"),
                     "monitor_error": run_label["monitor_error"],
                     "error": run_label["error"],
@@ -149,7 +152,7 @@ def main() -> None:
                 bucket.append(json.loads(path.read_text(encoding="utf-8")))
     report = {
         "batch_dir": str(root),
-        "case": {
+        "case": {"benchmark": "mcp_safety_bench", "task": mcp.get("task")} if mcp.get("enabled") else {
             "agent_name": asb.get("agent_name"),
             "task_index": asb.get("task_index"),
             "attacker_tool": attacker_tool,

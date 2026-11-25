@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Turn monitor-off ASB screen batches (scripts/screen_hermes_asb.sh) into
-# all-monitors batches without rerunning the agent: copy each batch into
-# jobs/asb_all_monitors/<group>/ and replay monitors onto its target and
-# control phases, in the image an ASB all-monitors batch uses.
+# Turn monitor-off ASB or MCP-SafetyBench screen batches
+# (scripts/screen_hermes_asb.sh, scripts/screen_hermes_mcp_safety_bench.sh) into
+# all-monitors batches without rerunning the agent: copy each batch from
+# jobs/screen/<benchmark>/<group>/ into jobs/<benchmark>_all_monitors/<group>/
+# and replay monitors onto its target and control phases, in the image an
+# all-monitors batch of that benchmark uses.
 # Without methods it replays the monitors served during a batch (ToolSafe and
 # JANUS must be serving); name methods to add others, e.g. stepguard piguard
 # (StepGuard serving). Rerunning skips the copy and only retries errors.
@@ -31,13 +33,25 @@ batches_file="$1"
 shift
 
 batches=()
+benchmark=""
 while read -r batch _; do
   [[ -z "${batch}" || "${batch}" == \#* ]] && continue
+  batch="${batch%/}"
   if [[ ! -f "${batch}/summary.json" ]]; then
     echo "screen batch has no summary.json: ${batch}" >&2
     exit 2
   fi
-  batches+=("${batch%/}")
+  kind="$(basename "$(dirname "$(dirname "${batch}")")")"
+  if [[ "${kind}" != asb && "${kind}" != mcp_safety_bench ]]; then
+    echo "not an ASB or MCP-SafetyBench screen batch (jobs/screen/<benchmark>/<group>/<batch>): ${batch}" >&2
+    exit 2
+  fi
+  if [[ -n "${benchmark}" && "${kind}" != "${benchmark}" ]]; then
+    echo "batches file mixes ${benchmark} and ${kind} batches" >&2
+    exit 2
+  fi
+  benchmark="${kind}"
+  batches+=("${batch}")
 done < "${batches_file}"
 if (( ${#batches[@]} == 0 )); then
   echo "no batches in ${batches_file}" >&2
@@ -100,18 +114,29 @@ PYCHECK
 if [[ "${REPLAY_ALL:-0}" == 1 ]]; then
   options+=(--all-runs)
 fi
-# The image of an ASB all-monitors batch, from the config that script writes.
+# The image of an all-monitors batch of this benchmark.
 reference="$(mktemp -d)"
 trap 'rm -rf "${reference}"' EXIT
-DRY_RUN=1 SKIP_SERVICE_CHECKS=1 scripts/run_hermes_asb_all_monitors.sh 2 "${reference}/batch" > /dev/null
-image="$(python3 scripts/hermes_image.py "${reference}/batch/asb-all-monitors.yaml")"
+if [[ "${benchmark}" == asb ]]; then
+  # From the config the ASB all-monitors script writes.
+  DRY_RUN=1 SKIP_SERVICE_CHECKS=1 scripts/run_hermes_asb_all_monitors.sh 2 "${reference}/batch" > /dev/null
+  image="$(python3 scripts/hermes_image.py "${reference}/batch/asb-all-monitors.yaml")"
+else
+  # The benchmark config with the reference guard set, as an all-monitors
+  # campaign applies it (scripts/hermes_campaign.py).
+  python3 scripts/hermes_campaign.py configure agents/hermes/mcp-safety-bench.yaml \
+    "agents/hermes/.mcp-safety-bench-all-monitors.$$.yaml" "${reference}" > /dev/null
+  image="$(python3 scripts/hermes_image.py "agents/hermes/.mcp-safety-bench-all-monitors.$$.yaml")" \
+    || { rm -f "agents/hermes/.mcp-safety-bench-all-monitors.$$.yaml"; exit 1; }
+  rm -f "agents/hermes/.mcp-safety-bench-all-monitors.$$.yaml"
+fi
 echo "### monitors: ${methods[*]}"
 echo "### image: ${image}"
 
 results=()
 for screen in "${batches[@]}"; do
   group="$(basename "$(dirname "${screen}")")"
-  dest="jobs/asb_all_monitors/${group}/$(basename "${screen}")"
+  dest="jobs/${benchmark}_all_monitors/${group}/$(basename "${screen}")"
   if [[ ! -f "${dest}/summary.json" ]]; then
     mkdir -p "$(dirname "${dest}")"
     cp -a "${screen}" "${dest}"

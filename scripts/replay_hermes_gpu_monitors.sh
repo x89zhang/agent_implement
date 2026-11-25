@@ -8,6 +8,7 @@
 #
 #   asb       batches-file  scripts/complete_hermes_asb_screen.sh: the 8 CPU monitors,
 #                           JANUS and ToolSafe, then StepGuard and PIGuard
+#   mcp_safety_bench batches-file  the same, for MCP-SafetyBench screen batches
 #   agentdojo pairs-file    scripts/supplement_hermes_pairs.sh: JANUS and ToolSafe
 #                           (retrying errors), then StepGuard and PIGuard
 #
@@ -18,14 +19,14 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 asb batches-file | agentdojo pairs-file" >&2
+  echo "usage: $0 asb|mcp_safety_bench batches-file | agentdojo pairs-file" >&2
 }
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   usage
   exit 0
 fi
-if (( $# != 2 )) || [[ "$1" != asb && "$1" != agentdojo ]] || [[ ! -f "$2" ]]; then
+if (( $# != 2 )) || [[ "$1" != asb && "$1" != mcp_safety_bench && "$1" != agentdojo ]] || [[ ! -f "$2" ]]; then
   usage
   exit 2
 fi
@@ -151,7 +152,7 @@ run_round() {  # run_round label command...: a failed round is reported, not fat
   fi
 }
 
-if [[ "${benchmark}" == asb ]]; then
+if [[ "${benchmark}" == asb || "${benchmark}" == mcp_safety_bench ]]; then
   round1=(scripts/complete_hermes_asb_screen.sh "${list_file}")
   round2=(scripts/complete_hermes_asb_screen.sh "${list_file}" stepguard piguard)
 else

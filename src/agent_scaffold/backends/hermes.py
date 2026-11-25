@@ -51,7 +51,13 @@ def print_result_evaluation(result: dict) -> None:
     harness = result.get("harness", {})
     if not isinstance(harness, dict):
         return
-    for name in ("agentdojo", "agentharm", "agent_security_bench", "privacylens_live"):
+    for name in (
+        "agentdojo",
+        "agentharm",
+        "agent_security_bench",
+        "privacylens_live",
+        "mcp_safety_bench",
+    ):
         evaluation = harness.get(name)
         if isinstance(evaluation, dict):
             print_evaluation(name, evaluation)
@@ -578,6 +584,14 @@ def _run_hermes(
         )
         control = run_phase(control_cfg, interpreter, run_dir / "control", clean)
         lifecycle["control_evaluation"] = control["evaluation"]
+    elif cfg.mcp_safety_bench.enabled and cfg.mcp_safety_bench.clean_control:
+        # Same task on the unmodified servers (MCP-SafetyBench's clean baseline).
+        control_cfg = copy.deepcopy(target_cfg)
+        control_cfg.mcp_safety_bench = replace(
+            control_cfg.mcp_safety_bench, poisoning_enabled=False
+        )
+        control = run_phase(control_cfg, interpreter, run_dir / "control", clean)
+        lifecycle["control_evaluation"] = control["evaluation"]
     dump(run_dir / "memory.lifecycle.json", lifecycle)
     worker = target["worker"]
     evaluation = target["evaluation"]
@@ -651,7 +665,7 @@ def run_hermes(
             }
         output = Path(
             cfg.monitoring.output_path
-            or f"trace_{next(n for n in ('agentdojo', 'agentharm', 'agent_security_bench', 'privacylens_live') if getattr(cfg, n).enabled)}.json"
+            or f"trace_{next(n for n in ('agentdojo', 'agentharm', 'agent_security_bench', 'privacylens_live', 'mcp_safety_bench') if getattr(cfg, n).enabled)}.json"
         )
         if not output.is_absolute():
             output = Path(run_dir) / output

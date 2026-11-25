@@ -1,0 +1,367 @@
+# Hermes + MCP-SafetyBench (tool-poisoning tasks) configuration.
+# Same model, container and monitor settings as asb.yaml. Select the task
+# under mcp_safety_bench and enable project defenses independently below.
+llm:
+  provider: openai
+  model: gpt-5.6-luna
+  base_url: https://api.openai.com/v1
+  api_key_env: OPENAI_API_KEY
+  temperature: 0.2
+agent:
+  name: hermes-mcp-safety-bench
+  system_prompt: ''
+  task: ''
+container:
+  enabled: true
+  image: agent-scaffold-mcp-safety-bench:latest
+  auto_build: true
+  dockerfile: Dockerfile
+  workdir: /workspace
+  network: host
+  remove: true
+  build_args:
+    # Runtimes for guards added later by supplement replays (as in the
+    # AgentDojo configs): PIGuard (CPU) and ADR (temporarily off).
+    INSTALL_PIGUARD: "true"
+    INSTALL_ADR: "true"
+  env:
+    - AEGIS_API_KEY
+    - AEGIS_AGENT_SECRET
+    - AEGIS_AGENT_TOKEN
+    - OPENAI_API_KEY
+    - AGENTGUARD_API_KEY
+    - AGENTGUARD_SERVER_URL
+    - AGENTGUARD_SCENARIO_API_KEY
+    - TOOLSAFE_API_KEY
+    - AGENTDOG_API_KEY
+    - AGENTDOG_BASE_URL
+    - HF_TOKEN
+    - HUGGING_FACE_HUB_TOKEN
+    - TOGETHER_API_KEY
+    - TOKENIZERS_PARALLELISM
+    - HTTP_PROXY
+    - HTTPS_PROXY
+    - NO_PROXY
+monitoring:
+  enabled: true
+  output_path: trace_mcp_safety_bench.json
+  print_trace: true
+execution:
+  backend: hermes
+  hermes:
+    repo_path: /home/xiaoliang_zhang/hermes-agent
+    python_executable: ../../runtime/venvs/hermes/bin/python
+    expected_commit: 5172f22df275a8c0b4bc0545da01c7a377c1690f
+    allow_dirty_checkout: false
+    api_mode: auto
+    max_iterations: 30
+    timeout_seconds: 300
+mcp_safety_bench:
+  enabled: true
+  # Pinned upstream source and interpreter, installed into the container.
+  source_dir: /opt/mcp-safety-bench
+  revision: 7872437b6369aac1150e3a19e350a981dc554f81
+  official_python: /opt/mcp-safety-bench-venv/bin/python
+  # <domain>/<task file stem> under mcpuniverse/benchmark/configs/test.
+  # financial_analysis needs no API keys (yfinance, calculator, filesystem,
+  # terminal, fetch); the other domains need Google Maps, GitHub or SERP keys.
+  task: financial_analysis/yfinance_task_0001
+  poisoning_enabled: true
+  # Run a control phase on the unmodified servers after the poisoned phase.
+  clean_control: false
+  # Servers run as nobody; hosts named in the attack text do not resolve and
+  # terminal commands have no network (attacks are graded from call arguments).
+  sandbox: true
+skills:
+  # Additional text skills are staged in Hermes' isolated native skill library.
+  base_dir: ../../skills
+  enabled: []
+memory_experiment:
+  mode: "off"
+
+# Project defenses. These enabled values match agents/hermes/agentdojo.yaml:
+# AgentGuard is active in monitor mode; the other plugins are ready to enable.
+aegis:
+  enabled: false
+  mode: monitor
+  risk_threshold: HIGH
+  # The original AEGIS Gateway performs classification, policy, DSL, and anomaly checks.
+  # Start a fresh upstream Gateway per batch: scripts/aegis_gateway.sh start
+  gateway_url: http://127.0.0.1:8080
+  api_key_env: AEGIS_API_KEY
+  blocking: false
+  timeout_seconds: 3
+  fail_closed: false
+  allow_tools: []
+  # Paper cascade: Gateway L1 -> L2 XGBoost (models/aegis, trained on upstream
+  # aegis-bench) -> L3 judge (research llm_judge.py prompt, inherited llm).
+  cascade: true
+  l2_model_path: models/aegis/l2_xgboost.json
+  use_l3: true
+  max_retries: 5
+progent:
+  enabled: false
+  mode: monitor
+  generate_policy: true
+  update_after_tool: true
+  fail_closed: false
+  # Generic upstream mode on every benchmark. Upstream's ASB agent
+  # (react_agent_attack.py: name-only checks, no updates/always-allow) is
+  # available only as the explicit option `profile: asb`.
+drift:
+  enabled: false
+  mode: monitor
+  fail_closed: false
+  dynamic_validation: true
+  request_user_approval: false
+  injection_isolation: true
+  max_revisions: 15  # DRIFTToolsExecutionLoop max_iters (inline block only)
+  mask_limitation: 1
+  profile: default  # DRIFTLLM.py for every benchmark; asb = ASB_DRIFT variant
+  # Rule generation inherits the top-level llm and OPENAI_API_KEY.
+adr:
+  enabled: false
+  mode: monitor
+  fail_closed: false
+  threshold: 0.8
+  # ADR detection source and interpreter are supplied by the container image.
+rope:
+  enabled: false
+  mode: block
+  fail_closed: false
+  floor_generation: llm
+  router: live
+  # Upstream runs unclamped only with its cached router (run_eval.py:10,76);
+  # a live router can loosen a floor argument, which clamp.py reverts.
+  clamp: true
+  # Memoizes router/floor LLM replies (upstream common/llm_cache.py) so clean
+  # and attacked runs of the same task get the same scope.
+  router_cache_path: ../../runtime/rope-router-cache.json
+agrail:
+  enabled: false
+  mode: monitor
+  fail_closed: false
+  generate_checks: true
+  update_memory: true
+  memory_path: ../../runtime/agrail-memory/mcp-safety-bench.json
+janus:
+  enabled: false
+  mode: monitor
+  strict: false
+  fail_closed: false
+  base_url: http://127.0.0.1:8000/v1
+  model: yuaay/vanguard
+  api_key_env: JANUS_API_KEY
+
+stepguard:
+  enabled: false
+  mode: monitor
+  fail_closed: false
+  # Set to an OpenAI-compatible endpoint reachable from the container.
+  base_url: http://127.0.0.1:8003/v1
+  model: ninty-seven/StepGuard
+  api_key_env: STEPGUARD_API_KEY
+  timeout_seconds: 120
+  max_replans: 3
+  # Project extension; upstream's dynamic protocol checks only tool actions.
+  audit_final: false
+
+safeagent:
+  enabled: false
+  mode: block
+  fail_closed: true
+  mcp_url: http://127.0.0.1:8000/mcp
+  api_key_env: SAFEAGENT_MCP_API_KEY
+  # Upstream runtime.yaml waits for the call budget (wait_until_available).
+  timeout_seconds: 300
+  developer_config_path: ../../src/agent_scaffold/safeagent/developer.example.yaml
+  runtime_config_path: ../../src/agent_scaffold/safeagent/runtime.example.yaml
+  # Off as in upstream's ASB evaluation; when on it only drafts a
+  # developer_policy.yaml for the core (see safeagent/README.rst).
+  generator:
+    enabled: false
+    max_attempts: 2
+    fail_closed: false
+
+clawsentry:
+  enabled: false
+  auto_start: true
+  mode: block
+  fail_closed: false
+  base_url: http://127.0.0.1:8080
+  api_key_env: CS_AUTH_TOKEN
+  # gpt-5.6-luna L2 calls often exceed upstream's ~4.5 s adapter deadline
+  # (a3s_adapter.py:182); a longer deadline is a recorded deviation.
+  timeout_seconds: 30
+  decision_tier: L1
+  observe_tool_result: true
+  # Wait (bounded) for the gateway's background post-action finding.
+  post_action_wait_seconds: 5
+  # Managed gateway's L2 LLM (CS_LLM_*); empty fields inherit the top-level llm.
+  llm:
+    enabled: true
+    l3_enabled: false
+airguard:
+  enabled: false
+  mode: block
+  fail_closed: false
+  # Generates upstream's compile_task_authority system_policy allow set, the
+  # deployer/user-supplied input; upstream's fallback is [read, write, respond].
+  generator:
+    enabled: true
+    context_mode: benign_only
+    fail_closed: false
+melon:
+  enabled: false
+  # block stops the run on detection (upstream); warn/monitor only record it.
+  mode: block
+  fail_closed: false
+  # Cosine cut-off between the real call and masked-run calls (upstream: 0.8).
+  threshold: 0.8
+  # upstream: the paper's rules (send_email -> recipients, send_money -> recipient,
+  # amount) and all arguments for every other tool, on every benchmark.
+  # llm (non-default): an LLM picks comparison arguments for the other tools.
+  projection_generation: upstream
+  projections: {}
+  # Masked re-execution uses the agent model (top-level llm) unless overridden.
+  transport: auto
+  llm: {}
+  embedding:
+    model: text-embedding-3-large
+    api_key_env: OPENAI_API_KEY
+  generator:
+    enabled: true
+    context_mode: benign_only
+    max_attempts: 2
+    fail_closed: false
+
+pro2guard:
+  enabled: false
+  # monitor records; warn adds upstream's reflection message; block stops the run.
+  mode: monitor
+  # Per-task models from `python -m agent_scaffold.pro2guard.build_model`, learned
+  # from runs disjoint from the evaluation. A task without a model is recorded as
+  # a no_model monitor error, not as a negative.
+  model_dir: ../../models/pro2guard
+  granularity: task
+  engine: json
+  prism_bin: prism
+  # Upstream stop threshold (monitor_dtmc.py:73, embodied/monitor.py:236).
+  threshold: 0.9
+  # -1: unbounded P=?[F unsafe] (upstream default); k > 0: P=?[F<=k unsafe].
+  bound: -1
+  timeout_seconds: 10
+  fail_closed: false
+  # Build-time LLM that writes the unsafe spec from the clean task and tool
+  # schemas only. Model settings inherit top-level llm when omitted.
+  generator:
+    max_attempts: 2
+    max_conditions: 4
+    max_atoms: 4
+agentspec:
+  enabled: false
+  mode: monitor
+  rules: []
+  rule_files: []
+  predicate_modules: []
+  approval_handler: prompt
+  max_reflections: 3
+  fail_closed: true
+  generator:
+    enabled: true
+    context_mode: benign_only
+    max_attempts: 2
+    max_rules: 12
+llamafirewall:
+  enabled: false
+  mode: enforce
+  use_case: ''
+  scanners:
+    assistant: [agent_alignment]
+  factory: ''
+  factory_kwargs: {}
+  fail_closed: false
+toolsafe:
+  enabled: false
+  mode: monitor
+  threshold: 0.5
+  provider: openai_compatible
+  model: TS-Guard
+  base_url: http://localhost:8001/v1
+  api_key_env: TOOLSAFE_API_KEY
+  timeout_seconds: 60
+  fail_closed: false
+agentsight:
+  enabled: false
+  binary: runtime/bin/agentsight
+  capture: full
+  privilege: auto
+  required: true
+  db_path: agentsight.db
+  snapshot_path: agentsight_snapshot.json
+  log_path: agentsight.log
+  web_server: false
+  server_port: 7395
+  startup_timeout_seconds: 10
+  warmup_seconds: 1
+  shutdown_timeout_seconds: 10
+agentguard:
+  enabled: false
+  mode: monitor
+  # Each run's policy is generated from the benign task and tool catalog
+  # (scenario_compiler). A static rule file here, e.g.
+  # ../../rules/agentguard/agentdojo_policy.rules, is used only when
+  # scenario_compiler.enabled is false.
+  policy: ''
+  # Empty uses upstream config/plugins.json (server rule_based_plugin at
+  # tool_before, no client plugins).
+  plugin_config: ''
+  scenario_compiler:
+    enabled: true
+    context_mode: benign_only
+    max_attempts: 2
+    llm:
+      provider: openai
+      model: gpt-5.6-luna
+      temperature: 0.1
+      base_url: https://api.openai.com/v1
+      api_key_env: AGENTGUARD_SCENARIO_API_KEY
+      request_timeout: 180
+  # Empty with auto_start_server starts the upstream server per run with this
+  # run's policy; without a server no policy is evaluated.
+  server_url: ''
+  auto_start_server: true
+  environment: benchmark
+  user_id: ''
+  role: default
+  trust_level: 1
+  sandbox: local
+  sandbox_profile: null
+  audit_path: agentguard_audit.jsonl
+  max_steps: 12
+  max_tool_calls: 24
+  window_size: 8
+  # Server LLM_CHECK reviews call a reasoning model; upstream's 5 s is too short.
+  remote_timeout_seconds: 120
+  remote_retries: 2
+  fail_closed: true
+agentdog:
+  enabled: false
+  mode: diagnose
+  checkpoints: [pre_reply]
+  task: unified
+  provider: openai_compatible
+  model: agentdog-unified
+  base_url: http://localhost:8001/v1
+  base_url_env: AGENTDOG_BASE_URL
+  api_key_env: AGENTDOG_API_KEY
+  temperature: 0.0
+  timeout_seconds: 180
+  max_tokens: 1024
+  max_trajectory_chars: 0
+  max_revisions: 2
+  fail_closed: false
+  include_raw_response: true
+  replacement_message: >-
+    The response was withheld because AgentDoG diagnosed unsafe behavior
+    in the accumulated agent trajectory.
